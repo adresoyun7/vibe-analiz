@@ -20,7 +20,7 @@ LIGLER = st.sidebar.multiselect(
 TOLERANS = st.sidebar.slider("Oran Toleransı", 0.05, 0.20, 0.12)
 
 # --- 1. GEÇMİŞ VERİLERİ ÇEKME ---
-@st.cache_data(ttl=86400) # Veriyi 24 saat hafızada tutar
+@st.cache_data(ttl=86400)
 def gecmis_verileri_yukle():
     lig_dosyalari = {'İngiltere': 'E0', 'İspanya': 'SP1', 'Almanya': 'D1', 'İtalya': 'I1', 'Türkiye': 'T1', 'Fransa': 'F1'}
     sezonlar = ['2324', '2425', '2526']
@@ -117,10 +117,11 @@ if API_KEY:
                 if final_list:
                     df_res = pd.DataFrame(final_list)
                     st.success(f"Analiz Tamamlandı! {len(final_list)} maç bulundu.")
-                    st.dataframe(df_res.style.applymap(style_vibe, subset=['İY 0.5', 'İY 1.5', 'MS 1.5', 'MS 2.5', 'MS 3.5', 'KG', '1Y', 'MS']))
+                    # BURADA MAP KULLANIYORUZ (Hata düzeldi)
+                    st.dataframe(df_res.style.map(style_vibe, subset=['İY 0.5', 'İY 1.5', 'MS 1.5', 'MS 2.5', 'MS 3.5', 'KG', '1Y', 'MS']))
                 else:
-                    st.warning("Eşleşen benzer maç bulunamadı.")
+                    st.warning("Eşleşen benzer maç bulunamadı. Toleransı artırmayı dene.")
             else:
-                st.error("Veri çekilemedi veya bülten boş.")
+                st.error("Veri çekilemedi veya seçilen liglerde maç yok.")
 else:
-    st.info("Sol menüden API Key girerek analizi başlatabilirsin.")
+    st.info("👋 Hoş geldin Ersin! Sol menüden API Key girerek analizi başlatabilirsin.")
