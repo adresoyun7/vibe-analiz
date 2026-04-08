@@ -4,56 +4,58 @@ import requests
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz Pro", layout="wide")
+st.set_page_config(page_title="Vibe Analiz - Sürpriz Avcısı", layout="wide")
 
-st.title("⚽ Oran Analiz & Skor Tahmin Paneli")
+st.title("⚽ Ultra Analiz & HT/FT Sürpriz Dedektörü")
 st.markdown("---")
 
 # --- YAN MENÜ ---
 st.sidebar.header("⚙️ Ayarlar")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
-LIGLER = st.sidebar.multiselect(
-    "Takip Edilecek Ligler",
-    ['soccer_turkey_super_league', 'soccer_epl', 'soccer_spain_la_liga', 'soccer_germany_bundesliga', 'soccer_italy_serie_a', 'soccer_france_ligue_one'],
-    default=['soccer_turkey_super_league', 'soccer_epl', 'soccer_spain_la_liga']
-)
-TOLERANS = st.sidebar.slider("Oran Toleransı", 0.05, 0.20, 0.12)
+Dunya_Ligleri = {
+    'Türkiye Süper Lig': 'soccer_turkey_super_league',
+    'İngiltere Premier Lig': 'soccer_epl',
+    'İspanya La Liga': 'soccer_spain_la_liga',
+    'Almanya Bundesliga': 'soccer_germany_bundesliga',
+    'İtalya Serie A': 'soccer_italy_serie_a',
+    'Fransa Ligue 1': 'soccer_france_ligue_one'
+}
+secili_etiketler = st.sidebar.multiselect("Ligleri Seçin", list(Dunya_Ligleri.keys()), default=['Türkiye Süper Lig', 'İngiltere Premier Lig'])
+LIG_KODLARI = [Dunya_Ligleri[lig] for lig in secili_etiketler]
+TOLERANS = st.sidebar.slider("Oran Toleransı", 0.05, 0.40, 0.20)
 
-# --- 1. GEÇMİŞ VERİLERİ ÇEKME ---
+# --- 1. VERİ YÜKLEME (HT/FT DAHİL) ---
 @st.cache_data(ttl=86400)
-def gecmis_verileri_yukle():
-    lig_dosyalari = {'İngiltere': 'E0', 'İspanya': 'SP1', 'Almanya': 'D1', 'İtalya': 'I1', 'Türkiye': 'T1', 'Fransa': 'F1'}
+def surpriz_veri_yukle():
+    lig_dosyalari = {'E0': 'İng1', 'SP1': 'İsp1', 'D1': 'Alm1', 'I1': 'İta1', 'T1': 'Tür1', 'F1': 'Fra1'}
     sezonlar = ['2324', '2425', '2526']
     liste = []
-    for lig, kod in lig_dosyalari.items():
+    for kod, ad in lig_dosyalari.items():
         for sezon in sezonlar:
             try:
                 url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{kod}.csv"
                 df = pd.read_csv(url)
-                cols = ['HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'HTHG', 'HTAG', 'FTR', 'HTR', 'B365H', 'B365D', 'B365A']
+                # HTR: İlk Yarı Sonucu, FTR: Maç Sonucu
+                cols = ['HomeTeam', 'AwayTeam', 'FTHG', 'FTAG', 'HTHG', 'HTAG', 'FTR', 'HTR', 'B365H', 'B365D', 'B365A', 'HC', 'AC', 'HY', 'AY']
                 temp = df[cols].copy()
+                
+                # HT/FT Sürprizlerini Tanımla (1/2 veya 2/1)
+                temp['SURPRIZ'] = ((temp['HTR'] == 'H') & (temp['FTR'] == 'A')) | ((temp['HTR'] == 'A') & (temp['FTR'] == 'H'))
                 temp['MS_GOL'] = temp['FTHG'] + temp['FTAG']
-                temp['1Y_GOL'] = temp['HTHG'] + temp['HTAG']
-                temp['1Y_0.5_UST'] = temp['1Y_GOL'] > 0.5
-                temp['1Y_1.5_UST'] = temp['1Y_GOL'] > 1.5
-                temp['MS_1.5_UST'] = temp['MS_GOL'] > 1.5
-                temp['MS_2.5_UST'] = temp['MS_GOL'] > 2.5
-                temp['MS_3.5_UST'] = temp['MS_GOL'] > 3.5
                 temp['KG_VAR'] = (temp['FTHG'] > 0) & (temp['FTAG'] > 0)
                 temp['MS_SKOR'] = temp['FTHG'].astype(int).astype(str) + "-" + temp['FTAG'].astype(int).astype(str)
-                temp['1Y_SKOR'] = temp['HTHG'].astype(int).astype(str) + "-" + temp['HTAG'].astype(int).astype(str)
                 liste.append(temp)
             except: continue
     return pd.concat(liste) if liste else pd.DataFrame()
 
-# --- 2. CANLI BÜLTENİ ÇEKME ---
-def guncel_bulten_cek(key, secili_ligler):
+# (Bülten çekme fonksiyonu aynı kalıyor...)
+def guncel_bulten_cek(key, secili_kodlar):
     sonuc = []
     bugun = datetime.now()
-    yarin = bugun + timedelta(days=1)
-    for lig in secili_ligler:
+    yarin = bugun + timedelta(days=2)
+    for lig_kod in secili_kodlar:
         try:
-            url = f'https://api.the-odds-api.com/v4/sports/{lig}/odds/?apiKey={key}&regions=eu&markets=h2h'
+            url = f'https://api.the-odds-api.com/v4/sports/{lig_kod}/odds/?apiKey={key}&regions=eu&markets=h2h'
             resp = requests.get(url).json()
             if isinstance(resp, list):
                 for mac in resp:
@@ -67,61 +69,47 @@ def guncel_bulten_cek(key, secili_ligler):
         except: continue
     return pd.DataFrame(sonuc)
 
-# --- 3. RENKLENDİRME FONKSİYONU ---
-def style_vibe(val):
-    green = 'background-color: #2ecc71; color: white; font-weight: bold; text-align: center;'
-    red = 'background-color: #e74c3c; color: white; font-weight: bold; text-align: center;'
-    orange = 'background-color: #f39c12; color: white; font-weight: bold; text-align: center;'
-    
-    if val in ['Over', 'Yes', 'Home']: return green
-    if val in ['Under', 'No', 'Away']: return red
-    if val == 'Draw': return orange
-    return 'text-align: center;'
+def style_surpriz(val):
+    if val == '🔥 SÜRPRIZ RISKI!': return 'background-color: #9b59b6; color: white; font-weight: bold;'
+    if val in ['Over', 'Yes']: return 'background-color: #2ecc71; color: white;'
+    if val in ['Under', 'No']: return 'background-color: #e74c3c; color: white;'
+    return ''
 
 # --- 4. ANA PROGRAM ---
 if API_KEY:
-    if st.button("🚀 ANALİZİ BAŞLAT"):
-        with st.spinner('Veriler harmanlanıyor...'):
-            gecmis = gecmis_verileri_yukle()
-            yarin = guncel_bulten_cek(API_KEY, LIGLER)
-            
-            if not yarin.empty and not gecmis.empty:
-                final_list = []
-                for _, m in yarin.iterrows():
-                    benzerler = gecmis[
-                        (gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) &
-                        (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) &
-                        (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))
-                    ]
-                    
-                    if len(benzerler) >= 3:
-                        iy_05_v = 'Over' if (benzerler['1Y_0.5_UST'].mean() > 0.5) else 'Under'
-                        iy_15_v = 'Over' if (benzerler['1Y_1.5_UST'].mean() > 0.5) else 'Under'
-                        ms_15_v = 'Over' if (benzerler['MS_1.5_UST'].mean() > 0.5) else 'Under'
-                        ms_25_v = 'Over' if (benzerler['MS_2.5_UST'].mean() > 0.5) else 'Under'
-                        ms_35_v = 'Over' if (benzerler['MS_3.5_UST'].mean() > 0.5) else 'Under'
-                        kg_v = 'Yes' if (benzerler['KG_VAR'].mean() > 0.5) else 'No'
-                        
-                        iy_res = 'Home' if (benzerler['HTR'].mode()[0] == 'H') else ('Draw' if benzerler['HTR'].mode()[0] == 'D' else 'Away')
-                        ms_res = 'Home' if (benzerler['FTR'].mode()[0] == 'H') else ('Draw' if benzerler['FTR'].mode()[0] == 'D' else 'Away')
-                        
-                        final_list.append({
-                            'LİG': m['lig'], 'EV': m['ev'], 'DEP': m['dep'],
-                            'İY 0.5': iy_05_v, 'İY 1.5': iy_15_v, 'MS 1.5': ms_15_v, 
-                            'MS 2.5': ms_25_v, 'MS 3.5': ms_35_v, 'KG': kg_v,
-                            '1Y SKOR': benzerler['1Y_SKOR'].mode()[0],
-                            'MS SKOR': benzerler['MS_SKOR'].mode()[0],
-                            '1Y': iy_res, 'MS': ms_res, 'ÖRNEK': len(benzerler)
-                        })
+    if st.button("🚀 ÇILGIN ANALİZİ BAŞLAT"):
+        gecmis = surpriz_veri_yukle()
+        bulten = guncel_bulten_cek(API_KEY, LIG_KODLARI)
+        
+        if not bulten.empty:
+            for _, m in bulten.iterrows():
+                benzerler = gecmis[
+                    (gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) &
+                    (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) &
+                    (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))
+                ]
                 
-                if final_list:
-                    df_res = pd.DataFrame(final_list)
-                    st.success(f"Analiz Tamamlandı! {len(final_list)} maç bulundu.")
-                    # BURADA MAP KULLANIYORUZ (Hata düzeldi)
-                    st.dataframe(df_res.style.map(style_vibe, subset=['İY 0.5', 'İY 1.5', 'MS 1.5', 'MS 2.5', 'MS 3.5', 'KG', '1Y', 'MS']))
-                else:
-                    st.warning("Eşleşen benzer maç bulunamadı. Toleransı artırmayı dene.")
-            else:
-                st.error("Veri çekilemedi veya seçilen liglerde maç yok.")
-else:
-    st.info("👋 Hoş geldin Ersin! Sol menüden API Key girerek analizi başlatabilirsin.")
+                if len(benzerler) >= 2:
+                    surpriz_sayisi = benzerler['SURPRIZ'].sum()
+                    surpriz_notu = "Düşük" if surpriz_sayisi == 0 else f"🔥 {surpriz_sayisi} Örnekte Var!"
+                    
+                    st.subheader(f"🏟️ {m['ev']} - {m['dep']}")
+                    
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        df_row = pd.DataFrame([{
+                            'MS 2.5': 'Over' if benzerler['MS_GOL'].mean() > 2.5 else 'Under',
+                            'KG': 'Yes' if benzerler['KG_VAR'].mean() > 0.5 else 'No',
+                            'HT/FT SÜRPRIZ': '🔥 SÜRPRIZ RISKI!' if surpriz_sayisi > 0 else 'Normal',
+                            'KORNER (ORT)': round((benzerler['HC'] + benzerler['AC']).mean(), 1),
+                            'EN ÇOK SKOR': benzerler['MS_SKOR'].mode()[0],
+                            'ÖRNEK': len(benzerler)
+                        }])
+                        st.dataframe(df_row.style.map(style_surpriz))
+                    
+                    with col2:
+                        if surpriz_sayisi > 0:
+                            st.warning(f"Bu oranlarla geçmişte {surpriz_sayisi} maç ters dönmüş (1/2 veya 2/1).")
+                        with st.expander("Detaylar"):
+                            st.table(benzerler[['HTR', 'FTR', 'MS_SKOR']].head(10))
+                    st.markdown("---")
