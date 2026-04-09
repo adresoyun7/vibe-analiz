@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import io
+import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
@@ -77,7 +78,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ Key girin ve lig seçin.")
     else:
-        with st.spinner("📊 Vibe & Mod Skor Analizi yapılıyor..."):
+        with st.spinner("📊 Analiz yapılıyor..."):
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
@@ -93,7 +94,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 ].copy()
                 
                 if len(b) >= min_ornek:
-                    # MOD SKOR KİLİDİ
+                    # MOD SKOR HESABI
                     iy_skor = (b['HTHG'].fillna(0).astype(int).astype(str) + "-" + b['HTAG'].fillna(0).astype(int).astype(str)).mode()
                     ms_skor = (b['FTHG'].fillna(0).astype(int).astype(str) + "-" + b['FTAG'].fillna(0).astype(int).astype(str)).mode()
                     iy_val = iy_skor[0] if not iy_skor.empty else "0-0"
@@ -119,8 +120,11 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & En Çok Tekrarlayan Sonuçlar")
-                style_cols = [c for c in ['1Y_05','MS_15','MS_25','MS_35','KG_V','1Y_V','MS_V'] if c in df_ana.columns]
-                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
+                style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
+                
+                # Sadece mevcut olanları boya
+                actual_style_cols = [c for c in style_cols if c in df_ana.columns]
+                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=actual_style_cols), use_container_width=True)
                 
                 st.markdown("---")
                 for row in final_list:
@@ -135,10 +139,11 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt = pd.DataFrame()
                         dt['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y')
                         dt['Ev'] = b_det['HomeTeam']; dt['Dep'] = b_det['AwayTeam']
-                        dt['1Y_05'] = (b_det['HTHG'] + b_det['HTAG'] > 0.5).map({True:'Over', False:'Under'})
-                        dt['MS_15'] = (b_det['FTHG'] + b_det['FTAG'] > 1.5).map({True:'Over', False:'Under'})
-                        dt['MS_25'] = (b_det['FTHG'] + b_det['FTAG'] > 2.5).map({True:'Over', False:'Under'})
-                        dt['MS_35'] = (b_det['FTHG'] + b_det['FTAG'] > 3.5).map({True:'Over', False:'Under'})
+                        dt['1Y_05'] = (b_det['HTHG'] + b_det['HTAG'] >= 1).map({True:'Over', False:'Under'})
+                        dt['İY_15'] = (b_det['HTHG'] + b_det['HTAG'] >= 2).map({True:'Over', False:'Under'})
+                        dt['MS_15'] = (b_det['FTHG'] + b_det['FTAG'] >= 2).map({True:'Over', False:'Under'})
+                        dt['MS_25'] = (b_det['FTHG'] + b_det['FTAG'] >= 3).map({True:'Over', False:'Under'})
+                        dt['MS_35'] = (b_det['FTHG'] + b_det['FTAG'] >= 4).map({True:'Over', False:'Under'})
                         dt['KG_V'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
                         dt['1Y_SKOR'] = b_det['HTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['HTAG'].fillna(0).astype(int).astype(str)
                         dt['MS_SKOR'] = b_det['FTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['FTAG'].fillna(0).astype(int).astype(str)
@@ -148,7 +153,9 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['Krt'] = (b_det.get('HY',0) + b_det.get('AY',0)).fillna(0).astype(int)
 
                         st.write("📊 **Geçmiş Maçların Detaylı Analizi**")
-                        st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
+                        # Detay tablosu için boyanacak sütunları kontrol et
+                        actual_det_style = [c for c in style_cols if c in dt.columns]
+                        st.dataframe(dt.style.map(style_engine, subset=actual_det_style), use_container_width=True, hide_index=True)
                 
                 if flips:
                     st.markdown("---")
