@@ -30,7 +30,7 @@ FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
-    "🇪🇺 AVRUPA DİĞER": {'Romanya Liga I': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'Polonya': 'soccer_poland_ekstraklasa', 'İskoçya': 'soccer_scotland_premier_league'},
+    "🇪🇺 AVRUPA DİĞER": {'Romanya Liga I': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İskoçya': 'soccer_scotland_premier_league', 'Polonya': 'soccer_poland_ekstraklasa'},
     "🌎 GLOBAL": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a'}
 }
 
@@ -83,9 +83,7 @@ def bulten_cek(key, kodlar, t, spor):
     for k in kodlar:
         try:
             r = requests.get(f'https://api.the-odds-api.com/v4/sports/{k}/odds/?apiKey={key}&regions=eu&markets=h2h').json()
-            # Eğer API hata döndürürse veya liste boşsa bu ligi atla
-            if not isinstance(r, list):
-                continue
+            if not isinstance(r, list): continue
             for m in r:
                 tm = datetime.strptime(m['commence_time'], '%Y-%m-%dT%H:%M:%SZ') + timedelta(hours=3)
                 if tm.date() == t:
@@ -112,7 +110,6 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "⚽ Futbol")
             
-            # MAÇ BULUNAMADI HATASI BURADA DÜZELTİLDİ:
             if not bulten.empty:
                 final_list, flips = [], []
                 for i, m in bulten.iterrows():
@@ -147,8 +144,8 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     if flips:
                         st.subheader("🔥 HT/FT Sürpriz Radarı")
                         for f in flips: st.warning(f"**{f['m']}**: Geçmiş örneklerin %{f['p']} kadarı sürpriz bitmiş!")
-                else: st.warning("Eşleşen geçmiş örnek bulunamadı. Toleransı veya ligleri kontrol et.")
-            else: st.error("Seçilen liglerin hiçbirinde bu tarih için maç bulunamadı.")
+                else: st.warning("Seçilen liglerde geçmişle eşleşen örnek bulunamadı.")
+            else: st.error("Seçili liglerde bugün için maç bülteni bulunamadı.")
         
         else: # 🏀 BASKETBOL MODU
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "🏀 Basketbol")
@@ -163,5 +160,5 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     })
                 df_bsk = pd.DataFrame(basket_list)
                 st.dataframe(df_bsk.drop(columns=['idx']).style.map(style_engine, subset=['P1 (1Y 0.5)','P2 (1Y 1.5)','P3 (MS 1.5)','P4 (MS 2.5)','1Y TOPLAM','MS TOPLAM','1Y','MS']), use_container_width=True)
-            else: st.error("Basketbol maçı bulunamadı.")
+            else: st.error("Basketbol bülteni bulunamadı.")
 else: st.info("Ligleri seç ve analizi başlat Ersin!")
