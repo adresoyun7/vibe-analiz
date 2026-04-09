@@ -35,39 +35,11 @@ TOLERANS = st.sidebar.slider("Oran Hassasiyeti (0.00 = Birebir)", 0.00, 0.30, 0.
 
 # --- NESİNE TARZI GENİŞ LİG HAVUZU ---
 FUTBOL_LIGLERI = {
-    "🏆 AVRUPA KUPALARI": {
-        'Şampiyonlar Ligi': 'soccer_uefa_champs_league',
-        'Avrupa Ligi': 'soccer_uefa_europa_league',
-        'Konferans Ligi': 'soccer_uefa_europa_conference_league'
-    },
-    "🇹🇷 TÜRKİYE": {
-        'Süper Lig': 'soccer_turkey_super_league',
-        '1. Lig': 'soccer_turkey_pTT_1_lig'
-    },
-    "🇪🇺 AVRUPA MAJÖR": {
-        'İngiltere Premier': 'soccer_epl',
-        'İspanya La Liga': 'soccer_spain_la_liga',
-        'Almanya Bundesliga': 'soccer_germany_bundesliga',
-        'İtalya Serie A': 'soccer_italy_serie_a',
-        'Fransa Ligue 1': 'soccer_france_ligue_one'
-    },
-    "⚽ AVRUPA DİĞER (Popüler)": {
-        'Hollanda Eredivisie': 'soccer_netherlands_eredivisie',
-        'Belçika Pro League': 'soccer_belgium_first_division',
-        'Portekiz Primeiralga': 'soccer_portugal_primeira_liga',
-        'İskoçya Premiership': 'soccer_scotland_premiership',
-        'Avusturya Bundesliga': 'soccer_austria_bundesliga',
-        'Danimarka Superliga': 'soccer_denmark_superliga',
-        'Norveç Eliteserien': 'soccer_norway_eliteserien',
-        'İsveç Allsvenskan': 'soccer_sweden_allsvenskan'
-    },
-    "🌎 GÜNEY AMERİKA & DİĞER": {
-        'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a',
-        'Arjantin Primera': 'soccer_argentina_primera_division',
-        'Meksika Liga MX': 'soccer_mexico_liga_mx',
-        'Suudi Arabistan Pro Lig': 'soccer_saudi_arabia_pro_league',
-        'ABD MLS': 'soccer_usa_mls'
-    }
+    "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
+    "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
+    "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
+    "⚽ AVRUPA DİĞER (Popüler)": {'Hollanda Eredivisie': 'soccer_netherlands_eredivisie', 'Belçika Pro League': 'soccer_belgium_first_division', 'Portekiz Primeiralga': 'soccer_portugal_primeira_liga', 'İskoçya Premiership': 'soccer_scotland_premiership', 'Avusturya Bundesliga': 'soccer_austria_bundesliga', 'Danimarka Superliga': 'soccer_denmark_superliga', 'Norveç Eliteserien': 'soccer_norway_eliteserien', 'İsveç Allsvenskan': 'soccer_sweden_allsvenskan'},
+    "🌎 GÜNEY AMERİKA & DİĞER": {'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a', 'Arjantin Primera': 'soccer_argentina_primera_division', 'Meksika Liga MX': 'soccer_mexico_liga_mx', 'Suudi Arabistan Pro Lig': 'soccer_saudi_arabia_pro_league', 'ABD MLS': 'soccer_usa_mls'}
 }
 
 secili_kodlar = []
@@ -80,12 +52,7 @@ for kat_isim, ligler in FUTBOL_LIGLERI.items():
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(secili_sezonlar):
     if not secili_sezonlar: return pd.DataFrame()
-    # Lig haritasını Nesine bültenindeki tüm ülkeleri kapsayacak şekilde genişlettik
-    lig_map = {
-        'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1',
-        'N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT','D1':'DK',
-        'N1':'NO','S1':'SE','BR1':'BR','ARG':'AR','MEX':'MX'
-    }
+    lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT','D1':'DK','N1':'NO','S1':'SE','BR1':'BR','ARG':'AR','MEX':'MX'}
     liste = []
     for k in lig_map.keys():
         for s in secili_sezonlar:
@@ -99,8 +66,6 @@ def futbol_veri_motoru(secili_sezonlar):
                 liste.append(temp)
             except: continue
     return pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
-
-# ... (form_analizi_yap ve bulten_cek fonksiyonları aynı kalacak) ...
 
 def form_analizi_yap(gecmis, ev_takim, dep_takim):
     def get_avg(takim):
@@ -160,6 +125,16 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     ms35_p = (b['FTHG'] + b['FTAG'] >= 4).mean()
                     kg_p = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
                     
+                    # 1Y ve MS Sonuç Yüzdeleri
+                    iy_res_counts = b['HTR'].value_counts(normalize=True)
+                    ms_res_counts = b['FTR'].value_counts(normalize=True)
+                    
+                    iy_mode = b['HTR'].mode()[0]
+                    ms_mode = b['FTR'].mode()[0]
+                    
+                    iy_win_p = iy_res_counts.get(iy_mode, 0)
+                    ms_win_p = ms_res_counts.get(ms_mode, 0)
+                    
                     iy_skor = (b['HTHG'].fillna(0).astype(int).astype(str) + "-" + b['HTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     ms_skor = (b['FTHG'].fillna(0).astype(int).astype(str) + "-" + b['FTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     
@@ -176,8 +151,8 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'MS_35': f"{'Over' if ms35_p >= 0.5 else 'Under'} ({int(ms35_p*100)}%) {'🔥' if ms35_p >= 0.8 else ''}",
                         'KG_V': f"{'Yes' if kg_p >= 0.5 else 'No'} ({int(kg_p*100)}%) {'🔥' if kg_p >= 0.8 else ''}",
                         '1Y_SKOR': iy_skor, 'MS_SKOR': ms_skor,
-                        '1Y_V': b['HTR'].mode()[0].replace('H','Home').replace('A','Away').replace('D','Draw') if not b['HTR'].mode().empty else 'Draw',
-                        'MS_V': b['FTR'].mode()[0].replace('H','Home').replace('A','Away').replace('D','Draw') if not b['FTR'].mode().empty else 'Draw',
+                        '1Y_V': f"{iy_mode.replace('H','Home').replace('A','Away').replace('D','Draw')} ({int(iy_win_p*100)}%) {'🔥' if iy_win_p >= 0.6 else ''}",
+                        'MS_V': f"{ms_mode.replace('H','Home').replace('A','Away').replace('D','Draw')} ({int(ms_win_p*100)}%) {'🔥' if ms_win_p >= 0.6 else ''}",
                         'FORM DURUMU': form_analizi_yap(gecmis, m['ev'], m['dep']),
                         'ÖRNEK': len(b), 'idx': i
                     })
