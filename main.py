@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
-# POISSON SKOR TAHMİN MOTORU
+# 1. POISSON MODELİ (Matematiksel Tahmin Motoru)
 def poisson_skor_tahmin(ev_lambda, dep_lambda):
     if ev_lambda <= 0 and dep_lambda <= 0: return "0-0"
     ev_lambda = max(ev_lambda, 0.01)
@@ -120,12 +120,11 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                 if len(b) >= min_ornek:
-                    # POISSON HESAPLARI
+                    # 2. POISSON ANALİZ DÖNGÜSÜ
                     avg_ev, avg_dep = b['FTHG'].mean(), b['FTAG'].mean()
                     iy_ev_a, iy_dep_a = b['HTHG'].mean(), b['HTAG'].mean()
                     ms_skor_str = poisson_skor_tahmin(avg_ev, avg_dep)
                     iy_skor_str = poisson_skor_tahmin(iy_ev_a, iy_dep_a)
-                    
                     ms_e, ms_d = map(int, ms_skor_str.split('-'))
                     iy_e, iy_d = map(int, iy_skor_str.split('-'))
                     
@@ -149,18 +148,24 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','MS 1.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Maç Detayları ve Geçmiş Skorlar")
+                st.subheader("📚 Maç Detayları (Geçmiş Skorlar, Korner ve Kartlar)")
                 for row in final_list:
                     with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
                         m_orig = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
-                        b_det['1Y'] = b_det['HTHG'].astype(int).astype(str) + "-" + b_det['HTAG'].astype(int).astype(str)
-                        b_det['MS'] = b_det['FTHG'].astype(int).astype(str) + "-" + b_det['FTAG'].astype(int).astype(str)
-                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', '1Y', 'MS']].head(15))
+                        
+                        # Detay tablosunu düzenle
+                        detay_tablo = b_det.copy()
+                        detay_tablo['1Y'] = detay_tablo['HTHG'].astype(int).astype(str) + "-" + detay_tablo['HTAG'].astype(int).astype(str)
+                        detay_tablo['MS'] = detay_tablo['FTHG'].astype(int).astype(str) + "-" + detay_tablo['FTAG'].astype(int).astype(str)
+                        detay_tablo['Krn'] = (detay_tablo['HC'] + detay_tablo['AC']).astype(int)
+                        detay_tablo['Krt'] = (detay_tablo['HY'] + detay_tablo['AY']).astype(int)
+                        
+                        st.table(detay_tablo[['Date', 'HomeTeam', 'AwayTeam', '1Y', 'MS', 'Krn', 'Krt']].head(15))
                 
                 if flips:
                     st.markdown("---")
-                    st.subheader("🔥 HT/FT Sürpriz Radarı")
-                    for f in flips: st.warning(f"⚠️ **{f['m']}**: Geçmişte bu oranlarla %{f['p']} HT/FT dönüşü olmuş!")
+                    st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
+                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz potansiyeli!")
             else: st.warning("Eşleşen örnek bulunamadı.")
         else: st.error("Bülten boş.")
