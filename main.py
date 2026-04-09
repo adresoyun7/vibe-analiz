@@ -11,7 +11,9 @@ st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
 # POISSON SKOR TAHMİN MOTORU
 def poisson_skor_tahmin(ev_lambda, dep_lambda):
-    if ev_lambda == 0 and dep_lambda == 0: return "0-0"
+    if ev_lambda <= 0 and dep_lambda <= 0: return "0-0"
+    ev_lambda = max(ev_lambda, 0.01)
+    dep_lambda = max(dep_lambda, 0.01)
     max_goals = 6
     ev_prob = [poisson.pmf(i, ev_lambda) for i in range(max_goals)]
     dep_prob = [poisson.pmf(i, dep_lambda) for i in range(max_goals)]
@@ -118,13 +120,14 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                 if len(b) >= min_ornek:
-                    # POISSON VE ANALİZ
+                    # POISSON HESAPLARI
                     avg_ev, avg_dep = b['FTHG'].mean(), b['FTAG'].mean()
                     iy_ev_a, iy_dep_a = b['HTHG'].mean(), b['HTAG'].mean()
-                    ms_skor = poisson_skor_tahmin(avg_ev, avg_dep)
-                    iy_skor = poisson_skor_tahmin(iy_ev_a, iy_dep_a)
-                    ms_e, ms_d = map(int, ms_skor.split('-'))
-                    iy_e, iy_d = map(int, iy_skor.split('-'))
+                    ms_skor_str = poisson_skor_tahmin(avg_ev, avg_dep)
+                    iy_skor_str = poisson_skor_tahmin(iy_ev_a, iy_dep_a)
+                    
+                    ms_e, ms_d = map(int, ms_skor_str.split('-'))
+                    iy_e, iy_d = map(int, iy_skor_str.split('-'))
                     
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
@@ -132,10 +135,10 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'MS 1.5': 'Over' if (ms_e + ms_d) >= 2 else 'Under',
                         'MS 2.5': 'Over' if (ms_e + ms_d) >= 3 else 'Under',
                         'KG': 'Yes' if (ms_e > 0 and ms_d > 0) else 'No',
-                        '1Y SKOR': iy_skor, 'MS SKOR': ms_skor, 
+                        '1Y SKOR': iy_skor_str, 'MS SKOR': ms_skor_str, 
                         'KRN (ORT)': round((b['HC'] + b['AC']).mean(), 1), 'KRT (ORT)': round((b['HY'] + b['AY']).mean(), 1),
                         '1Y': 'Home' if iy_e > iy_d else ('Draw' if iy_e == iy_d else 'Away'),
-                        'MS': 'Home' if ms_e > ms_dep else ('Draw' if ms_e == ms_dep else 'Away'),
+                        'MS': 'Home' if ms_e > ms_d else ('Draw' if ms_e == ms_d else 'Away'),
                         'ÖRNEK': len(b), 'idx': i
                     })
                     if b['C_FLIP'].any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(b['C_FLIP'].mean()*100)})
@@ -151,11 +154,13 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
                         m_orig = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
-                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'HTHG', 'HTAG', 'FTHG', 'FTAG']].head(15))
+                        b_det['1Y'] = b_det['HTHG'].astype(int).astype(str) + "-" + b_det['HTAG'].astype(int).astype(str)
+                        b_det['MS'] = b_det['FTHG'].astype(int).astype(str) + "-" + b_det['FTAG'].astype(int).astype(str)
+                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', '1Y', 'MS']].head(15))
                 
                 if flips:
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı")
-                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz potansiyeli!")
+                    for f in flips: st.warning(f"⚠️ **{f['m']}**: Geçmişte bu oranlarla %{f['p']} HT/FT dönüşü olmuş!")
             else: st.warning("Eşleşen örnek bulunamadı.")
         else: st.error("Bülten boş.")
