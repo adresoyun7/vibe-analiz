@@ -4,7 +4,7 @@ import requests
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
+st.set_page_config(page_title="Vibe Analiz Pro Ultra - Romania Edition", layout="wide")
 
 st.markdown("<style>div[data-testid='stDataFrame'] { width: 100%; }</style>", unsafe_allow_html=True)
 
@@ -14,9 +14,10 @@ st.title("⚽ Profesyonel Global Analiz & Sürpriz Dedektörü")
 st.sidebar.header("⚙️ Ayarlar")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 
-# GENİŞLETİLMİŞ LİG HAVUZU
+# GENİŞLETİLMİŞ LİG HAVUZU (Romanya Eklendi)
 Lig_Kategorileri = {
     "TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
+    "ROMANYA": {'Liga I (Romanya)': 'soccer_romania_liga_1'},
     "AVRUPA (MAJÖR)": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
     "AVRUPA (DİĞER)": {'Hollanda': 'soccer_netherlands_ere_divisie', 'Portekiz': 'soccer_portugal_primeira_liga', 'Belçika': 'soccer_belgium_first_division', 'İskoçya': 'soccer_scotland_premier_league', 'Avusturya': 'soccer_austria_bundesliga', 'İsviçre': 'soccer_switzerland_league', 'Danimarka': 'soccer_denmark_superliga', 'Yunanistan': 'soccer_greece_super_league', 'Polonya': 'soccer_poland_ekstraklasa'},
     "GLOBAL": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya': 'soccer_brazil_campeonato_serie_a', 'Meksika': 'soccer_mexico_ligamx'}
@@ -26,7 +27,9 @@ secili_kodlar = []
 for kat, ligler in Lig_Kategorileri.items():
     with st.sidebar.expander(kat):
         for isim, kod in ligler.items():
-            if st.checkbox(isim, value=(kat == "TÜRKİYE"), key=kod):
+            # Romanya varsayılan olarak seçili gelsin istiyorsan burayı güncelleyebiliriz
+            is_default = (kat == "TÜRKİYE" or kat == "ROMANYA")
+            if st.checkbox(isim, value=is_default, key=kod):
                 secili_kodlar.append(kod)
 
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.20)
@@ -34,7 +37,8 @@ TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.20)
 # --- 1. VERİ MOTORU ---
 @st.cache_data(ttl=86400)
 def global_veri_motoru():
-    ligler = {'T1':'TR','E0':'EN1','E1':'EN2','SP1':'ES1','SP2':'ES2','D1':'DE1','I1':'IT1','F1':'FR1','N1':'NL1','B1':'BE1','P1':'PT1','SC0':'SC1','AUT':'AT','GRE':'GR','SWZ':'CH','DNK':'DK','POL':'PL','BRA':'BR'}
+    # Romanya ve diğer global veriler için havuzu genişlettik
+    ligler = {'T1':'TR','E0':'EN1','E1':'EN2','SP1':'ES1','SP2':'ES2','D1':'DE1','I1':'IT1','F1':'FR1','N1':'NL1','B1':'BE1','P1':'PT1','SC0':'SC1','AUT':'AT','GRE':'GR','SWZ':'CH','DNK':'DK','POL':'PL','BRA':'BR','ROM':'RO'}
     sezonlar = ['2324', '2425', '2526']
     liste = []
     for k in ligler.keys():
@@ -81,7 +85,7 @@ def style_engine(val):
     if val == 'Draw': return 'background-color: #f39c12; color: white;'
     return ''
 
-# --- 4. ANA PROGRAM ---
+# --- ANA PROGRAM ---
 if API_KEY and secili_kodlar:
     if st.button("🚀 TÜM BÜLTENİ ANALİZ ET"):
         gecmis = global_veri_motoru()
@@ -89,7 +93,6 @@ if API_KEY and secili_kodlar:
         
         if not bulten.empty:
             final_list, flips = [], []
-            # ZAMANA GÖRE SIRALAMA
             bulten = bulten.sort_values(by='zaman')
             
             for i, m in bulten.iterrows():
@@ -133,7 +136,6 @@ if API_KEY and secili_kodlar:
                 if flips:
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
-                    st.info("Aşağıdaki maçlarda geçmişte maç döndürme örnekleri saptanmıştır.")
                     for f in flips:
                         st.warning(f"**{f['maç']}**: Geçmiş örneklerin %{int(f['oran']*100)} kadarı HT/FT sürpriz bitmiş!")
             else: st.warning("Eşleşen örnek bulunamadı.")
