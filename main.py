@@ -361,7 +361,7 @@ def detay_paneli(m_row, b):
     st.markdown("**📊 Ortalama Değerler**")
     ca, cb, cc, cd = st.columns(4)
     ms_gol_ort = (b['FTHG'] + b['FTAG']).mean()
-    iy_gol = temp['HTHG'] + temp['HTAG'])
+    iy_gol = temp['HTHG'] + temp['HTAG']
     for col, sayi, etiket in [
         (ca, f"{ms_gol_ort:.1f}", "MS Gol Ort."),
         (cb, f"{iy_gol_ort:.1f}", "1Y Gol Ort."),
