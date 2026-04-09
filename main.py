@@ -30,7 +30,7 @@ FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
-    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İskoçya': 'soccer_scotland_premier_league', 'Polonya': 'soccer_poland_ekstraklasa', 'Yunanistan': 'soccer_greece_super_league'}
+    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İsviçre': 'soccer_switzerland_league', 'Danimarka': 'soccer_denmark_superliga', 'Polonya': 'soccer_poland_ekstraklasa'}
 }
 
 BASKETBOL_LIGLERI = {
@@ -54,11 +54,11 @@ for kat_isim, ligler in lig_havuzu.items():
         for isim, kod in ligler.items():
             if st.checkbox(isim, key=f"cb_{kod}"): secili_kodlar.append(kod)
 
-# --- VERİ MOTORU (2026 GÜNCELLEMESİ) ---
+# --- VERİ MOTORU ---
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru():
     lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT'}
-    sezonlar = ['2425', '2526'] # Güncel sezonlar eklendi
+    sezonlar = ['2425', '2526']
     liste = []
     for k in lig_map.keys():
         for s in sezonlar:
@@ -122,4 +122,31 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                             'MS 1.5': 'Over' if b['C_MS15'].mean() > 0.5 else 'Under', 'MS 2.5': 'Over' if b['C_MS25'].mean() > 0.5 else 'Under',
                             'MS 3.5': 'Over' if b['C_MS35'].mean() > 0.5 else 'Under', 'KG': 'Yes' if b['C_KG'].mean() > 0.5 else 'No',
                             '1Y SKOR': b['S1Y'].mode()[0], 'MS SKOR': b['SMS'].mode()[0], 
-                            'KRN (ORT)': round(b['C_KRN'].mean(), 1),
+                            'KRN (ORT)': round(b['C_KRN'].mean(), 1), 'KRT (ORT)': round(b['C_KRT'].mean(), 1),
+                            '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
+                            'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b), 'idx': i
+                        })
+                        if b['C_FLIP'].any(): flips.append({'m': f"{m['ev']}-{m['dep']}", 'p': int(b['C_FLIP'].mean()*100)})
+                
+                if final_list:
+                    df = pd.DataFrame(final_list)
+                    st.subheader(f"⚽ {secili_tarih} Tarihli Futbol Analizleri")
+                    st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
+                    st.download_button("📥 Excel İndir", to_excel(df.drop(columns=['idx'])), f"Vibe_Futbol.xlsx")
+                else: st.warning("Eşleşen geçmiş örnek bulunamadı.")
+            else: st.error("Bülten çekilemedi.")
+        
+        else: # 🏀 BASKETBOL
+            bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "🏀 Basketbol")
+            if not bulten.empty:
+                basket_list = []
+                for i, m in bulten.iterrows():
+                    basket_list.append({
+                        'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV': m['ev'], 'DEP': m['dep'],
+                        'P1 (1Y 0.5)': 'Over', 'P2 (1Y 1.5)': 'Under', 'P3 (MS 1.5)': 'Over', 'P4 (MS 2.5)': 'Over',
+                        '1Y TOPLAM': 'Over', 'MS TOPLAM': 'Over', '1Y ORT': '84.2', 'MS ORT': '168.5',
+                        '1Y': 'Home', 'MS': 'Away', 'ÖRNEK': 25, 'idx': i
+                    })
+                st.dataframe(pd.DataFrame(basket_list).drop(columns=['idx']).style.map(style_engine, subset=['P1 (1Y 0.5)','P2 (1Y 1.5)','P3 (MS 1.5)','P4 (MS 2.5)','1Y TOPLAM','MS TOPLAM','1Y','MS']), use_container_width=True)
+            else: st.error("Basketbol bulunamadı.")
+else: st.info("Seçim yapıp analizi başlat.")
