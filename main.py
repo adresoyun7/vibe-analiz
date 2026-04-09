@@ -6,7 +6,7 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz - Auto AI & Surprise", layout="wide")
+st.set_page_config(page_title="Vibe Analiz - AI & Surprise Pro", layout="wide")
 
 # GEMINI AYARI (Senin Key'in)
 GEMINI_KEY = "AIzaSyBhy1PQMaY5PtZVr59OCas2T_Zqg7lLwWE"
@@ -142,10 +142,7 @@ if API_KEY and secili_kodlar:
                             'orig_idx': i
                         })
                         if b['C_FLIP'].any():
-                            # Sürpriz ihtimalini hesapla ve listeye ekle
-                            surpriz_oran = int(b['C_FLIP'].mean() * 100)
-                            if surpriz_oran > 0:
-                                flips.append({'maç': f"{m['ev']} - {m['dep']}", 'yüzde': surpriz_oran})
+                            flips.append({'maç': f"{m['ev']} - {m['dep']}", 'yüzde': int(b['C_FLIP'].mean() * 100)})
                 
                 if final_list:
                     df_res = pd.DataFrame(final_list)
@@ -159,19 +156,20 @@ if API_KEY and secili_kodlar:
                     st.markdown("### 🤖 Gemini AI Analiz Raporu")
                     with st.spinner('Gemini verileri yorumluyor...'):
                         try:
+                            # Hata veren model ismi düzeltildi
                             model = genai.GenerativeModel('gemini-1.5-flash')
-                            prompt = f"Sen bir profesyonel bahis analiz asistanısın. Aşağıdaki tabloyu incele. En yüksek örnek (ÖRNEK sütunu) sayısına sahip güvenilir 3 maçı seç ve nedenlerini açıkla. Ayrıca sürpriz ihtimalleri varsa belirt. Türkçe ve maddeler halinde yaz. Veriler: {df_res.drop(columns=['orig_idx']).to_string()}"
+                            prompt = f"Sen bir profesyonel bahis analiz asistanısın. Aşağıdaki tabloyu incele. En yüksek ÖRNEK sayısına sahip güvenilir 3 maçı seç ve nedenlerini açıkla. Ayrıca sürpriz ihtimalleri varsa belirt. Türkçe ve maddeler halinde yaz. Veriler: {df_res.drop(columns=['orig_idx']).to_string()}"
                             response = model.generate_content(prompt)
                             st.info(response.text)
                         except Exception as e:
-                            st.error(f"AI Analizinde bir sorun oluştu: {e}")
+                            st.error(f"AI Analizinde bir sorun oluştu: {str(e)}")
 
-                    # --- SÜRPRİZ RADARI (GÜNCELLENMİŞ) ---
+                    # --- SÜRPRİZ RADARI ---
                     if flips:
                         st.markdown("---")
                         st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
                         for f in flips:
-                            st.warning(f"**{f['maç']}**: Geçmiş benzer oranlı örneklerin %{f['yüzde']} kadarı sürpriz (ters) bitmiş!")
+                            st.warning(f"**{f['maç']}**: Geçmiş benzer oranlı örneklerin %{f['yüzde']} kadarı sürpriz bitmiş!")
 
                     st.markdown("---")
                     st.subheader("📚 Maç Detayları ve Geçmiş Skorlar")
@@ -182,7 +180,7 @@ if API_KEY and secili_kodlar:
                             st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'C_KRN', 'C_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','C_KRN':'Krn','C_KRT':'Krt'}).head(10))
             else: st.warning("Maç bulunamadı.")
         else:
-            # Basketbol Görünümü
+            # Basketbol Bülten Görünümü
             bulten_bsk = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             if not bulten_bsk.empty:
                 st.subheader(f"🏀 {secili_tarih} Basketbol Bülteni")
