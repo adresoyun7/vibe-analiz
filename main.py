@@ -51,7 +51,7 @@ def futbol_veri_motoru(sezonlar):
             try:
                 url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
                 df = pd.read_csv(url)
-                cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC']
+                cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A']
                 df = df[df.columns.intersection(cols)]
                 temp = df.dropna(subset=['B365H','B365D','B365A']).copy()
                 temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
@@ -101,77 +101,64 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y_05': f"Over ({int(iy05_p*100)}%) {'🔥' if iy05_p >= 0.8 else ''}",
-                        'İY_15': f"{'Over' if (b['HTHG']+b['HTAG']>=2).mean() >= 0.5 else 'Under'} ({int((b['HTHG']+b['HTAG']>=2).mean()*100)}%)",
-                        'MS_15': f"Over ({int((b['FTHG']+b['FTAG']>=2).mean()*100)}%)",
                         'MS_25': f"{'Over' if ms25_p >= 0.5 else 'Under'} ({int(ms25_p*100)}%) {'🔥' if ms25_p >= 0.8 else ''}",
-                        'MS_35': f"{'Over' if (b['FTHG']+b['FTAG']>=4).mean() >= 0.5 else 'Under'} ({int((b['FTHG']+b['FTAG']>=4).mean()*100)}%)",
                         'KG_V': f"{'Yes' if kg_p >= 0.5 else 'No'} ({int(kg_p*100)}%) {'🔥' if kg_p >= 0.8 else ''}",
-                        '1Y_SKOR': (b['HTHG'].astype(int).astype(str) + "-" + b['HTAG'].astype(int).astype(str)).mode()[0],
-                        'MS_SKOR': (b['FTHG'].astype(int).astype(str) + "-" + b['FTAG'].astype(int).astype(str)).mode()[0],
-                        '1Y_V': f"{b['HTR'].mode()[0].replace('H','Home').replace('A','Away').replace('D','Draw')} ({int(b['HTR'].value_counts(normalize=True).get(b['HTR'].mode()[0],0)*100)}%)",
                         'MS_V': f"{ms_mod.replace('H','Home').replace('A','Away').replace('D','Draw')} ({int(b['FTR'].value_counts(normalize=True).get(ms_mod,0)*100)}%)",
-                        'ÖRNEK': len(b), 'idx': i, 'iy05_raw': iy05_p, 'ms25_raw': ms25_p, 'kg_raw': kg_p, 'ms_vibe_raw': ms_mod
+                        'ÖRNEK': len(b), 'idx': i, 'iy05_raw': iy05_p, 'ms25_raw': ms25_p, 'kg_raw': kg_p, 'ms_vibe_raw': ms_mod,
+                        'h_oran': m['h'], 'b_oran': m['b'], 'a_oran': m['a']
                     })
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 st.subheader(f"⚽ {secili_tarih} Vibe Analizi")
-                style_cols = ['1Y_05','İY_15','MS_15','MS_25','MS_35','KG_V','1Y_V','MS_V']
-                st.dataframe(df_ana.drop(columns=['idx','iy05_raw','ms25_raw','kg_raw','ms_vibe_raw']).style.map(style_engine, subset=style_cols), use_container_width=True)
+                st.dataframe(df_ana.drop(columns=['idx','iy05_raw','ms25_raw','kg_raw','ms_vibe_raw','h_oran','b_oran','a_oran']).style.map(style_engine), use_container_width=True)
                 
                 st.markdown("---")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
                         
-                        # --- TAHMİN MANTIĞI ---
-                        ana_t = "Bilinmiyor"
-                        alt_t = "Çifte Şans"
+                        # --- TAHMİN & ORAN MANTIĞI ---
+                        ana_t, ana_o = "Bilinmiyor", 0.0
+                        alt_t, alt_o = "Çifte Şans", 1.25 # Varsayılan CS oran tahmini
                         w_text, w_color = "", "#27ae60"
 
                         if row['ms25_raw'] >= 0.65:
-                            ana_t = "2.5 ÜST"
+                            ana_t, ana_o = "2.5 ÜST", 1.65 # Oranlar temsilidir
                             if row['kg_raw'] < 0.55:
                                 w_text = "⚠️ DİKKAT: Üst beklentisi yüksek ancak KG ihtimali zayıf. Maç 3-0 gibi tek taraflı bitebilir!"
                                 w_color = "#f39c12"
                         elif row['kg_raw'] >= 0.65:
-                            ana_t = "KG VAR"
+                            ana_t, ana_o = "KG VAR", 1.55
                         else:
-                            ana_t = row['MS_V'].split(' ')[0]
+                            ana_t = "MS 1" if row['ms_vibe_raw'] == 'H' else "MS 2" if row['ms_vibe_raw'] == 'A' else "MS X"
+                            ana_o = row['h_oran'] if row['ms_vibe_raw'] == 'H' else row['a_oran'] if row['ms_vibe_raw'] == 'A' else row['b_oran']
 
-                        # Alternatif Tercih (MS & Üst)
+                        # Alternatif Tercih (Oranlı)
                         if row['ms_vibe_raw'] == 'H' and row['ms25_raw'] > 0.60:
-                            alt_t = "MS 1 & 1.5 ÜST" if row['ms25_raw'] < 0.75 else "MS 1 & 2.5 ÜST"
+                            alt_t, alt_o = "MS 1 & 1.5 ÜST", (row['h_oran'] * 1.3)
                         elif row['ms_vibe_raw'] == 'A' and row['ms25_raw'] > 0.60:
-                            alt_t = "MS 2 & 1.5 ÜST"
-                        elif row['kg_raw'] > 0.70:
-                            alt_t = "KG VAR"
+                            alt_t, alt_o = "MS 2 & 1.5 ÜST", (row['a_oran'] * 1.3)
                         else:
-                            alt_t = "2.5 ÜST" if row['ms25_raw'] > 0.55 else "1.5 ÜST"
+                            alt_t, alt_o = "2.5 ÜST", 1.65
 
-                        # GÖRSEL RAPOR KARTI
                         st.markdown(f"""
                         <div style="background-color: #1e272e; padding: 15px; border-radius: 10px; border-left: 8px solid {w_color}; margin-bottom: 20px;">
                             <h4 style="color: white; margin-top: 0; margin-bottom: 10px;">🎯 VİBE TAHMİN RAPORU</h4>
-                            <p style="font-size: 16px; margin: 5px 0; color: white;">🎯 <b>ANA TERCİH :</b> <span style="color: #27ae60;">{ana_t}</span></p>
-                            <p style="font-size: 16px; margin: 5px 0; color: white;">🥈 <b>ALTERNATİF :</b> <span style="color: #f39c12;">{alt_t}</span></p>
+                            <p style="font-size: 16px; margin: 5px 0; color: white;">🎯 <b>ANA TERCİH :</b> <span style="color: #27ae60;">{ana_t}</span> <span style="color: #888;">({ana_o:.2f})</span></p>
+                            <p style="font-size: 16px; margin: 5px 0; color: white;">🥈 <b>ALTERNATİF :</b> <span style="color: #f39c12;">{alt_t}</span> <span style="color: #888;">({alt_o:.2f})</span></p>
                             {f'<p style="font-size: 16px; margin: 5px 0; color: white;">📍 <b>CANLI TERCİH :</b> <span style="color: #e74c3c;">İY 0.5 ÜST</span></p>' if row['iy05_raw'] >= 0.75 else ""}
                             {f'<p style="color: #f39c12; font-weight: bold; margin: 10px 0;">{w_text}</p>' if w_text else ""}
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # DETAYLI TABLO
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         dt_res = pd.DataFrame()
                         dt_res['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y')
                         dt_res['Ev'] = b_det['HomeTeam']; dt_res['Dep'] = b_det['AwayTeam']
                         dt_res['1Y_05'] = (b_det['HTHG'] + b_det['HTAG'] >= 1).map({True:'Over', False:'Under'})
-                        dt_res['İY_15'] = (b_det['HTHG'] + b_det['HTAG'] >= 2).map({True:'Over', False:'Under'})
-                        dt_res['MS_15'] = (b_det['FTHG'] + b_det['FTAG'] >= 2).map({True:'Over', False:'Under'})
                         dt_res['MS_25'] = (b_det['FTHG'] + b_det['FTAG'] >= 3).map({True:'Over', False:'Under'})
                         dt_res['KG_V'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
-                        dt_res['1Y_SKOR'] = b_det['HTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['HTAG'].fillna(0).astype(int).astype(str)
                         dt_res['MS_SKOR'] = b_det['FTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['FTAG'].fillna(0).astype(int).astype(str)
-                        dt_res['1Y_V'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
                         dt_res['MS_V'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
-                        st.dataframe(dt_res.style.map(style_engine, subset=['1Y_05','İY_15','MS_15','MS_25','KG_V','1Y_V','MS_V']), use_container_width=True, hide_index=True)
+                        st.dataframe(dt_res.style.map(style_engine, subset=['1Y_05','MS_25','KG_V','MS_V']), use_container_width=True, hide_index=True)
