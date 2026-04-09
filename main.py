@@ -89,16 +89,14 @@ def bulten_cek(key, kodlar, t):
 # --- ANA PROGRAM ---
 if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Lütfen API Key girin ve yan menüden en az bir lig seçin.")
+        st.error("⚠️ Lütfen API Key girin ve lig seçin.")
     else:
-        with st.spinner("📊 Analizler ve Form Durumları Hesaplanıyor..."):
+        with st.spinner("📊 Sürpriz Analizleri ve Form Durumları Hesaplanıyor..."):
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
         if bulten.empty:
-            st.warning(f"ℹ️ Seçilen liglerde {secili_tarih} tarihinde maç bulunamadı. Lütfen tarihi değiştirin veya daha fazla lig seçin.")
-        elif gecmis.empty:
-            st.error("❌ Geçmiş veri havuzu yüklenemedi. İnternet bağlantınızı kontrol edin.")
+            st.warning(f"ℹ️ Seçilen liglerde {secili_tarih} tarihinde maç bulunamadı.")
         else:
             final_list, flips = [], []
             for i, m in bulten.iterrows():
@@ -119,6 +117,11 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     iy_skor = (b['HTHG'].fillna(0).astype(int).astype(str) + "-" + b['HTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     ms_skor = (b['FTHG'].fillna(0).astype(int).astype(str) + "-" + b['FTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     
+                    # HT/FT Sürpriz (1/2 - 2/1) Kontrolü
+                    c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
+                    if c_flip.any():
+                        flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
+
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y_05': f"{'Over' if iy05_p >= 0.5 else 'Under'} ({int(iy05_p*100)}%) {'🔥' if iy05_p >= 0.8 else ''}",
@@ -131,34 +134,22 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'FORM DURUMU': form_analizi_yap(gecmis, m['ev'], m['dep']),
                         'ÖRNEK': len(b), 'idx': i
                     })
-                    c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
-                    if c_flip.any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Mod Skorlar")
+                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Sürpriz Radarı")
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V']
                 st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
+                if flips:
+                    st.markdown("---")
+                    st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
+                    for f in flips:
+                        st.warning(f"⚠️ **{f['m']}**: Geçmişte bu oranlarla %{f['p']} sürpriz geri dönüş (1/2 veya 2/1) yaşanmış!")
+
                 st.markdown("---")
-                st.subheader("📚 Detaylı Örnekler")
+                st.subheader("📚 Detaylı Geçmiş Örnekler")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
                         m_o = bulten.loc[row['idx']]
-                        b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
-                        dt = pd.DataFrame()
-                        dt['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y')
-                        dt['Ev'] = b_det['HomeTeam']; dt['Dep'] = b_det['AwayTeam']
-                        dt['1Y_05'] = (b_det['HTHG'] + b_det['HTAG'] >= 1).map({True:'Over', False:'Under'})
-                        dt['İY_15'] = (b_det['HTHG'] + b_det['HTAG'] >= 2).map({True:'Over', False:'Under'})
-                        dt['MS_15'] = (b_det['FTHG'] + b_det['FTAG'] >= 2).map({True:'Over', False:'Under'})
-                        dt['MS_25'] = (b_det['FTHG'] + b_det['FTAG'] >= 3).map({True:'Over', False:'Under'})
-                        dt['MS_35'] = (b_det['FTHG'] + b_det['FTAG'] >= 4).map({True:'Over', False:'Under'})
-                        dt['KG_V'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
-                        dt['1Y_SKOR'] = b_det['HTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['HTAG'].fillna(0).astype(int).astype(str)
-                        dt['MS_SKOR'] = b_det['FTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['FTAG'].fillna(0).astype(int).astype(str)
-                        dt['Krn'] = (b_det.get('HC', 0).fillna(0) + b_det.get('AC', 0).fillna(0)).astype(int)
-                        dt['Krt'] = (b_det.get('HY', 0).fillna(0) + b_det.get('AY', 0).fillna(0)).astype(int)
-                        dt['H_Oran'] = b_det['B365H']; dt['B_Oran'] = b_det['B365D']; dt['A_Oran'] = b_det['B365A']
-                        st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
-            else: st.warning("Eşleşen örnek bulunamadı. Lütfen Toleransı artırın.")
+                        b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLER
