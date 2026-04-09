@@ -35,10 +35,13 @@ BASKETBOL_LIGLERI = {
 secili_kodlar = []
 lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else BASKETBOL_LIGLERI
 
+# --- LİG SEÇİMİ (TÜMÜNÜ SEÇ ÖZELLİĞİ İLE) ---
 for kat, ligler in lig_havuzu.items():
     with st.sidebar.expander(kat):
+        # Her kategori için "Tümünü Seç" butonu
+        select_all = st.checkbox(f"Hepsini Seç ({kat})", value=False, key=f"all_{kat}")
         for isim, kod in ligler.items():
-            if st.sidebar.checkbox(isim, value=False, key=kod):
+            if st.sidebar.checkbox(isim, value=select_all, key=kod):
                 secili_kodlar.append(kod)
 
 # --- VERİ MOTORU (FUTBOL) ---
@@ -81,7 +84,6 @@ def bulten_cek(key, kodlar, hedef_tarih):
                 t = datetime.strptime(m['commence_time'], '%Y-%m-%dT%H:%M:%SZ') + timedelta(hours=3)
                 if t.date() == hedef_tarih:
                     o = m['bookmakers'][0]['markets'][0]['outcomes']
-                    # Hata düzelten next() yapısı
                     h = next((x['price'] for x in o if x['name']==m['home_team']), 0)
                     a = next((x['price'] for x in o if x['name']==m['away_team']), 0)
                     b = next((x['price'] for x in o if x['name'].lower() == 'draw'), 0)
@@ -105,40 +107,38 @@ if API_KEY and secili_kodlar:
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             if not bulten.empty:
-                final_list, flips = [], []
+                final_list = []
                 for i, m in bulten.sort_values(by='zaman').iterrows():
                     b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & 
                                (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & 
                                (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                     if not b.empty and len(b) >= min_ornek:
                         final_list.append({
-                            'ID': i, 'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
+                            'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                             '1Y 0.5': 'Over' if b['COL_1Y05'].mean() > 0.5 else 'Under', '1Y 1.5': 'Over' if b['COL_1Y15'].mean() > 0.5 else 'Under',
                             'MS 1.5': 'Over' if b['COL_MS15'].mean() > 0.5 else 'Under', 'MS 2.5': 'Over' if b['COL_MS25'].mean() > 0.5 else 'Under',
                             'MS 3.5': 'Over' if b['COL_MS35'].mean() > 0.5 else 'Under', 'KG': 'Yes' if b['COL_KG'].mean() > 0.5 else 'No',
                             '1Y SKOR': b['S1Y'].mode()[0], 'MS SKOR': b['SMS'].mode()[0], 'KRN (ORT)': round(b['COL_KRN'].mean(), 1),
                             '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
-                            'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b)
+                            'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b),
+                            'original_index': i
                         })
-                        if b['COL_FLIP'].any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'o': b['COL_FLIP'].mean()})
                 
                 if final_list:
-                    st.dataframe(pd.DataFrame(final_list).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
+                    df_res = pd.DataFrame(final_list)
+                    st.dataframe(df_res.drop(columns=['original_index']).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
                     for row in final_list:
                         with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
-                            m_orig = bulten.loc[row['ID']]
+                            m_orig = bulten.loc[row['original_index']]
                             b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
                             st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'COL_KRN', 'COL_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','COL_KRN':'Krn','COL_KRT':'Krt'}).head(10))
                 else: st.warning("Eşleşen örnek bulunamadı.")
             else: st.warning("Maç bulunamadı.")
         else:
-            # BASKETBOL GÖRÜNÜMÜ
             bulten_bsk = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             if not bulten_bsk.empty:
                 st.subheader(f"🏀 {secili_tarih} Tarihli Basketbol Bülteni")
-                # Basketbol tablosunda beraberlik sütununu göstermiyoruz
                 st.dataframe(bulten_bsk[['lig', 'zaman', 'ev', 'dep', 'h', 'a']].rename(columns={'h':'Ev Oran','a':'Dep Oran'}), use_container_width=True)
-                st.info("Basketbol analizi için sistemimiz şu an oran bazlı listeleme yapmaktadır.")
             else: st.warning("Basketbol maçı bulunamadı.")
 else:
     st.info("Lig seç ve API Key gir.")
