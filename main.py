@@ -2,25 +2,17 @@ import streamlit as st
 import pandas as pd
 import requests
 import io
-import numpy as np
-from scipy.stats import poisson
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
-# POISSON ANALİZ MOTORU
-def poisson_analiz(ev_avg, dep_avg):
-    if ev_avg <= 0 and dep_avg <= 0: return "0-0", 0.0, 0.0
-    ev_avg, dep_avg = max(ev_avg, 0.05), max(dep_avg, 0.05)
-    max_g = 6
-    ev_probs = [poisson.pmf(i, ev_avg) for i in range(max_g)]
-    dep_probs = [poisson.pmf(i, dep_avg) for i in range(max_g)]
-    m = np.outer(ev_probs, dep_probs)
-    ev_s, dep_s = np.unravel_index(m.argmax(), m.shape)
-    ust_prob = (1 - (m[0,0] + m[0,1] + m[0,2] + m[1,0] + m[1,1] + m[2,0])) * 100
-    kg_prob = (1 - (sum(m[0,:]) + sum(m[:,0]) - m[0,0])) * 100
-    return f"{ev_s}-{dep_s}", round(ust_prob, 1), round(kg_prob, 1)
+def to_excel(df):
+    output = io.BytesIO()
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    df.to_excel(writer, index=False, sheet_name='Analiz')
+    writer.close()
+    return output.getvalue()
 
 def style_engine(val):
     if val in ['Over', 'Yes', 'Home']: return 'background-color: #27ae60; color: white;'
@@ -98,11 +90,13 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                 if len(b) >= min_ornek:
-                    iy_skor_mod = (b['HTHG'].astype(int).astype(str) + "-" + b['HTAG'].astype(int).astype(str)).mode()[0]
-                    ms_skor_mod = (b['FTHG'].astype(int).astype(str) + "-" + b['FTAG'].astype(int).astype(str)).mode()[0]
-                    iy_e, iy_d = map(int, iy_skor_mod.split('-'))
-                    ms_e, ms_d = map(int, ms_skor_mod.split('-'))
+                    # MOD SKORLARI BUL
+                    iy_skor = (b['HTHG'].astype(int).astype(str) + "-" + b['HTAG'].astype(int).astype(str)).mode()[0]
+                    ms_skor = (b['FTHG'].astype(int).astype(str) + "-" + b['FTAG'].astype(int).astype(str)).mode()[0]
+                    iy_e, iy_d = map(int, iy_skor.split('-'))
+                    ms_e, ms_d = map(int, ms_skor.split('-'))
                     
+                    # Sürpriz Kontrolü
                     c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
                     if c_flip.any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
 
@@ -112,26 +106,21 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'MS_15': 'Over' if (ms_e+ms_d) >= 2 else 'Under',
                         'MS_25': 'Over' if (ms_e+ms_d) >= 3 else 'Under',
                         'KG_V': 'Yes' if (ms_e > 0 and ms_d > 0) else 'No',
-                        '1Y_SKOR': iy_skor_mod, 'MS_SKOR': ms_skor_mod,
+                        '1Y_SKOR': iy_skor, 'MS_SKOR': ms_skor,
                         '1Y_V': 'Home' if iy_e > iy_d else ('Draw' if iy_e == iy_d else 'Away'),
                         'MS_V': 'Home' if ms_e > ms_d else ('Draw' if ms_e == ms_d else 'Away'),
-                        'ÖRNEK': len(b), 'idx': i, 'avg_ev': b['FTHG'].mean(), 'avg_dep': b['FTAG'].mean()
+                        'ÖRNEK': len(b), 'idx': i
                     })
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 st.subheader(f"⚽ {secili_tarih} Vibe Analizleri")
-                
-                # ANA TABLO RENKLENDİRME (KİLİTLİ İSİMLER)
-                st.dataframe(df_ana.drop(columns=['idx','avg_ev','avg_dep']).style.map(style_engine, subset=['1Y_05','MS_15','MS_25','KG_V','1Y_V','MS_V']), use_container_width=True)
+                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=['1Y_05','MS_15','MS_25','KG_V','1Y_V','MS_V']), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Maç Detayları & Poisson")
+                st.subheader("📚 Maç Detayları (Geçmiş Maçlar)")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
-                        p_skor, p_ust, p_kg = poisson_analiz(row['avg_ev'], row['avg_dep'])
-                        st.info(f"📊 **Poisson Tahmini:** Beklenen Skor: **{p_skor}** | Üst Olasılığı: **%{p_ust}** | KG Olasılığı: **%{p_kg}**")
-                        
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy()
                         
@@ -150,11 +139,10 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['1Y_V'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
                         dt['MS_V'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
 
-                        # DETAY TABLO RENKLENDİRME (KİLİTLİ İSİMLER)
                         st.dataframe(dt.style.map(style_engine, subset=['1Y_05','MS_15','MS_25','KG_V','1Y_V','MS_V']), use_container_width=True)
                 
                 if flips:
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
-                    for f in flips: st.warning(f"⚠️ **{f['m']}**: Geçmişte bu oranlarla %{f['p']} sürpriz HT/FT dönüşü olmuş!")
-            else: st.warning("Eşleşen maç bulunamadı.")
+                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz HT/FT dönüşü olmuş!")
+            else: st.warning("Maç bulunamadı.")
