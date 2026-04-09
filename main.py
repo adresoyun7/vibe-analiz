@@ -4,31 +4,53 @@ import requests
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz Pro Ultra - Romania Edition", layout="wide")
+st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
 st.markdown("<style>div[data-testid='stDataFrame'] { width: 100%; }</style>", unsafe_allow_html=True)
 
-st.title("⚽ Profesyonel Global Analiz & Sürpriz Dedektörü")
+st.title("⚽ Profesyonel Global Analiz & Gelişmiş Filtreleme")
 
 # --- YAN MENÜ ---
-st.sidebar.header("⚙️ Ayarlar")
+st.sidebar.header("⚙️ Ayarlar & Filtreler")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 
-# GENİŞLETİLMİŞ LİG HAVUZU (Romanya Eklendi)
+# 1. TARİH FİLTRESİ (Yeni!)
+bugun = datetime.now().date()
+secili_tarih = st.sidebar.date_input(
+    "Analiz Edilecek Tarih",
+    value=bugun,
+    min_value=bugun,
+    max_value=bugun + timedelta(days=4)
+)
+
+# 2. ÖRNEK SAYISI FİLTRESİ (Yeni!)
+min_ornek = st.sidebar.number_input("Minimum Örnek Sayısı (Geçmiş Maç)", min_value=1, value=2, step=1)
+
+# LİG KATEGORİLERİ
 Lig_Kategorileri = {
     "TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
-    "ROMANYA": {'Liga I (Romanya)': 'soccer_romania_liga_1'},
     "AVRUPA (MAJÖR)": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
-    "AVRUPA (DİĞER)": {'Hollanda': 'soccer_netherlands_ere_divisie', 'Portekiz': 'soccer_portugal_primeira_liga', 'Belçika': 'soccer_belgium_first_division', 'İskoçya': 'soccer_scotland_premier_league', 'Avusturya': 'soccer_austria_bundesliga', 'İsviçre': 'soccer_switzerland_league', 'Danimarka': 'soccer_denmark_superliga', 'Yunanistan': 'soccer_greece_super_league', 'Polonya': 'soccer_poland_ekstraklasa'},
+    "AVRUPA (DİĞER)": {
+        'Romanya Liga I': 'soccer_romania_liga_1', 
+        'Hollanda': 'soccer_netherlands_ere_divisie', 
+        'Portekiz': 'soccer_portugal_primeira_liga', 
+        'Belçika': 'soccer_belgium_first_division', 
+        'İskoçya': 'soccer_scotland_premier_league', 
+        'Avusturya': 'soccer_austria_bundesliga', 
+        'İsviçre': 'soccer_switzerland_league', 
+        'Danimarka': 'soccer_denmark_superliga', 
+        'Yunanistan': 'soccer_greece_super_league', 
+        'Polonya': 'soccer_poland_ekstraklasa'
+    },
     "GLOBAL": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya': 'soccer_brazil_campeonato_serie_a', 'Meksika': 'soccer_mexico_ligamx'}
 }
 
 secili_kodlar = []
+st.sidebar.markdown("---")
 for kat, ligler in Lig_Kategorileri.items():
     with st.sidebar.expander(kat):
         for isim, kod in ligler.items():
-            # Romanya varsayılan olarak seçili gelsin istiyorsan burayı güncelleyebiliriz
-            is_default = (kat == "TÜRKİYE" or kat == "ROMANYA")
+            is_default = (kat == "TÜRKİYE")
             if st.checkbox(isim, value=is_default, key=kod):
                 secili_kodlar.append(kod)
 
@@ -37,7 +59,6 @@ TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.20)
 # --- 1. VERİ MOTORU ---
 @st.cache_data(ttl=86400)
 def global_veri_motoru():
-    # Romanya ve diğer global veriler için havuzu genişlettik
     ligler = {'T1':'TR','E0':'EN1','E1':'EN2','SP1':'ES1','SP2':'ES2','D1':'DE1','I1':'IT1','F1':'FR1','N1':'NL1','B1':'BE1','P1':'PT1','SC0':'SC1','AUT':'AT','GRE':'GR','SWZ':'CH','DNK':'DK','POL':'PL','BRA':'BR','ROM':'RO'}
     sezonlar = ['2324', '2425', '2526']
     liste = []
@@ -64,18 +85,20 @@ def global_veri_motoru():
             except: continue
     return pd.concat(liste).sort_values(by='Date', ascending=False) if liste else pd.DataFrame()
 
-def bulten_cek(key, kodlar):
+def bulten_cek(key, kodlar, hedef_tarih):
     res = []
     for k in kodlar:
         try:
             r = requests.get(f'https://api.the-odds-api.com/v4/sports/{k}/odds/?apiKey={key}&regions=eu&markets=h2h').json()
             for m in r:
                 t = datetime.strptime(m['commence_time'], '%Y-%m-%dT%H:%M:%SZ') + timedelta(hours=3)
-                o = m['bookmakers'][0]['markets'][0]['outcomes']
-                res.append({'lig': m['sport_title'], 'zaman': t, 'ev': m['home_team'], 'dep': m['away_team'], 
-                            'h': next(x['price'] for x in o if x['name']==m['home_team']),
-                            'a': next(x['price'] for x in o if x['name']==m['away_team']),
-                            'b': next(x['price'] for x in o if x['name']=='Draw')})
+                # Sadece seçilen tarihteki maçları al
+                if t.date() == hedef_tarih:
+                    o = m['bookmakers'][0]['markets'][0]['outcomes']
+                    res.append({'lig': m['sport_title'], 'zaman': t, 'ev': m['home_team'], 'dep': m['away_team'], 
+                                'h': next(x['price'] for x in o if x['name']==m['home_team']),
+                                'a': next(x['price'] for x in o if x['name']==m['away_team']),
+                                'b': next(x['price'] for x in o if x['name']=='Draw')})
         except: continue
     return pd.DataFrame(res)
 
@@ -85,11 +108,11 @@ def style_engine(val):
     if val == 'Draw': return 'background-color: #f39c12; color: white;'
     return ''
 
-# --- ANA PROGRAM ---
+# --- 4. ANA PROGRAM ---
 if API_KEY and secili_kodlar:
-    if st.button("🚀 TÜM BÜLTENİ ANALİZ ET"):
+    if st.button("🚀 ANALİZİ BAŞLAT"):
         gecmis = global_veri_motoru()
-        bulten = bulten_cek(API_KEY, secili_kodlar)
+        bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
         
         if not bulten.empty:
             final_list, flips = [], []
@@ -100,9 +123,10 @@ if API_KEY and secili_kodlar:
                            (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & 
                            (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                 
-                if not b.empty:
+                # Minimum Örnek Sayısı Filtresi Uygula
+                if not b.empty and len(b) >= min_ornek:
                     final_list.append({
-                        'ID': i, 'SAAT': m['zaman'].strftime('%d/%m %H:%M'),
+                        'ID': i, 'SAAT': m['zaman'].strftime('%H:%M'),
                         'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y 0.5': 'Over' if b['COL_1Y05'].mean() > 0.5 else 'Under',
                         '1Y 1.5': 'Over' if b['COL_1Y15'].mean() > 0.5 else 'Under',
@@ -120,10 +144,11 @@ if API_KEY and secili_kodlar:
                         flips.append({'maç': f"{m['ev']} - {m['dep']}", 'oran': b['COL_FLIP'].mean()})
 
             if final_list:
-                st.subheader("📊 Tarihe Göre Sıralı Geniş Analiz Tablosu")
+                st.subheader(f"📊 {secili_tarih.strftime('%d/%m/%Y')} Tarihli Maçlar")
                 df_res = pd.DataFrame(final_list)
                 st.dataframe(df_res.style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
                 
+                # (Maç Detayları ve Sürpriz kısmı aynı kalıyor...)
                 st.markdown("### 📚 Maç Detayları ve Geçmiş Skorlar")
                 for row in final_list:
                     with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
@@ -137,6 +162,6 @@ if API_KEY and secili_kodlar:
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
                     for f in flips:
-                        st.warning(f"**{f['maç']}**: Geçmiş örneklerin %{int(f['oran']*100)} kadarı HT/FT sürpriz bitmiş!")
-            else: st.warning("Eşleşen örnek bulunamadı.")
+                        st.warning(f"**{f['maç']}**: Geçmiş örneklerin %{int(f['oran']*100)} kadarı sürpriz bitmiş!")
+            else: st.warning("Bu tarihte veya bu filtrelerde eşleşen maç bulunamadı.")
 else: st.info("Lig seçip API Key girin.")
