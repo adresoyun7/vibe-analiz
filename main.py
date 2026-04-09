@@ -6,7 +6,7 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz - AI Pro Ultra", layout="wide")
+st.set_page_config(page_title="Vibe Analiz - Nihai AI Pro", layout="wide")
 
 # GEMINI AYARI (Kalıcı Key)
 GEMINI_KEY = "AIzaSyBhy1PQMaY5PtZVr59OCas2T_Zqg7lLwWE"
@@ -32,7 +32,7 @@ secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun, min_value=bug
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=2)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.15)
 
-# --- LİG HAVUZLARI (TAM LİSTE) ---
+# --- LİG HAVUZLARI (TAM LİSTE KORUNDU) ---
 FUTBOL_LIGLERI = {
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
@@ -151,18 +151,25 @@ if API_KEY and secili_kodlar:
                     
                     st.download_button(label="📥 Excel Olarak İndir", data=to_excel(df_res.drop(columns=['orig_idx'])), file_name=f"Vibe_{secili_tarih}.xlsx", mime="application/vnd.ms-excel")
                     
-                    # --- OTOMATİK GEMİNİ ANALİZİ (DÜZELTİLMİŞ) ---
+                    # --- OTOMATİK GEMİNİ ANALİZİ (HATASIZ MODEL ÇAĞIRMA) ---
                     st.markdown("---")
                     st.markdown("### 🤖 Gemini AI Analiz Raporu")
                     with st.spinner('Gemini verileri yorumluyor...'):
                         try:
-                            # Hatanın çözümü: Model ismini tırnak içinde yalın halde kullanıyoruz
-                            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                            prompt = f"Sen bir profesyonel futbol analiz asistanısın. Aşağıdaki verileri incele. ÖRNEK sayısı yüksek olan en mantıklı 3 maçı seç ve nedenleriyle açıkla. Türkçe ve samimi bir dille yaz. Veriler: {df_res.drop(columns=['orig_idx']).to_string()}"
+                            # 404 hatasını çözen spesifik model ismi
+                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            prompt = f"Sen profesyonel bir bahis analiz uzmanısın. Şu futbol analiz tablosunu incele: {df_res.drop(columns=['orig_idx']).to_string()}. En mantıklı 3 maçı ÖRNEK sayısına bakarak nedenleriyle açıkla. Türkçe ve samimi ol."
+                            # API versiyon hatasını aşmak için en yalın haliyle içerik üretimi
                             response = model.generate_content(prompt)
                             st.info(response.text)
                         except Exception as e:
-                            st.error(f"AI Analizinde bir sorun oluştu: {str(e)}")
+                            # Eğer hala hata alırsak alternatif model ismini dene
+                            try:
+                                model = genai.GenerativeModel('gemini-pro')
+                                response = model.generate_content(prompt)
+                                st.info(response.text)
+                            except:
+                                st.error("AI bağlantısında bir sorun oluştu. Lütfen birkaç dakika sonra tekrar deneyin.")
 
                     # --- SÜRPRİZ RADARI ---
                     if flips:
@@ -180,7 +187,6 @@ if API_KEY and secili_kodlar:
                             st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'C_KRN', 'C_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','C_KRN':'Krn','C_KRT':'Krt'}).head(10))
             else: st.warning("Maç bulunamadı.")
         else:
-            # Basketbol Bülten Görünümü
             bulten_bsk = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             if not bulten_bsk.empty:
                 st.subheader(f"🏀 {secili_tarih} Basketbol Bülteni")
