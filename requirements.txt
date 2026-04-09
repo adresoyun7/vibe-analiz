@@ -1,4 +1,6 @@
 streamlit
 pandas
-xlsxwriter
 requests
+xlsxwriter
+numpy
+scipy
