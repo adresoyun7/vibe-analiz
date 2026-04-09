@@ -9,17 +9,16 @@ from datetime import datetime, timedelta
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
-# 1. POISSON MODELİ (Matematiksel Tahmin Motoru)
+# 1. POISSON MATEMATİKSEL MOTORU
 def poisson_skor_tahmin(ev_lambda, dep_lambda):
     if ev_lambda <= 0 and dep_lambda <= 0: return "0-0"
-    ev_lambda = max(ev_lambda, 0.01)
-    dep_lambda = max(dep_lambda, 0.01)
+    ev_lambda, dep_lambda = max(ev_lambda, 0.05), max(dep_lambda, 0.05)
     max_goals = 6
-    ev_prob = [poisson.pmf(i, ev_lambda) for i in range(max_goals)]
-    dep_prob = [poisson.pmf(i, dep_lambda) for i in range(max_goals)]
-    m = np.outer(ev_prob, dep_prob)
-    ev_skor, dep_skor = np.unravel_index(m.argmax(), m.shape)
-    return f"{ev_skor}-{dep_skor}"
+    ev_probs = [poisson.pmf(i, ev_lambda) for i in range(max_goals)]
+    dep_probs = [poisson.pmf(i, dep_lambda) for i in range(max_goals)]
+    matris = np.outer(ev_probs, dep_probs)
+    ev_s, dep_s = np.unravel_index(matris.argmax(), matris.shape)
+    return f"{ev_s}-{dep_s}"
 
 def to_excel(df):
     output = io.BytesIO()
@@ -118,15 +117,16 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
         if not bulten.empty:
             final_list, flips = [], []
             for i, m in bulten.iterrows():
+                # FİLTRELEME: Rayo-AEK hatasını önlemek için 3 oran kilidi
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                 if len(b) >= min_ornek:
-                    # 2. POISSON ANALİZ DÖNGÜSÜ
+                    # 2. POISSON UYGULAMASI
                     avg_ev, avg_dep = b['FTHG'].mean(), b['FTAG'].mean()
-                    iy_ev_a, iy_dep_a = b['HTHG'].mean(), b['HTAG'].mean()
-                    ms_skor_str = poisson_skor_tahmin(avg_ev, avg_dep)
-                    iy_skor_str = poisson_skor_tahmin(iy_ev_a, iy_dep_a)
-                    ms_e, ms_d = map(int, ms_skor_str.split('-'))
-                    iy_e, iy_d = map(int, iy_skor_str.split('-'))
+                    iy_ev_avg, iy_dep_avg = b['HTHG'].mean(), b['HTAG'].mean()
+                    ms_skor = poisson_skor_tahmin(avg_ev, avg_dep)
+                    iy_skor = poisson_skor_tahmin(iy_ev_avg, iy_dep_avg)
+                    ms_e, ms_d = map(int, ms_skor.split('-'))
+                    iy_e, iy_d = map(int, iy_skor.split('-'))
                     
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
@@ -134,7 +134,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'MS 1.5': 'Over' if (ms_e + ms_d) >= 2 else 'Under',
                         'MS 2.5': 'Over' if (ms_e + ms_d) >= 3 else 'Under',
                         'KG': 'Yes' if (ms_e > 0 and ms_d > 0) else 'No',
-                        '1Y SKOR': iy_skor_str, 'MS SKOR': ms_skor_str, 
+                        '1Y SKOR': iy_skor, 'MS SKOR': ms_skor, 
                         'KRN (ORT)': round((b['HC'] + b['AC']).mean(), 1), 'KRT (ORT)': round((b['HY'] + b['AY']).mean(), 1),
                         '1Y': 'Home' if iy_e > iy_d else ('Draw' if iy_e == iy_d else 'Away'),
                         'MS': 'Home' if ms_e > ms_d else ('Draw' if ms_e == ms_d else 'Away'),
@@ -148,24 +148,23 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','MS 1.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Maç Detayları (Geçmiş Skorlar, Korner ve Kartlar)")
+                st.subheader("📚 Maç Detayları (Geçmiş Skorlar, Korner ve Kart)")
                 for row in final_list:
                     with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
                         m_orig = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
                         
-                        # Detay tablosunu düzenle
-                        detay_tablo = b_det.copy()
-                        detay_tablo['1Y'] = detay_tablo['HTHG'].astype(int).astype(str) + "-" + detay_tablo['HTAG'].astype(int).astype(str)
-                        detay_tablo['MS'] = detay_tablo['FTHG'].astype(int).astype(str) + "-" + detay_tablo['FTAG'].astype(int).astype(str)
-                        detay_tablo['Krn'] = (detay_tablo['HC'] + detay_tablo['AC']).astype(int)
-                        detay_tablo['Krt'] = (detay_tablo['HY'] + detay_tablo['AY']).astype(int)
+                        detay_df = b_det.copy()
+                        detay_df['1Y'] = detay_df['HTHG'].astype(int).astype(str) + "-" + detay_df['HTAG'].astype(int).astype(str)
+                        detay_df['MS'] = detay_df['FTHG'].astype(int).astype(str) + "-" + detay_df['FTAG'].astype(int).astype(str)
+                        detay_df['Krn'] = (detay_df['HC'] + detay_df['AC']).astype(int)
+                        detay_df['Krt'] = (detay_df['HY'] + detay_df['AY']).astype(int)
                         
-                        st.table(detay_tablo[['Date', 'HomeTeam', 'AwayTeam', '1Y', 'MS', 'Krn', 'Krt']].head(15))
+                        st.table(detay_df[['Date', 'HomeTeam', 'AwayTeam', '1Y', 'MS', 'Krn', 'Krt']].head(15))
                 
                 if flips:
                     st.markdown("---")
-                    st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
-                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz potansiyeli!")
+                    st.subheader("🔥 HT/FT Sürpriz Radarı")
+                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz (HT/FT) potansiyeli!")
             else: st.warning("Eşleşen örnek bulunamadı.")
         else: st.error("Bülten boş.")
