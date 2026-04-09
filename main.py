@@ -14,7 +14,6 @@ genai.configure(api_key=GEMINI_KEY)
 
 st.markdown("<style>div[data-testid='stDataFrame'] { width: 100%; }</style>", unsafe_allow_html=True)
 
-# Excel indirme fonksiyonu
 def to_excel(df):
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
@@ -32,14 +31,13 @@ secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun, min_value=bug
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=2)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.15)
 
-# --- LİG HAVUZLARI (TAM LİSTE KORUNDU) ---
+# --- LİG HAVUZLARI ---
 FUTBOL_LIGLERI = {
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
     "🇪🇺 AVRUPA DİĞER": {'Romanya Liga I': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Portekiz': 'soccer_portugal_primeira_liga', 'Belçika': 'soccer_belgium_first_division', 'İskoçya': 'soccer_scotland_premier_league', 'Avusturya': 'soccer_austria_bundesliga', 'İsviçre': 'soccer_switzerland_league', 'Danimarka': 'soccer_denmark_superliga', 'Yunanistan': 'soccer_greece_super_league', 'Polonya': 'soccer_poland_ekstraklasa'},
     "🌎 GLOBAL": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a', 'Meksika': 'soccer_mexico_ligamx', 'Japonya': 'soccer_japan_j_league'}
 }
-
 BASKETBOL_LIGLERI = {
     "🏆 ULUSLARARASI": {'Euroleague': 'basketball_euroleague', 'NBA': 'basketball_nba'},
     "🇪🇺 AVRUPA LİGLERİ": {'Türkiye BSL': 'basketball_turkey_bsl', 'İspanya ACB': 'basketball_spain_liga_endesa', 'İtalya Lega A': 'basketball_italy_lega_a', 'Almanya BBL': 'basketball_germany_bbl', 'Fransa LNB': 'basketball_france_lnb', 'Yunanistan GBL': 'basketball_greece_basket_league'}
@@ -78,19 +76,11 @@ def futbol_veri_motoru():
                 df = pd.read_csv(url)
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 temp = df[cols].dropna().copy()
-                ms_gol = temp['FTHG'] + temp['FTAG']
-                iy_gol = temp['HTHG'] + temp['FTAG']
-                temp['C_1Y05'] = iy_gol > 0.5
-                temp['C_1Y15'] = iy_gol > 1.5
-                temp['C_MS15'] = ms_gol > 1.5
-                temp['C_MS25'] = ms_gol > 2.5
-                temp['C_MS35'] = ms_gol > 3.5
-                temp['C_KG'] = (temp['FTHG'] > 0) & (temp['FTAG'] > 0)
+                ms_gol, iy_gol = (temp['FTHG'] + temp['FTAG']), (temp['HTHG'] + temp['HTAG'])
+                temp['C_1Y05'], temp['C_MS25'], temp['C_KG'] = iy_gol > 0.5, ms_gol > 2.5, (temp['FTHG'] > 0) & (temp['FTAG'] > 0)
                 temp['C_FLIP'] = ((temp['HTR'] == 'H') & (temp['FTR'] == 'A')) | ((temp['HTR'] == 'A') & (temp['FTR'] == 'H'))
-                temp['C_KRN'] = temp['HC'] + temp['AC']
-                temp['C_KRT'] = temp['HY'] + temp['AY']
-                temp['S1Y'] = temp['HTHG'].astype(int).astype(str)+"-"+temp['HTAG'].astype(int).astype(str)
-                temp['SMS'] = temp['FTHG'].astype(int).astype(str)+"-"+temp['FTAG'].astype(int).astype(str)
+                temp['C_KRN'], temp['C_KRT'] = (temp['HC'] + temp['AC']), (temp['HY'] + temp['AY'])
+                temp['S1Y'], temp['SMS'] = temp['HTHG'].astype(int).astype(str)+"-"+temp['HTAG'].astype(int).astype(str), temp['FTHG'].astype(int).astype(str)+"-"+temp['FTAG'].astype(int).astype(str)
                 temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
                 liste.append(temp)
             except: continue
@@ -133,53 +123,38 @@ if API_KEY and secili_kodlar:
                     if not b.empty and len(b) >= min_ornek:
                         final_list.append({
                             'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
-                            '1Y 0.5': 'Over' if b['C_1Y05'].mean() > 0.5 else 'Under', '1Y 1.5': 'Over' if b['C_1Y15'].mean() > 0.5 else 'Under',
-                            'MS 1.5': 'Over' if b['C_MS15'].mean() > 0.5 else 'Under', 'MS 2.5': 'Over' if b['C_MS25'].mean() > 0.5 else 'Under',
-                            'MS 3.5': 'Over' if b['C_MS35'].mean() > 0.5 else 'Under', 'KG': 'Yes' if b['C_KG'].mean() > 0.5 else 'No',
-                            '1Y SKOR': b['S1Y'].mode()[0], 'MS SKOR': b['SMS'].mode()[0], 'KRN (ORT)': round(b['C_KRN'].mean(), 1),
-                            '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
-                            'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b),
-                            'orig_idx': i
+                            '1Y 0.5': 'Over' if b['C_1Y05'].mean() > 0.5 else 'Under', 'MS 2.5': 'Over' if b['C_MS25'].mean() > 0.5 else 'Under',
+                            'KG': 'Yes' if b['C_KG'].mean() > 0.5 else 'No', '1Y SKOR': b['S1Y'].mode()[0], 'MS SKOR': b['SMS'].mode()[0],
+                            'KRN (ORT)': round(b['C_KRN'].mean(), 1), '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
+                            'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b), 'orig_idx': i
                         })
-                        if b['C_FLIP'].any():
-                            flips.append({'maç': f"{m['ev']} - {m['dep']}", 'yüzde': int(b['C_FLIP'].mean() * 100)})
+                        if b['C_FLIP'].any(): flips.append({'maç': f"{m['ev']} - {m['dep']}", 'yüzde': int(b['C_FLIP'].mean() * 100)})
                 
                 if final_list:
                     df_res = pd.DataFrame(final_list)
                     st.subheader("📊 Analiz Tablosu")
-                    st.dataframe(df_res.drop(columns=['orig_idx']).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
-                    
+                    st.dataframe(df_res.drop(columns=['orig_idx']).style.map(style_engine, subset=['1Y 0.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
                     st.download_button(label="📥 Excel Olarak İndir", data=to_excel(df_res.drop(columns=['orig_idx'])), file_name=f"Vibe_{secili_tarih}.xlsx", mime="application/vnd.ms-excel")
                     
-                    # --- OTOMATİK GEMİNİ ANALİZİ (HATASIZ MODEL ÇAĞIRMA) ---
+                    # --- GEMİNİ AI RAPORU (KESİN ÇÖZÜM DENEMESİ) ---
                     st.markdown("---")
                     st.markdown("### 🤖 Gemini AI Analiz Raporu")
-                    with st.spinner('Gemini verileri yorumluyor...'):
-                        try:
-                            # 404 hatasını çözen spesifik model ismi
-                            model = genai.GenerativeModel('gemini-1.5-flash')
-                            prompt = f"Sen profesyonel bir bahis analiz uzmanısın. Şu futbol analiz tablosunu incele: {df_res.drop(columns=['orig_idx']).to_string()}. En mantıklı 3 maçı ÖRNEK sayısına bakarak nedenleriyle açıkla. Türkçe ve samimi ol."
-                            # API versiyon hatasını aşmak için en yalın haliyle içerik üretimi
-                            response = model.generate_content(prompt)
-                            st.info(response.text)
-                        except Exception as e:
-                            # Eğer hala hata alırsak alternatif model ismini dene
-                            try:
-                                model = genai.GenerativeModel('gemini-pro')
-                                response = model.generate_content(prompt)
-                                st.info(response.text)
-                            except:
-                                st.error("AI bağlantısında bir sorun oluştu. Lütfen birkaç dakika sonra tekrar deneyin.")
+                    try:
+                        # Model ismini tırnak içinde ve en sade haliyle kullanıyoruz
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        prompt = f"Futbol analiz uzmanı gibi davran. Bu tabloyu yorumla: {df_res.drop(columns=['orig_idx']).to_string()}. ÖRNEK sayısı yüksek güvenilir 3 maçı ve varsa sürprizleri nedenleriyle Türkçe açıkla."
+                        response = model.generate_content(prompt)
+                        st.info(response.text)
+                    except Exception as e:
+                        st.error(f"Yapay zeka şu an meşgul veya bir bağlantı hatası var. Hata detayı: {str(e)}")
 
-                    # --- SÜRPRİZ RADARI ---
                     if flips:
                         st.markdown("---")
                         st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
-                        for f in flips:
-                            st.warning(f"**{f['maç']}**: Geçmiş benzer oranlı örneklerin %{f['yüzde']} kadarı sürpriz bitmiş!")
+                        for f in flips: st.warning(f"**{f['maç']}**: Geçmiş benzer oranlı örneklerin %{f['yüzde']} kadarı sürpriz bitmiş!")
 
                     st.markdown("---")
-                    st.subheader("📚 Maç Detayları ve Geçmiş Skorlar")
+                    st.subheader("📚 Maç Detayları")
                     for row in final_list:
                         with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
                             m_orig = bulten.loc[row['orig_idx']]
@@ -191,5 +166,4 @@ if API_KEY and secili_kodlar:
             if not bulten_bsk.empty:
                 st.subheader(f"🏀 {secili_tarih} Basketbol Bülteni")
                 st.dataframe(bulten_bsk[['lig', 'zaman', 'ev', 'dep', 'h', 'a']].rename(columns={'h':'Ev','a':'Dep'}), use_container_width=True)
-else:
-    st.info("Sol menüden seçim yapıp API Key girin.")
+else: st.info("Sol menüden seçim yapıp API Key girin.")
