@@ -2,18 +2,12 @@ import streamlit as st
 import pandas as pd
 import requests
 import io
-import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz - Stabil Pro", layout="wide")
+st.set_page_config(page_title="Vibe Analiz - Kurtarma Modu", layout="wide")
 
-# GEMINI AYARI (Senin Key'in)
-try:
-    GEMINI_KEY = "AIzaSyBhy1PQMaY5PtZVr59OCas2T_Zqg7lLwWE"
-    genai.configure(api_key=GEMINI_KEY)
-except:
-    pass
+st.markdown("<style>div[data-testid='stDataFrame'] { width: 100%; }</style>", unsafe_allow_html=True)
 
 def to_excel(df):
     output = io.BytesIO()
@@ -32,12 +26,11 @@ secili_tarih = st.sidebar.date_input("Tarih", value=bugun)
 min_ornek = st.sidebar.number_input("Min. Örnek", min_value=1, value=2)
 TOLERANS = st.sidebar.slider("Hassasiyet", 0.05, 0.45, 0.15)
 
-# --- LİG HAVUZLARI (FULL LİSTE) ---
+# --- LİG HAVUZLARI ---
 FUTBOL_LIGLERI = {
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
-    "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
-    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Portekiz': 'soccer_portugal_primeira_liga', 'Belçika': 'soccer_belgium_first_division', 'İskoçya': 'soccer_scotland_premier_league', 'Avusturya': 'soccer_austria_bundesliga', 'Polonya': 'soccer_poland_ekstraklasa'},
-    "🌎 GLOBAL": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya': 'soccer_brazil_campeonato_serie_a'}
+    "🇪🇺 AVRUPA": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
+    "🌎 GLOBAL": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya': 'soccer_brazil_campeonato_serie_a'}
 }
 
 BASKETBOL_LIGLERI = {
@@ -48,7 +41,6 @@ BASKETBOL_LIGLERI = {
 lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else BASKETBOL_LIGLERI
 secili_kodlar = []
 
-# --- SEÇİM MANTIĞI ---
 st.sidebar.markdown("---")
 if "genel_secici" not in st.session_state: st.session_state["genel_secici"] = False
 def toggler_all():
@@ -65,7 +57,7 @@ for kat_isim, ligler in lig_havuzu.items():
 # --- VERİ MOTORU ---
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru():
-    lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE','P1':'PT'}
+    lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE'}
     liste = []
     for k in lig_map.keys():
         try:
@@ -118,18 +110,8 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     st.dataframe(df, use_container_width=True)
                     st.download_button("📥 Excel İndir", to_excel(df), f"Vibe_{secili_tarih}.xlsx")
 
-                    # --- GÜVENLİ AI ANALİZİ ---
-                    st.markdown("---")
-                    st.markdown("### 🤖 Gemini AI Analizi")
-                    try:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        response = model.generate_content(f"Futbol uzmanı gibi davran. Bu tabloyu yorumla ve en banko 3 maçı belirt: {df.to_string()}")
-                        st.info(response.text)
-                    except:
-                        st.warning("Yapay zeka şu an meşgul ama verilerin yukarıda hazır!")
-
                     if flips:
                         st.subheader("🔥 Sürpriz Radarı (1/2 - 2/1)")
                         for f in flips: st.warning(f"{f['m']}: %{f['p']} Sürpriz!")
             else: st.error("Maç bulunamadı.")
-else: st.info("Lig seçip analizi başlat.")
+else: st.info("Hafta sonu bülteni için ligleri seç ve analizi başlat Ersin!")
