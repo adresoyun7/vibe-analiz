@@ -2,10 +2,15 @@ import streamlit as st
 import pandas as pd
 import requests
 import io
+import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
+st.set_page_config(page_title="Vibe Analiz - AI Pro Ultra", layout="wide")
+
+# GEMINI AYARI (Senin Key'in Gömüldü)
+GEMINI_KEY = "AIzaSyBhy1PQMaY5PtZVr59OCas2T_Zqg7lLwWE"
+genai.configure(api_key=GEMINI_KEY)
 
 st.markdown("<style>div[data-testid='stDataFrame'] { width: 100%; }</style>", unsafe_allow_html=True)
 
@@ -20,15 +25,14 @@ def to_excel(df):
 # --- YAN MENÜ ---
 st.sidebar.title("🎮 Vibe Kontrol Merkezi")
 spor_turu = st.sidebar.radio("Analiz Türü", ["⚽ Futbol", "🏀 Basketbol"])
-API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
-GEMINI_API_KEY = st.sidebar.text_input("Gemini API Key (Opsiyonel)", type="password")
+API_KEY = st.sidebar.text_input("The Odds API Key (Bülten İçin)", type="password")
 
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun, min_value=bugun)
 min_ornek = st.sidebar.number_input("Min. Örnek (Geçmiş Veri)", min_value=1, value=2)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.15)
 
-# --- LİG HAVUZLARI (TAM LİSTE - HİÇBİRİ SİLİNMEDİ) ---
+# --- LİG HAVUZLARI (TAM LİSTE) ---
 FUTBOL_LIGLERI = {
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
@@ -38,14 +42,13 @@ FUTBOL_LIGLERI = {
 
 BASKETBOL_LIGLERI = {
     "🏆 ULUSLARARASI": {'Euroleague': 'basketball_euroleague', 'NBA': 'basketball_nba'},
-    "🇪🇺 AVRUPA LİGLERİ": {'Türkiye BSL': 'basketball_turkey_bsl', 'İspanya ACB': 'basketball_spain_liga_endesa', 'İtalya Lega A': 'basketball_italy_lega_a', 'Almanya BBL': 'basketball_germany_bbl', 'Fransa LNB': 'basketball_france_lnb', 'Yunanistan GBL': 'basketball_greece_basket_league'},
-    "🌎 GLOBAL": {'Çin CBA': 'basketball_china_cba', 'Avustralya NBL': 'basketball_australia_nbl'}
+    "🇪🇺 AVRUPA LİGLERİ": {'Türkiye BSL': 'basketball_turkey_bsl', 'İspanya ACB': 'basketball_spain_liga_endesa', 'İtalya Lega A': 'basketball_italy_lega_a', 'Almanya BBL': 'basketball_germany_bbl', 'Fransa LNB': 'basketball_france_lnb', 'Yunanistan GBL': 'basketball_greece_basket_league'}
 }
 
 lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else BASKETBOL_LIGLERI
 secili_kodlar = []
 
-# --- GELİŞMİŞ SEÇİM MANTIĞI (SESSION STATE) ---
+# --- SEÇİM MANTIĞI (SESSION STATE) ---
 st.sidebar.markdown("---")
 def toggler_all():
     state = st.session_state["genel_secici"]
@@ -117,7 +120,7 @@ def style_engine(val):
     return ''
 
 # --- ANA PROGRAM ---
-st.title(f"{spor_turu} Profesyonel Analiz İstasyonu")
+st.title(f"{spor_turu} Pro Analiz İstasyonu")
 
 if API_KEY and secili_kodlar:
     if st.button("🚀 ANALİZİ BAŞLAT"):
@@ -143,25 +146,30 @@ if API_KEY and secili_kodlar:
                 
                 if final_list:
                     df_res = pd.DataFrame(final_list)
-                    st.subheader("📊 Analiz Sonuçları")
+                    st.subheader("📊 Analiz Tablosu")
                     st.dataframe(df_res.drop(columns=['orig_idx']).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
                     
-                    # --- EXCEL ÇIKTISI ---
-                    st.download_button(label="📥 Analizi Excel Olarak İndir", data=to_excel(df_res.drop(columns=['orig_idx'])), file_name=f"Vibe_{secili_tarih}.xlsx", mime="application/vnd.ms-excel")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.download_button(label="📥 Excel Olarak İndir", data=to_excel(df_res.drop(columns=['orig_idx'])), file_name=f"Vibe_{secili_tarih}.xlsx", mime="application/vnd.ms-excel")
                     
+                    with col2:
+                        if st.button("🤖 Yapay Zeka Yorumunu Al"):
+                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            prompt = f"Aşağıdaki futbol analiz tablosuna göre bana bugün için en güvenilir 3 maçı ve 1 sürpriz ihtimalini nedenleriyle Türkçe açıkla. Veriler: {df_res.drop(columns=['orig_idx']).to_string()}"
+                            response = model.generate_content(prompt)
+                            st.markdown("### 🤖 Gemini'nin Analizi:")
+                            st.write(response.text)
+
                     st.markdown("---")
                     for row in final_list:
                         with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
                             m_orig = bulten.loc[row['orig_idx']]
                             b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
                             st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'C_KRN', 'C_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','C_KRN':'Krn','C_KRT':'Krt'}).head(10))
-                    if flips:
-                        st.markdown("---")
-                        st.subheader("🔥 HT/FT Sürpriz Radarı")
-                        for f in flips: st.warning(f"**{f['m']}**: Geçmiş örneklerin %{int(f['o']*100)} kadarı sürpriz bitmiş!")
-            else: st.warning("Eşleşen örnek bulunamadı.")
+            else: st.warning("Maç bulunamadı.")
         else:
-            # Basketbol Bülten Görünümü
+            # Basketbol Görünümü
             bulten_bsk = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             if not bulten_bsk.empty:
                 st.subheader(f"🏀 {secili_tarih} Basketbol Bülteni")
