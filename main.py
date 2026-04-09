@@ -91,7 +91,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ Lütfen API Key girin ve lig seçin.")
     else:
-        with st.spinner("📊 Veriler Hazırlanıyor..."):
+        with st.spinner("📊 Analizler ve 1Y/MS Tahminleri Yapılıyor..."):
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
@@ -117,7 +117,6 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     iy_skor = (b['HTHG'].fillna(0).astype(int).astype(str) + "-" + b['HTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     ms_skor = (b['FTHG'].fillna(0).astype(int).astype(str) + "-" + b['FTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     
-                    # HT/FT Sürpriz Kontrolü
                     c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
                     if c_flip.any():
                         flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
@@ -131,20 +130,21 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'MS_35': f"{'Over' if ms35_p >= 0.5 else 'Under'} ({int(ms35_p*100)}%) {'🔥' if ms35_p >= 0.8 else ''}",
                         'KG_V': f"{'Yes' if kg_p >= 0.5 else 'No'} ({int(kg_p*100)}%) {'🔥' if kg_p >= 0.8 else ''}",
                         '1Y_SKOR': iy_skor, 'MS_SKOR': ms_skor,
+                        '1Y_V': b['HTR'].mode()[0].replace('H','Home').replace('A','Away').replace('D','Draw') if not b['HTR'].mode().empty else 'Draw',
+                        'MS_V': b['FTR'].mode()[0].replace('H','Home').replace('A','Away').replace('D','Draw') if not b['FTR'].mode().empty else 'Draw',
                         'FORM DURUMU': form_analizi_yap(gecmis, m['ev'], m['dep']),
                         'ÖRNEK': len(b), 'idx': i
                     })
 
             if final_list:
-                # 1. BÖLÜM: ANA VIBE ANALİZİ
+                # 1. TABLO
                 st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Mod Skorlar")
-                style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V']
+                style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
                 df_ana = pd.DataFrame(final_list)
                 st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
-                
-                # 2. BÖLÜM: DETAYLI GEÇMİŞ ÖRNEKLER (EXPANDERS)
+                # 2. TABLO VE DETAYLAR
                 st.subheader("📚 Detaylı Geçmiş Örnekler")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
@@ -163,13 +163,15 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['MS_SKOR'] = b_det['FTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['FTAG'].fillna(0).astype(int).astype(str)
                         dt['Krn'] = (b_det.get('HC', 0).fillna(0) + b_det.get('AC', 0).fillna(0)).astype(int)
                         dt['Krt'] = (b_det.get('HY', 0).fillna(0) + b_det.get('AY', 0).fillna(0)).astype(int)
+                        dt['1Y_V'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
+                        dt['MS_V'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
                         dt['H_Oran'] = b_det['B365H']; dt['B_Oran'] = b_det['B365D']; dt['A_Oran'] = b_det['B365A']
                         st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
 
-                # 3. BÖLÜM: SÜRPRİZ RADARI (EN ALTA ALINDI)
+                # 3. SÜRPRİZ RADARI (EN ALTA)
                 if flips:
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
                     for f in flips:
-                        st.warning(f"⚠️ **{f['m']}**: Geçmişte bu oranlarla %{f['p']} sürpriz geri dönüş (1/2 veya 2/1) yaşanmış!")
+                        st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz geri dönüş ihtimali!")
             else: st.warning("Eşleşen örnek bulunamadı.")
