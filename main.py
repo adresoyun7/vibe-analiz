@@ -22,18 +22,15 @@ def poisson_analiz(ev_avg, dep_avg):
     kg_prob = (1 - (sum(m[0,:]) + sum(m[:,0]) - m[0,0])) * 100
     return f"{ev_s}-{dep_s}", round(ust_prob, 1), round(kg_prob, 1)
 
-def to_excel(df):
-    output = io.BytesIO()
-    writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    df.to_excel(writer, index=False, sheet_name='Analiz')
-    writer.close()
-    return output.getvalue()
+def style_engine(val):
+    if val in ['Over', 'Yes', 'Home']: return 'background-color: #27ae60; color: white;'
+    if val in ['Under', 'No', 'Away']: return 'background-color: #c0392b; color: white;'
+    if val in ['Draw', 'Tie']: return 'background-color: #f39c12; color: white;'
+    return ''
 
 # --- YAN MENÜ ---
 st.sidebar.title("🎮 Vibe Kontrol Merkezi")
-spor_turu = st.sidebar.radio("Analiz Türü", ["⚽ Futbol", "🏀 Basketbol"])
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
-
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=2)
@@ -46,18 +43,8 @@ FUTBOL_LIGLERI = {
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'}
 }
 
-lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else {}
 secili_kodlar = []
-
-st.sidebar.markdown("---")
-if "genel_secici" not in st.session_state: st.session_state["genel_secici"] = False
-def toggler_all():
-    for kat in lig_havuzu.values():
-        for kod in kat.values(): st.session_state[f"cb_{kod}"] = st.session_state["genel_secici"]
-
-st.sidebar.checkbox(f"🚀 Bütün Ligleri Seç", key="genel_secici", on_change=toggler_all)
-
-for kat_isim, ligler in lig_havuzu.items():
+for kat_isim, ligler in FUTBOL_LIGLERI.items():
     with st.sidebar.expander(kat_isim):
         for isim, kod in ligler.items():
             if st.checkbox(isim, key=f"cb_{kod}"): secili_kodlar.append(kod)
@@ -89,19 +76,15 @@ def bulten_cek(key, kodlar, t):
             for m in data:
                 tm = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
                 if tm.date() == t:
-                    o = m['bookmakers'][0]['markets'][0]['outcomes']
+                    bookies = m.get('bookmakers', [])
+                    if not bookies: continue
+                    o = bookies[0]['markets'][0]['outcomes']
                     h = next((x['price'] for x in o if x['name'] == m['home_team']), 0)
                     a = next((x['price'] for x in o if x['name'] == m['away_team']), 0)
                     b = next((x['price'] for x in o if x['name'].lower() in ['draw', 'tie']), 0)
                     res.append({'lig': m['sport_title'], 'zaman': tm, 'ev': m['home_team'], 'dep': m['away_team'], 'h': h, 'b': b, 'a': a})
         except: continue
     return pd.DataFrame(res)
-
-def style_engine(val):
-    if val in ['Over', 'Yes', 'Home']: return 'background-color: #27ae60; color: white;'
-    if val in ['Under', 'No', 'Away']: return 'background-color: #c0392b; color: white;'
-    if val in ['Draw', 'Tie']: return 'background-color: #f39c12; color: white;'
-    return ''
 
 # --- ANA PROGRAM ---
 if st.button("🚀 ANALİZİ BAŞLAT"):
@@ -138,6 +121,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 st.subheader(f"⚽ {secili_tarih} Vibe Analizleri")
+                # Sütun isimleri birebir eşleştirildi
                 st.dataframe(df_ana.drop(columns=['idx','avg_ev','avg_dep']).style.map(style_engine, subset=['1Y 0.5','MS 1.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
                 
                 st.markdown("---")
@@ -150,23 +134,23 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy()
                         
-                        detay_tablo = pd.DataFrame()
-                        detay_tablo['Date'] = b_det['Date'].dt.strftime('%d.%m.%Y')
-                        detay_tablo['Ev'] = b_det['HomeTeam']
-                        detay_tablo['Dep'] = b_det['AwayTeam']
-                        detay_tablo['İY 0.5'] = (b_det['HTHG'] + b_det['HTAG'] >= 1).map({True:'Over', False:'Under'})
-                        detay_tablo['MS 1.5'] = (b_det['FTHG'] + b_det['FTAG'] >= 2).map({True:'Over', False:'Under'})
-                        detay_tablo['MS 2.5'] = (b_det['FTHG'] + b_det['FTAG'] >= 3).map({True:'Over', False:'Under'})
-                        detay_tablo['KG'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
-                        detay_tablo['1Y Skor'] = b_det['HTHG'].astype(int).astype(str) + "-" + b_det['HTAG'].astype(int).astype(str)
-                        detay_tablo['MS Skor'] = b_det['FTHG'].astype(int).astype(str) + "-" + b_det['FTAG'].astype(int).astype(str)
-                        detay_tablo['Krn'] = (b_det['HC'] + b_det['AC']).astype(int)
-                        detay_tablo['Krt'] = (b_det['HY'] + b_det['AY']).astype(int)
-                        detay_tablo['1Y'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
-                        detay_tablo['MS'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
+                        dt = pd.DataFrame()
+                        dt['Date'] = b_det['Date'].dt.strftime('%d.%m.%Y')
+                        dt['Ev'] = b_det['HomeTeam']
+                        dt['Dep'] = b_det['AwayTeam']
+                        dt['1Y 0.5'] = (b_det['HTHG'] + b_det['HTAG'] >= 1).map({True:'Over', False:'Under'})
+                        dt['MS 1.5'] = (b_det['FTHG'] + b_det['FTAG'] >= 2).map({True:'Over', False:'Under'})
+                        dt['MS 2.5'] = (b_det['FTHG'] + b_det['FTAG'] >= 3).map({True:'Over', False:'Under'})
+                        dt['KG'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
+                        dt['1Y SKOR'] = b_det['HTHG'].astype(int).astype(str) + "-" + b_det['HTAG'].astype(int).astype(str)
+                        dt['MS SKOR'] = b_det['FTHG'].astype(int).astype(str) + "-" + b_det['FTAG'].astype(int).astype(str)
+                        dt['Krn'] = (b_det['HC'] + b_det['AC']).astype(int)
+                        dt['Krt'] = (b_det['HY'] + b_det['AY']).astype(int)
+                        dt['1Y'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
+                        dt['MS'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
 
-                        # Subset isimlerini tablo sütunlarıyla eşitledik (Hata Buradaydı)
-                        st.dataframe(detay_tablo.style.map(style_engine, subset=['İY 0.5','MS 1.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
+                        # SUBSET İSİMLERİ TABLO SÜTUNLARIYLA %100 EŞİTLENDİ
+                        st.dataframe(dt.style.map(style_engine, subset=['1Y 0.5','MS 1.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
                 
                 if flips:
                     st.markdown("---")
