@@ -31,7 +31,7 @@ FUTBOL_LIGLERI = {
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇸🇦 ARAP LİGLERİ": {'Suudi Arabistan Pro Lig': 'soccer_saudi_arabia_pro_league', 'BAE Pro Lig': 'soccer_uae_pro_league'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
-    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İskoçya': 'soccer_scotland_premier_league', 'Polonya': 'soccer_poland_ekstraklasa'}
+    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İskoçya': 'soccer_scotland_premier_league'}
 }
 
 BASKETBOL_LIGLERI = {
@@ -85,9 +85,7 @@ def bulten_cek(key, kodlar, t, spor):
     for k in kodlar:
         try:
             r = requests.get(f'https://api.the-odds-api.com/v4/sports/{k}/odds/?apiKey={key}&regions=eu&markets=h2h', timeout=10)
-            if r.status_code != 200:
-                loglar.append(f"⚠️ {k}: Hata {r.status_code}")
-                continue
+            if r.status_code != 200: continue
             data = r.json()
             for m in data:
                 tm = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
@@ -100,7 +98,7 @@ def bulten_cek(key, kodlar, t, spor):
                     b = next((x['price'] for x in o if x['name'].lower() in ['draw', 'tie']), 0) if spor == "⚽ Futbol" else 0
                     all_res.append({'lig': m['sport_title'], 'zaman': tm, 'ev': m['home_team'], 'dep': m['away_team'], 'h': h, 'b': b, 'a': a})
         except: continue
-    return pd.DataFrame(all_res), loglar
+    return pd.DataFrame(all_res)
 
 def style_engine(val):
     if val in ['Over', 'Yes', 'Home']: return 'background-color: #27ae60; color: white;'
@@ -115,23 +113,24 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
     else:
         if "Futbol" in spor_turu:
             gecmis = futbol_veri_motoru()
-            bulten, logs = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "⚽ Futbol")
+            bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "⚽ Futbol")
             
-            if logs:
-                with st.expander("🔍 Bülten Günlüğü"):
-                    for l in logs: st.write(l)
-
             if not bulten.empty:
                 final_list, flips = [], []
                 for i, m in bulten.iterrows():
                     b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                     if len(b) >= min_ornek:
+                        iy_skor_mod = b['S1Y'].mode()[0]
                         final_list.append({
                             'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
-                            '1Y 0.5': 'Over' if b['C_1Y05'].mean() > 0.5 else 'Under', '1Y 1.5': 'Over' if b['C_1Y15'].mean() > 0.5 else 'Under',
-                            'MS 1.5': 'Over' if b['C_MS15'].mean() > 0.5 else 'Under', 'MS 2.5': 'Over' if b['C_MS25'].mean() > 0.5 else 'Under',
-                            'MS 3.5': 'Over' if b['C_MS35'].mean() > 0.5 else 'Under', 'KG': 'Yes' if b['C_KG'].mean() > 0.5 else 'No',
-                            '1Y SKOR': b['S1Y'].mode()[0], 'MS SKOR': b['SMS'].mode()[0], 
+                            # MANTIK DÜZELTME: Eğer en sık skor 0-0 ise, analizi Under (Alt) olarak zorla
+                            '1Y 0.5': 'Under' if iy_skor_mod == '0-0' else ('Over' if b['C_1Y05'].mean() > 0.5 else 'Under'),
+                            '1Y 1.5': 'Over' if b['C_1Y15'].mean() > 0.5 else 'Under',
+                            'MS 1.5': 'Over' if b['C_MS15'].mean() > 0.5 else 'Under',
+                            'MS 2.5': 'Over' if b['C_MS25'].mean() > 0.5 else 'Under',
+                            'MS 3.5': 'Over' if b['C_MS35'].mean() > 0.5 else 'Under',
+                            'KG': 'Yes' if b['C_KG'].mean() > 0.5 else 'No',
+                            '1Y SKOR': iy_skor_mod, 'MS SKOR': b['SMS'].mode()[0], 
                             'KRN (ORT)': round(b['C_KRN'].mean(), 1), 'KRT (ORT)': round(b['C_KRT'].mean(), 1),
                             '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
                             'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b), 'idx': i
@@ -142,17 +141,15 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     df = pd.DataFrame(final_list)
                     st.subheader(f"⚽ {secili_tarih} Tarihli Futbol Analizleri")
                     st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
-                    st.download_button("📥 Excel İndir", to_excel(df.drop(columns=['idx'])), f"Vibe_Futbol.xlsx")
+                    st.download_button("📥 Excel İndir", to_excel(df.drop(columns=['idx'])), f"Vibe_Futbol_{secili_tarih}.xlsx")
                     
-                    # --- MAÇ DETAYLARI VE GEÇMİŞ SKORLAR (EKLEDİĞİMİZ KISIM) ---
                     st.markdown("---")
                     st.subheader("📚 Maç Detayları ve Geçmiş Skorlar")
                     for row in final_list:
                         with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
                             m_orig = bulten.loc[row['idx']]
                             b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
-                            st.write(f"**Benzer Oranlı {len(b_det)} Geçmiş Maç:**")
-                            st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'C_KRN', 'C_KRT']].rename(columns={'S1Y':'1Y Skor','SMS':'MS Skor','C_KRN':'Korner','C_KRT':'Kart'}).head(15))
+                            st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'C_KRN', 'C_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','C_KRN':'Krn','C_KRT':'Krt'}).head(15))
                     
                     if flips:
                         st.subheader("🔥 HT/FT Sürpriz Radarı")
@@ -160,9 +157,5 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 else: st.warning("Eşleşen örnek bulunamadı.")
             else: st.error("Bülten boş.")
         else: # 🏀 BASKETBOL
-            bulten, logs = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "🏀 Basketbol")
-            if not bulten.empty:
-                st.subheader(f"🏀 {secili_tarih} Basketbol Bülteni")
-                st.dataframe(bulten, use_container_width=True)
-            else: st.error("Basketbol maçı bulunamadı.")
-else: st.info("👈 Soldan ayarları yapıp analizi başlat Ersin.")
+            st.error("Basketbol modunda analiz için veri motoru bekleniyor.")
+else: st.info("👈 Soldan ayarları yapıp başlat Ersin.")
