@@ -22,7 +22,7 @@ API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=1)
-TOLERANS = st.sidebar.slider("Oran Hassasiyeti (0.00 = Birebir)", 0.00, 0.30, 0.05, step=0.01)
+TOLERANS = st.sidebar.slider("Oran Hassasiyeti (0.00 = Birebir)", 0.00, 0.30, 0.10, step=0.01)
 
 FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
@@ -61,10 +61,8 @@ def form_analizi_yap(gecmis, ev_takim, dep_takim):
         son_5 = gecmis[(gecmis['HomeTeam'] == takim) | (gecmis['AwayTeam'] == takim)].sort_values('Date', ascending=False).head(5)
         if len(son_5) < 3: return 0
         return (son_5['FTHG'] + son_5['FTAG']).mean()
-    
     ev_avg = get_avg(ev_takim)
     dep_avg = get_avg(dep_takim)
-    
     if ev_avg < 1.8 and dep_avg < 1.8: return "⚠️ Form Düşük!"
     return "✅ Form Uygun"
 
@@ -73,6 +71,7 @@ def bulten_cek(key, kodlar, t):
     for k in kodlar:
         try:
             r = requests.get(f'https://api.the-odds-api.com/v4/sports/{k}/odds/?apiKey={key}&regions=eu&markets=h2h', timeout=10)
+            if r.status_code != 200: continue
             data = r.json()
             for m in data:
                 tm = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
@@ -90,14 +89,16 @@ def bulten_cek(key, kodlar, t):
 # --- ANA PROGRAM ---
 if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Key girin ve lig seçin.")
+        st.error("⚠️ Lütfen API Key girin ve yan menüden en az bir lig seçin.")
     else:
-        with st.spinner("📊 5 Yıllık Veriler ve Form Durumları Hesaplanıyor..."):
+        with st.spinner("📊 Analizler ve Form Durumları Hesaplanıyor..."):
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
-        if bulten.empty or gecmis.empty:
-            st.error("❌ Veri bulunamadı.")
+        if bulten.empty:
+            st.warning(f"ℹ️ Seçilen liglerde {secili_tarih} tarihinde maç bulunamadı. Lütfen tarihi değiştirin veya daha fazla lig seçin.")
+        elif gecmis.empty:
+            st.error("❌ Geçmiş veri havuzu yüklenemedi. İnternet bağlantınızı kontrol edin.")
         else:
             final_list, flips = [], []
             for i, m in bulten.iterrows():
@@ -108,45 +109,43 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 ].copy()
                 
                 if len(b) >= min_ornek:
-                    # GÜVEN ENDEKSLERİ
                     iy05_p = (b['HTHG'] + b['HTAG'] >= 1).mean()
+                    iy15_p = (b['HTHG'] + b['HTAG'] >= 2).mean()
+                    ms15_p = (b['FTHG'] + b['FTAG'] >= 2).mean()
                     ms25_p = (b['FTHG'] + b['FTAG'] >= 3).mean()
+                    ms35_p = (b['FTHG'] + b['FTAG'] >= 4).mean()
                     kg_p = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
                     
-                    # MOD SKORLAR
                     iy_skor = (b['HTHG'].fillna(0).astype(int).astype(str) + "-" + b['HTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     ms_skor = (b['FTHG'].fillna(0).astype(int).astype(str) + "-" + b['FTAG'].fillna(0).astype(int).astype(str)).mode()[0]
-                    ie, idp = map(int, iy_skor.split('-')); me, mdp = map(int, ms_skor.split('-'))
                     
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y_05': f"{'Over' if iy05_p >= 0.5 else 'Under'} ({int(iy05_p*100)}%) {'🔥' if iy05_p >= 0.8 else ''}",
+                        'İY_15': f"{'Over' if iy15_p >= 0.5 else 'Under'} ({int(iy15_p*100)}%) {'🔥' if iy15_p >= 0.8 else ''}",
+                        'MS_15': f"{'Over' if ms15_p >= 0.5 else 'Under'} ({int(ms15_p*100)}%) {'🔥' if ms15_p >= 0.8 else ''}",
                         'MS_25': f"{'Over' if ms25_p >= 0.5 else 'Under'} ({int(ms25_p*100)}%) {'🔥' if ms25_p >= 0.8 else ''}",
+                        'MS_35': f"{'Over' if ms35_p >= 0.5 else 'Under'} ({int(ms35_p*100)}%) {'🔥' if ms35_p >= 0.8 else ''}",
                         'KG_V': f"{'Yes' if kg_p >= 0.5 else 'No'} ({int(kg_p*100)}%) {'🔥' if kg_p >= 0.8 else ''}",
-                        'MOD_1Y': iy_skor, 'MOD_MS': ms_skor,
+                        '1Y_SKOR': iy_skor, 'MS_SKOR': ms_skor,
                         'FORM DURUMU': form_analizi_yap(gecmis, m['ev'], m['dep']),
                         'ÖRNEK': len(b), 'idx': i
                     })
-                    
                     c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
                     if c_flip.any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                st.subheader(f"⚽ {secili_tarih} Vibe & Güven Endeksi")
-                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=['1Y_05','MS_25','KG_V']), use_container_width=True)
+                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Mod Skorlar")
+                style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V']
+                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Detaylı Analiz & Örnekler")
+                st.subheader("📚 Detaylı Örnekler")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
                         m_o = bulten.loc[row['idx']]
-                        b_det = gecmis[
-                            (gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) &
-                            (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) &
-                            (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))
-                        ].copy().sort_values('Date', ascending=False)
-                        
+                        b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         dt = pd.DataFrame()
                         dt['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y')
                         dt['Ev'] = b_det['HomeTeam']; dt['Dep'] = b_det['AwayTeam']
@@ -158,17 +157,8 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['KG_V'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
                         dt['1Y_SKOR'] = b_det['HTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['HTAG'].fillna(0).astype(int).astype(str)
                         dt['MS_SKOR'] = b_det['FTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['FTAG'].fillna(0).astype(int).astype(str)
-                        
-                        # KRİTİK HATA ÇÖZÜMÜ: Korner ve kartları güvenli sayıya çevir
                         dt['Krn'] = (b_det.get('HC', 0).fillna(0) + b_det.get('AC', 0).fillna(0)).astype(int)
                         dt['Krt'] = (b_det.get('HY', 0).fillna(0) + b_det.get('AY', 0).fillna(0)).astype(int)
-                        
                         dt['H_Oran'] = b_det['B365H']; dt['B_Oran'] = b_det['B365D']; dt['A_Oran'] = b_det['B365A']
-                        
-                        st.dataframe(dt.style.map(style_engine, subset=['1Y_05','İY_15','MS_15','MS_25','MS_35','KG_V']), use_container_width=True, hide_index=True)
-                
-                if flips:
-                    st.markdown("---")
-                    st.subheader("🔥 HT/FT Sürpriz Radarı")
-                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz potansiyeli!")
-            else: st.warning("Eşleşen örnek bulunamadı.")
+                        st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
+            else: st.warning("Eşleşen örnek bulunamadı. Lütfen Toleransı artırın.")
