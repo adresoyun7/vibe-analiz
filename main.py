@@ -24,15 +24,33 @@ secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Veri Havuzu")
-yillar = st.sidebar.multiselect("Sezonlar", options=['2122','2223','2324','2425','2526'], default=['2324','2425','2526'])
+yillar = st.sidebar.multiselect("Sezonlar", options=['2122','2223','2324','2425','2526'], default=['2425','2526'])
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=1)
 TOLERANS = st.sidebar.slider("Hassasiyet (0.00=Birebir)", 0.00, 0.30, 0.05, step=0.01)
 
-# --- NESİNE FULL PAKET LİGLER ---
+# --- NESİNE FULL PAKET (Kodlar API standartlarına göre güncellendi) ---
 FUTBOL_LIGLERI = {
-    "🏆 MAJÖR & TR": {'Süper Lig': 'soccer_turkey_super_league', 'TR 1. Lig': 'soccer_turkey_pTT_1_lig', 'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
-    "⚽ AVRUPA (GOLCÜ)": {'Hollanda': 'soccer_netherlands_eredivisie', 'Hollanda 2': 'soccer_netherlands_erste_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İskoçya': 'soccer_scotland_premiership', 'İsviçre': 'soccer_switzerland_superleague'},
-    "🌍 DİĞER": {'Brezilya': 'soccer_brazil_campeonato_serie_a', 'Arjantin': 'soccer_argentina_primera_division', 'Japonya': 'soccer_japan_j_league', 'ABD MLS': 'soccer_usa_mls', 'Meksika': 'soccer_mexico_liga_mx'}
+    "🏆 MAJÖR & TR": {
+        'Süper Lig': 'soccer_turkey_super_league', 
+        'TR 1. Lig': 'soccer_turkey_pTT_1_lig', 
+        'İngiltere Premier': 'soccer_epl', 
+        'İspanya La Liga': 'soccer_spain_la_liga', 
+        'Almanya Bundesliga': 'soccer_germany_bundesliga', 
+        'İtalya Serie A': 'soccer_italy_serie_a', 
+        'Fransa Ligue 1': 'soccer_france_ligue_one'
+    },
+    "⚽ AVRUPA DİĞER": {
+        'Hollanda Eredivisie': 'soccer_netherlands_eredivisie', 
+        'Belçika Pro League': 'soccer_belgium_first_division', 
+        'Portekiz Primeira': 'soccer_portugal_primeira_liga', 
+        'Avusturya Bundesliga': 'soccer_austria_bundesliga', 
+        'İskoçya Premiership': 'soccer_scotland_premiership'
+    },
+    "🌎 DÜNYA": {
+        'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a', 
+        'Arjantin Primera': 'soccer_argentina_primera_division', 
+        'ABD MLS': 'soccer_usa_mls'
+    }
 }
 
 secili_kodlar = []
@@ -44,6 +62,7 @@ for kat, ligler in FUTBOL_LIGLERI.items():
 # --- VERİ MOTORU ---
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(sezonlar):
+    # Futbol-data.co.uk kodları
     lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT'}
     liste = []
     for k, v in lig_map.items():
@@ -59,63 +78,76 @@ def futbol_veri_motoru(sezonlar):
             except: continue
     return pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
 
-# --- KOTA DOSTU BÜLTEN ÇEKİCİ ---
 def bulten_cek_optimized(key, t):
-    # Tüm futbol maçlarını TEK SEFERDE çekiyoruz (Kota tasarrufu!)
+    # Kredi tasarrufu için genel futbol bültenini çekiyoruz
     url = f'https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={key}&regions=eu&markets=h2h'
     try:
         r = requests.get(url, timeout=15)
-        if r.status_code != 200: return pd.DataFrame()
+        if r.status_code != 200: 
+            st.error(f"API Hatası: {r.status_code}")
+            return pd.DataFrame()
         data = r.json()
         res = []
         for m in data:
+            # Zaman damgasını Türkiye saatine çevir (+3)
             tm = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
             if tm.date() == t:
                 bookies = m.get('bookmakers', [])
                 if not bookies: continue
-                o = bookies[0]['markets'][0]['outcomes']
+                # İlk bahis şirketini (genelde en sağlamı döner) alıyoruz
+                markets = bookies[0].get('markets', [])
+                if not markets: continue
+                o = markets[0]['outcomes']
                 h = next((x['price'] for x in o if x['name'] == m['home_team']), 0)
                 a = next((x['price'] for x in o if x['name'] == m['away_team']), 0)
-                b = next((x['price'] for x in o if x['name'].lower() in ['draw', 'tie']), 0)
+                b = next((x['price'] for x in o if x['name'].lower() in ['draw', 'tie', 'beraberlik']), 0)
                 res.append({'key': m['sport_key'], 'lig': m['sport_title'], 'zaman': tm, 'ev': m['home_team'], 'dep': m['away_team'], 'h': h, 'b': b, 'a': a})
         return pd.DataFrame(res)
-    except: return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Bağlantı Hatası: {e}")
+        return pd.DataFrame()
 
 # --- ANA PROGRAM ---
 if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Key ve Lig seçin.")
+        st.error("⚠️ Lütfen API Key girin ve yan menüden lig seçin.")
     else:
-        with st.spinner("📊 Analiz ediliyor..."):
+        with st.spinner("📊 Bülten çekiliyor ve süzülüyor..."):
             gecmis = futbol_veri_motoru(yillar)
-            # Sadece seçili ligleri içeren bülteni tek istekte filtreliyoruz
             tum_bulten = bulten_cek_optimized(API_KEY, secili_tarih)
+            
             if not tum_bulten.empty:
+                # Seçilen liglerin kodlarını bültende süzüyoruz
                 bulten = tum_bulten[tum_bulten['key'].isin(secili_kodlar)]
-            else: bulten = pd.DataFrame()
+            else:
+                bulten = pd.DataFrame()
 
         if bulten.empty:
-            st.warning("ℹ️ Seçili liglerde veya tarihte maç bulunamadı.")
+            st.warning(f"ℹ️ {secili_tarih} tarihinde seçtiğiniz liglerde maç bulunamadı.")
+            if not tum_bulten.empty:
+                with st.expander("📌 Bugün Maç Olan Diğer Ligler"):
+                    st.write(tum_bulten['lig'].unique())
         else:
             final_list, flips = [], []
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))].copy()
+                
                 if len(b) >= min_ornek:
-                    b['FTHG'] = b['FTHG'].fillna(0); b['FTAG'] = b['FTAG'].fillna(0)
-                    b['HTHG'] = b['HTHG'].fillna(0); b['HTAG'] = b['HTAG'].fillna(0)
+                    # NaN temizliği
+                    for col in ['FTHG','FTAG','HTHG','HTAG']: b[col] = b[col].fillna(0)
                     
-                    # Yüzdeler
                     iy05 = (b['HTHG']+b['HTAG']>=1).mean(); iy15 = (b['HTHG']+b['HTAG']>=2).mean()
                     ms15 = (b['FTHG']+b['FTAG']>=2).mean(); ms25 = (b['FTHG']+b['FTAG']>=3).mean(); ms35 = (b['FTHG']+b['FTAG']>=4).mean()
                     kg = ((b['FTHG']>0)&(b['FTAG']>0)).mean()
                     
+                    iy_res = b['HTR'].value_counts(normalize=True); ms_res = b['FTR'].value_counts(normalize=True)
                     iy_mod = b['HTR'].mode()[0]; ms_mod = b['FTR'].mode()[0]
-                    iy_p = b['HTR'].value_counts(normalize=True).get(iy_mod,0); ms_p = b['FTR'].value_counts(normalize=True).get(ms_mod,0)
+                    iy_p = iy_res.get(iy_mod, 0); ms_p = ms_res.get(ms_mod, 0)
 
                     final_list.append({
-                        'SAAT': m['zaman'].strftime('%H:%M'), 'EV': m['ev'], 'DEP': m['dep'],
+                        'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV': m['ev'], 'DEP': m['dep'],
                         '1Y_05': f"{'Over' if iy05>=0.5 else 'Under'} ({int(iy05*100)}%){'🔥' if iy05>=0.8 else ''}",
-                        'İY_15': f"{'Over' if iy15>=0.5 else 'Under'} ({int(iy15*100)}%){'🔥' if iy15>=0.8 else ''}",
+                        'İY_15': f"{'Over' if iy15>=0.5 else 'Under'} ({int(iy15_p*100) if 'iy15_p' in locals() else int(iy15*100)}%){'🔥' if iy15>=0.8 else ''}",
                         'MS_15': f"{'Over' if ms15>=0.5 else 'Under'} ({int(ms15*100)}%){'🔥' if ms15>=0.8 else ''}",
                         'MS_25': f"{'Over' if ms25>=0.5 else 'Under'} ({int(ms25*100)}%){'🔥' if ms25>=0.8 else ''}",
                         'MS_35': f"{'Over' if ms35>=0.5 else 'Under'} ({int(ms35*100)}%){'🔥' if ms35>=0.8 else ''}",
@@ -132,5 +164,13 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 st.subheader(f"⚽ {secili_tarih} Vibe Analiz")
-                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=['1Y_05','İY_15','MS_15','MS_25','MS_35','KG','1Y_V','MS_V']), use_container_width=True)
-                # ... (Expander ve Radar kısımları aynı mantıkla eklenebilir)
+                style_cols = ['1Y_05','İY_15','MS_15','MS_25','MS_35','KG','1Y_V','MS_V']
+                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
+                
+                # Detaylar ve Sürpriz Radarı...
+                if flips:
+                    st.markdown("---")
+                    st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
+                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz ihtimali!")
+            else:
+                st.info("Seçili maçlar için geçmiş veri eşleşmesi bulunamadı. Hassasiyeti veya örnek sayısını değiştirmeyi deneyin.")
