@@ -33,13 +33,12 @@ yillar = st.sidebar.multiselect(
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=1)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti (0.00 = Birebir)", 0.00, 0.30, 0.05, step=0.01)
 
-# --- LİG HAVUZU ---
 FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
     "⚽ AVRUPA DİĞER": {'Hollanda Eredivisie': 'soccer_netherlands_eredivisie', 'Belçika Pro League': 'soccer_belgium_first_division', 'Portekiz Primeiralga': 'soccer_portugal_primeira_liga', 'İskoçya Premiership': 'soccer_scotland_premiership', 'Avusturya Bundesliga': 'soccer_austria_bundesliga'},
-    "🌎 DÜNYA": {'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a', 'Arjantin Primera': 'soccer_argentina_primera_division', 'ABD MLS': 'soccer_usa_mls'}
+    "🌎 GÜNEY AMERİKA & DİĞER": {'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a', 'Arjantin Primera': 'soccer_argentina_primera_division', 'ABD MLS': 'soccer_usa_mls'}
 }
 
 secili_kodlar = []
@@ -48,7 +47,6 @@ for kat_isim, ligler in FUTBOL_LIGLERI.items():
         for isim, kod in ligler.items():
             if st.checkbox(isim, key=f"cb_{kod}"): secili_kodlar.append(kod)
 
-# --- VERİ MOTORU ---
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(secili_sezonlar):
     if not secili_sezonlar: return pd.DataFrame()
@@ -61,7 +59,7 @@ def futbol_veri_motoru(secili_sezonlar):
                 df = pd.read_csv(url)
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 df = df[df.columns.intersection(cols)]
-                temp = df.dropna(subset=['B365H','B365D','B365A','FTHG','FTAG']).copy()
+                temp = df.dropna(subset=['B365H','B365D','B365A']).copy()
                 temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
                 liste.append(temp)
             except: continue
@@ -71,7 +69,7 @@ def form_analizi_yap(gecmis, ev_takim, dep_takim):
     def get_avg(takim):
         son_5 = gecmis[(gecmis['HomeTeam'] == takim) | (gecmis['AwayTeam'] == takim)].sort_values('Date', ascending=False).head(5)
         if len(son_5) < 3: return 0
-        return (son_5['FTHG'] + son_5['FTAG']).mean()
+        return (son_5['FTHG'].fillna(0) + son_5['FTAG'].fillna(0)).mean()
     ev_avg = get_avg(ev_takim); dep_avg = get_avg(dep_takim)
     if ev_avg < 1.8 and dep_avg < 1.8: return "⚠️ Form Düşük!"
     return "✅ Form Uygun"
@@ -95,10 +93,9 @@ def bulten_cek(key, kodlar, t):
         except: continue
     return pd.DataFrame(res)
 
-# --- ANA PROGRAM ---
 if st.button("🚀 ANALİZİ BAŞLAT"):
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Key ve Lig seçimi yapın.")
+    if not API_KEY or not secili_kodlar or not yillar:
+        st.error("⚠️ Eksik giriş yapıldı.")
     else:
         with st.spinner("📊 Analiz ediliyor..."):
             gecmis = futbol_veri_motoru(yillar)
@@ -110,7 +107,10 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))].copy()
                 
                 if len(b) >= min_ornek:
-                    # GOL YÜZDELERİ
+                    # NaN Temizliği (Hata Çözümü)
+                    b['FTHG'] = b['FTHG'].fillna(0); b['FTAG'] = b['FTAG'].fillna(0)
+                    b['HTHG'] = b['HTHG'].fillna(0); b['HTAG'] = b['HTAG'].fillna(0)
+
                     iy05_p = (b['HTHG'] + b['HTAG'] >= 1).mean()
                     iy15_p = (b['HTHG'] + b['HTAG'] >= 2).mean()
                     ms15_p = (b['FTHG'] + b['FTAG'] >= 2).mean()
@@ -118,12 +118,10 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     ms35_p = (b['FTHG'] + b['FTAG'] >= 4).mean()
                     kg_p = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
                     
-                    # 1Y_V ve MS_V YÜZDE HESABI
                     iy_res_counts = b['HTR'].value_counts(normalize=True)
                     ms_res_counts = b['FTR'].value_counts(normalize=True)
                     iy_mod = b['HTR'].mode()[0]; ms_mod = b['FTR'].mode()[0]
-                    iy_v_p = iy_res_counts.get(iy_mod, 0)
-                    ms_v_p = ms_res_counts.get(ms_mod, 0)
+                    iy_v_p = iy_res_counts.get(iy_mod, 0); ms_v_p = ms_res_counts.get(ms_mod, 0)
                     
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
@@ -145,8 +143,8 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 st.subheader(f"⚽ {secili_tarih} Vibe & Mod Skor Analizi")
-                # TÜM ÖNEMLİ SÜTUNLARI BOYUYORUZ
-                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=['1Y_05','İY_15','MS_15','MS_25','MS_35','KG_V','1Y_V','MS_V']), use_container_width=True)
+                style_cols = ['1Y_05','İY_15','MS_15','MS_25','MS_35','KG_V','1Y_V','MS_V']
+                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
                 st.subheader("📚 Detaylı Örnekler")
@@ -157,20 +155,20 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt = pd.DataFrame()
                         dt['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y')
                         dt['Ev'] = b_det['HomeTeam']; dt['Dep'] = b_det['AwayTeam']
-                        dt['1Y_05'] = (b_det['HTHG'] + b_det['HTAG'] >= 1).map({True:'Over', False:'Under'})
-                        dt['İY_15'] = (b_det['HTHG'] + b_det['HTAG'] >= 2).map({True:'Over', False:'Under'})
-                        dt['MS_15'] = (b_det['FTHG'] + b_det['FTAG'] >= 2).map({True:'Over', False:'Under'})
-                        dt['MS_25'] = (b_det['FTHG'] + b_det['FTAG'] >= 3).map({True:'Over', False:'Under'})
-                        dt['MS_35'] = (b_det['FTHG'] + b_det['FTAG'] >= 4).map({True:'Over', False:'Under'})
+                        dt['1Y_05'] = (b_det['HTHG'].fillna(0) + b_det['HTAG'].fillna(0) >= 1).map({True:'Over', False:'Under'})
+                        dt['İY_15'] = (b_det['HTHG'].fillna(0) + b_det['HTAG'].fillna(0) >= 2).map({True:'Over', False:'Under'})
+                        dt['MS_15'] = (b_det['FTHG'].fillna(0) + b_det['FTAG'].fillna(0) >= 2).map({True:'Over', False:'Under'})
+                        dt['MS_25'] = (b_det['FTHG'].fillna(0) + b_det['FTAG'].fillna(0) >= 3).map({True:'Over', False:'Under'})
+                        dt['MS_35'] = (b_det['FTHG'].fillna(0) + b_det['FTAG'].fillna(0) >= 4).map({True:'Over', False:'Under'})
                         dt['KG_V'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
                         dt['1Y_SKOR'] = b_det['HTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['HTAG'].fillna(0).astype(int).astype(str)
                         dt['MS_SKOR'] = b_det['FTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['FTAG'].fillna(0).astype(int).astype(str)
-                        dt['1Y_V'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
-                        dt['MS_V'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
                         dt['Krn'] = (b_det.get('HC', 0).fillna(0) + b_det.get('AC', 0).fillna(0)).astype(int)
                         dt['Krt'] = (b_det.get('HY', 0).fillna(0) + b_det.get('AY', 0).fillna(0)).astype(int)
+                        dt['1Y_V'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
+                        dt['MS_V'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
                         dt['H_Oran'] = b_det['B365H']; dt['B_Oran'] = b_det['B365D']; dt['A_Oran'] = b_det['B365A']
-                        st.dataframe(dt.style.map(style_engine, subset=['1Y_05','İY_15','MS_15','MS_25','MS_35','KG_V','1Y_V','MS_V']), use_container_width=True, hide_index=True)
+                        st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
                 
                 if flips:
                     st.markdown("---")
