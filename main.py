@@ -45,10 +45,9 @@ def futbol_veri_motoru():
             try:
                 url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
                 df = pd.read_csv(url)
-                # Önemli: Gerekli sütunları güvenli şekilde seç
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 df = df[df.columns.intersection(cols)]
-                temp = df.dropna(subset=['B365H', 'B365D', 'B365A', 'FTHG', 'FTAG']).copy()
+                temp = df.dropna(subset=['B365H','B365D','B365A','FTHG','FTAG']).copy()
                 temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
                 liste.append(temp)
             except: continue
@@ -78,7 +77,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ Key girin ve lig seçin.")
     else:
-        with st.spinner("📊 Analiz yapılıyor..."):
+        with st.spinner("📊 Vibe & Mod Skor Analizi yapılıyor..."):
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
@@ -88,75 +87,71 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             final_list, flips = [], []
             for i, m in bulten.iterrows():
                 b = gecmis[
-                    (gecmis['B365H'].between(m['h'] - TOLERANS, m['h'] + TOLERANS)) &
-                    (gecmis['B365D'].between(m['b'] - TOLERANS, m['b'] + TOLERANS)) &
-                    (gecmis['B365A'].between(m['a'] - TOLERANS, m['a'] + TOLERANS))
+                    (gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) &
+                    (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) &
+                    (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))
                 ].copy()
                 
                 if len(b) >= min_ornek:
-                    iy_gol = b['HTHG'] + b['HTAG']
-                    ms_gol = b['FTHG'] + b['FTAG']
-                    
-                    # Mod hesaplamalarında hata payını sıfıra indirmek için fillna/mode güvenliği
+                    # MOD SKOR KİLİDİ
                     iy_skor = (b['HTHG'].fillna(0).astype(int).astype(str) + "-" + b['HTAG'].fillna(0).astype(int).astype(str)).mode()
                     ms_skor = (b['FTHG'].fillna(0).astype(int).astype(str) + "-" + b['FTAG'].fillna(0).astype(int).astype(str)).mode()
-                    iy_skor_val = iy_skor[0] if not iy_skor.empty else "0-0"
-                    ms_skor_val = ms_skor[0] if not ms_skor.empty else "0-0"
+                    iy_val = iy_skor[0] if not iy_skor.empty else "0-0"
+                    ms_val = ms_skor[0] if not ms_skor.empty else "0-0"
+                    ie, idp = map(int, iy_val.split('-'))
+                    me, mdp = map(int, ms_val.split('-'))
                     
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
-                        '1Y_05': 'Over' if (iy_gol > 0.5).mean() > 0.5 else 'Under',
-                        'MS_15': 'Over' if (ms_gol > 1.5).mean() > 0.5 else 'Under',
-                        'MS_25': 'Over' if (ms_gol > 2.5).mean() > 0.5 else 'Under',
-                        'KG_V': 'Yes' if ((b['FTHG']>0) & (b['FTAG']>0)).mean() > 0.5 else 'No',
-                        '1Y_SKOR': iy_skor_val, 'MS_SKOR': ms_skor_val,
-                        '1Y_V': b['HTR'].mode()[0].replace('H','Home').replace('A','Away').replace('D','Draw') if not b['HTR'].mode().empty else 'Draw',
-                        'MS_V': b['FTR'].mode()[0].replace('H','Home').replace('A','Away').replace('D','Draw') if not b['FTR'].mode().empty else 'Draw',
+                        '1Y_05': 'Over' if (ie+idp) >= 1 else 'Under',
+                        'MS_15': 'Over' if (me+mdp) >= 2 else 'Under',
+                        'MS_25': 'Over' if (me+mdp) >= 3 else 'Under',
+                        'MS_35': 'Over' if (me+mdp) >= 4 else 'Under',
+                        'KG_V': 'Yes' if (me > 0 and mdp > 0) else 'No',
+                        'MOD_1Y': iy_val, 'MOD_MS': ms_val,
+                        '1Y_V': 'Home' if ie > idp else ('Draw' if ie == idp else 'Away'),
+                        'MS_V': 'Home' if me > mdp else ('Draw' if me == mdp else 'Away'),
                         'ÖRNEK': len(b), 'idx': i
                     })
-                    
                     c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
                     if c_flip.any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri")
-                # Hata önleyici subset kontrolü
-                cols_to_style = [c for c in ['1Y_05','MS_15','MS_25','KG_V','1Y_V','MS_V'] if c in df_ana.columns]
-                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=cols_to_style), use_container_width=True)
+                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & En Çok Tekrarlayan Sonuçlar")
+                style_cols = [c for c in ['1Y_05','MS_15','MS_25','MS_35','KG_V','1Y_V','MS_V'] if c in df_ana.columns]
+                st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Maç Detayları")
                 for row in final_list:
-                    with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
+                    with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']} (Detaylı Analiz & Örnekler)"):
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[
-                            (gecmis['B365H'].between(m_o['h'] - TOLERANS, m_o['h'] + TOLERANS)) &
-                            (gecmis['B365D'].between(m_o['b'] - TOLERANS, m_o['b'] + TOLERANS)) &
-                            (gecmis['B365A'].between(m_o['a'] - TOLERANS, m_o['a'] + TOLERANS))
-                        ].copy()
+                            (gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) &
+                            (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) &
+                            (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))
+                        ].copy().sort_values('Date', ascending=False)
                         
                         dt = pd.DataFrame()
                         dt['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y')
-                        dt['Ev'] = b_det['HomeTeam']
-                        dt['Dep'] = b_det['AwayTeam']
+                        dt['Ev'] = b_det['HomeTeam']; dt['Dep'] = b_det['AwayTeam']
                         dt['1Y_05'] = (b_det['HTHG'] + b_det['HTAG'] > 0.5).map({True:'Over', False:'Under'})
                         dt['MS_15'] = (b_det['FTHG'] + b_det['FTAG'] > 1.5).map({True:'Over', False:'Under'})
                         dt['MS_25'] = (b_det['FTHG'] + b_det['FTAG'] > 2.5).map({True:'Over', False:'Under'})
+                        dt['MS_35'] = (b_det['FTHG'] + b_det['FTAG'] > 3.5).map({True:'Over', False:'Under'})
                         dt['KG_V'] = ((b_det['FTHG']>0) & (b_det['FTAG']>0)).map({True:'Yes', False:'No'})
                         dt['1Y_SKOR'] = b_det['HTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['HTAG'].fillna(0).astype(int).astype(str)
                         dt['MS_SKOR'] = b_det['FTHG'].fillna(0).astype(int).astype(str) + "-" + b_det['FTAG'].fillna(0).astype(int).astype(str)
-                        # HC, AC gibi sütunlar yoksa çökmemesi için kontrol
-                        dt['Krn'] = (b_det.get('HC', 0) + b_det.get('AC', 0)).fillna(0).astype(int)
-                        dt['Krt'] = (b_det.get('HY', 0) + b_det.get('AY', 0)).fillna(0).astype(int)
                         dt['1Y_V'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
                         dt['MS_V'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
+                        dt['Krn'] = (b_det.get('HC',0) + b_det.get('AC',0)).fillna(0).astype(int)
+                        dt['Krt'] = (b_det.get('HY',0) + b_det.get('AY',0)).fillna(0).astype(int)
 
-                        # KRİTİK: subset içindeki isimlerin dt.columns içinde olduğundan emin ol
-                        st.dataframe(dt.style.map(style_engine, subset=cols_to_style), use_container_width=True, hide_index=True)
+                        st.write("📊 **Geçmiş Maçların Detaylı Analizi**")
+                        st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
                 
                 if flips:
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı")
-                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz HT/FT dönüşü olmuş!")
+                    for f in flips: st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz HT/FT potansiyeli!")
             else: st.warning("Eşleşen örnek bulunamadı.")
