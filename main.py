@@ -35,16 +35,19 @@ BASKETBOL_LIGLERI = {
 secili_kodlar = []
 lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else BASKETBOL_LIGLERI
 
-# --- LİG SEÇİMİ (TÜMÜNÜ SEÇ ÖZELLİĞİ) ---
+# --- LİG SEÇİMİ (GELİŞTİRİLMİŞ TÜMÜNÜ SEÇ) ---
 st.sidebar.markdown("---")
+# En üste Genel "Bütün Ligleri Seç" butonu
+genel_sec = st.sidebar.checkbox(f"🚀 Bütün {spor_turu} Liglerini Seç", value=False)
+
 for kat, ligler in lig_havuzu.items():
     with st.sidebar.expander(f"{kat}"):
-        # Kategori bazlı Hepsini Seç
-        all_key = f"all_{spor_turu}_{kat}"
-        is_all = st.checkbox(f"Hepsini Seç ({kat})", value=False, key=all_key)
+        # Kategori bazlı Hepsini Seç (Eğer genel seçiliyse bu da seçili gelir)
+        kat_sec = st.checkbox(f"Hepsini Seç ({kat})", value=genel_sec, key=f"all_{spor_turu}_{kat}")
         
         for isim, kod in ligler.items():
-            if st.checkbox(isim, value=is_all, key=f"{spor_turu}_{kod}"):
+            # Eğer kategori kutusu seçiliyse bu kutular da otomatik işaretlenir
+            if st.checkbox(isim, value=kat_sec, key=f"{spor_turu}_{kod}"):
                 secili_kodlar.append(kod)
 
 # --- VERİ MOTORU (FUTBOL) ---
