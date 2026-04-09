@@ -105,6 +105,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y_05': 'Over' if (ie+idp) >= 1 else 'Under',
+                        'İY_15': 'Over' if (ie+idp) >= 2 else 'Under',
                         'MS_15': 'Over' if (me+mdp) >= 2 else 'Under',
                         'MS_25': 'Over' if (me+mdp) >= 3 else 'Under',
                         'MS_35': 'Over' if (me+mdp) >= 4 else 'Under',
@@ -121,9 +122,8 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 df_ana = pd.DataFrame(final_list)
                 st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & En Çok Tekrarlayan Sonuçlar")
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
-                
-                # Sadece mevcut olanları boya
                 actual_style_cols = [c for c in style_cols if c in df_ana.columns]
+                
                 st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=actual_style_cols), use_container_width=True)
                 
                 st.markdown("---")
@@ -153,7 +153,6 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['Krt'] = (b_det.get('HY',0) + b_det.get('AY',0)).fillna(0).astype(int)
 
                         st.write("📊 **Geçmiş Maçların Detaylı Analizi**")
-                        # Detay tablosu için boyanacak sütunları kontrol et
                         actual_det_style = [c for c in style_cols if c in dt.columns]
                         st.dataframe(dt.style.map(style_engine, subset=actual_det_style), use_container_width=True, hide_index=True)
                 
