@@ -45,12 +45,26 @@ API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 
-min_ornek = st.sidebar.number_input("Min. Örnek", min_value=1, value=5)
+min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=5)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.30, 0.10)
 
 
+# 🔥 TÜM LİGLER GERİ GELDİ
 FUTBOL_LIGLERI = {
-    "🇪🇺 Avrupa": {
+    "🏆 AVRUPA KUPALARI": {
+        'Şampiyonlar Ligi': 'soccer_uefa_champs_league',
+        'Avrupa Ligi': 'soccer_uefa_europa_league',
+        'Konferans Ligi': 'soccer_uefa_europa_conference_league'
+    },
+    "🇹🇷 TÜRKİYE": {
+        'Süper Lig': 'soccer_turkey_super_league',
+        '1. Lig': 'soccer_turkey_pTT_1_lig'
+    },
+    "🇸🇦 ARAP LİGLERİ": {
+        'Suudi Arabistan': 'soccer_saudi_arabia_pro_league',
+        'BAE': 'soccer_uae_pro_league'
+    },
+    "🇪🇺 AVRUPA MAJÖR": {
         'İngiltere': 'soccer_epl',
         'İspanya': 'soccer_spain_la_liga',
         'Almanya': 'soccer_germany_bundesliga',
@@ -63,15 +77,16 @@ secili_kodlar = []
 for kat, ligler in FUTBOL_LIGLERI.items():
     with st.sidebar.expander(kat):
         for isim, kod in ligler.items():
-            if st.checkbox(isim):
+            if st.checkbox(isim, key=kod):
                 secili_kodlar.append(kod)
 
 
 # --- DATA ---
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru():
-    sezonlar = ['2324', '2425']
-    ligler = ['E0','SP1','D1','I1','F1']
+    sezonlar = ['2324', '2425', '2526']
+    ligler = ['E0','SP1','D1','I1','F1','T1','N1','B1','P1','SC0','D1']
+
     liste = []
 
     for lig in ligler:
@@ -132,11 +147,15 @@ def bulten_cek(key, kodlar, t):
 # --- MAIN ---
 if st.button("🚀 ANALİZİ BAŞLAT"):
 
+    if not API_KEY or not secili_kodlar:
+        st.error("Key gir ve lig seç")
+        st.stop()
+
     gecmis = futbol_veri_motoru()
     bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
     if bulten.empty:
-        st.warning("Maç bulunamadı")
+        st.warning("Maç yok")
     else:
         final = []
 
@@ -154,7 +173,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             if len(b) < max(min_ornek, 10):
                 continue
 
-            # --- DOĞRU POISSON ---
+            # ✅ DOĞRU POISSON
             ev_atak = b['FTHG'].mean() / lig_ev_ort
             ev_savunma = b['FTAG'].mean() / lig_dep_ort
 
@@ -167,14 +186,13 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             skor, ust, kg = poisson_analiz(lambda_ev, lambda_dep)
 
             final.append({
-                "Maç": f"{m['ev']} - {m['dep']}",
                 "Saat": m['zaman'].strftime("%H:%M"),
-                "Poisson Skor": skor,
+                "Maç": f"{m['ev']} - {m['dep']}",
+                "Skor": skor,
                 "Üst %": ust,
                 "KG %": kg,
                 "Örnek": len(b)
             })
 
         df = pd.DataFrame(final)
-
         st.dataframe(df, use_container_width=True)
