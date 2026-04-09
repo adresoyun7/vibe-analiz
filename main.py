@@ -115,14 +115,11 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                 if len(b) >= min_ornek:
-                    # MOD SKORLARA GÖRE ANALİZ (TUTARLI)
                     iy_skor_mod = (b['HTHG'].astype(int).astype(str) + "-" + b['HTAG'].astype(int).astype(str)).mode()[0]
                     ms_skor_mod = (b['FTHG'].astype(int).astype(str) + "-" + b['FTAG'].astype(int).astype(str)).mode()[0]
-                    
                     iy_e, iy_d = map(int, iy_skor_mod.split('-'))
                     ms_e, ms_d = map(int, ms_skor_mod.split('-'))
                     
-                    # HT/FT Sürpriz Kontrolü
                     c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
                     if c_flip.any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
 
@@ -147,20 +144,16 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 st.subheader("📚 Maç Detaylı Analizi & Poisson")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
-                        # 2. TABLO: POISSON PANELİ
                         p_skor, p_ust, p_kg = poisson_analiz(row['avg_ev'], row['avg_dep'])
                         st.info(f"📊 **Poisson Tahmini:** Beklenen Skor: **{p_skor}** | Üst Olasılığı: **%{p_ust}** | KG Olasılığı: **%{p_kg}**")
                         
-                        # ALT BÜLTEN (GEÇMİŞ MAÇLAR)
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy()
                         
                         detay_tablo = pd.DataFrame()
                         detay_tablo['Date'] = b_det['Date'].dt.strftime('%d.%m.%Y')
-                        detay_tablo['HomeTeam'] = b_det['HomeTeam']
-                        detay_tablo['AwayTeam'] = b_det['AwayTeam']
-                        
-                        # Detay Analizleri (Tutarlı Renklendirme)
+                        detay_tablo['Ev'] = b_det['HomeTeam']
+                        detay_tablo['Dep'] = b_det['AwayTeam']
                         detay_tablo['İY 0.5'] = (b_det['HTHG'] + b_det['HTAG'] >= 1).map({True:'Over', False:'Under'})
                         detay_tablo['MS 1.5'] = (b_det['FTHG'] + b_det['FTAG'] >= 2).map({True:'Over', False:'Under'})
                         detay_tablo['MS 2.5'] = (b_det['FTHG'] + b_det['FTAG'] >= 3).map({True:'Over', False:'Under'})
@@ -172,6 +165,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         detay_tablo['1Y'] = b_det['HTR'].replace({'H':'Home','A':'Away','D':'Draw'})
                         detay_tablo['MS'] = b_det['FTR'].replace({'H':'Home','A':'Away','D':'Draw'})
 
+                        # Subset isimlerini tablo sütunlarıyla eşitledik (Hata Buradaydı)
                         st.dataframe(detay_tablo.style.map(style_engine, subset=['İY 0.5','MS 1.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
                 
                 if flips:
