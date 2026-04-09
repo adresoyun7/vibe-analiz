@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
-# Excel indirme fonksiyonu
 def to_excel(df):
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
@@ -123,9 +122,10 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         iy_skor = b['S1Y'].mode()[0]
                         ms_skor = b['SMS'].mode()[0]
                         
-                        # Mantık Senkronizasyonu: Skora göre butonları zorla
-                        iy_toplam = sum(map(int, iy_skor.split('-')))
-                        ms_toplam = sum(map(int, ms_skor.split('-')))
+                        # Skor bazlı mantık kilidi (Syntax hatasız)
+                        iy_ev, iy_dep = map(int, iy_skor.split('-'))
+                        ms_ev, ms_dep = map(int, ms_skor.split('-'))
+                        iy_toplam, ms_toplam = (iy_ev + iy_dep), (ms_ev + ms_dep)
                         
                         final_list.append({
                             'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
@@ -134,13 +134,15 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                             'MS 1.5': 'Over' if ms_toplam >= 2 else 'Under',
                             'MS 2.5': 'Over' if ms_toplam >= 3 else 'Under',
                             'MS 3.5': 'Over' if ms_toplam >= 4 else 'Under',
-                            'KG': 'Yes' if (int(ms_skor.split('-')[0]) > 0 and int(ms_skor.split('-')[1]) > 0) else 'No',
+                            'KG': 'Yes' if (ms_ev > 0 and ms_dep > 0) else 'No',
                             '1Y SKOR': iy_skor, 'MS SKOR': ms_skor, 
                             'KRN (ORT)': round(b['C_KRN'].mean(), 1), 'KRT (ORT)': round(b['C_KRT'].mean(), 1),
-                            '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
-                            'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b), 'idx': i
+                            '1Y': 'Home' if iy_ev > iy_dep else ('Draw' if iy_ev == iy_dep else 'Away'),
+                            'MS': 'Home' if ms_ev > ms_dep else ('Draw' if ms_ev == ms_dep else 'Away'),
+                            'ÖRNEK': len(b), 'idx': i
                         })
-                        if b['C_FLIP'].any(): flips.append({'m': f"{m['ev']}-{m['dep']}", 'p': int(b['C_FLIP'].mean()*100)})
+                        if b['C_FLIP'].any():
+                            flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(b['C_FLIP'].mean()*100)})
                 
                 if final_list:
                     df = pd.DataFrame(final_list)
@@ -155,6 +157,18 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                             m_orig = bulten.loc[row['idx']]
                             b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
                             st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'C_KRN', 'C_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','C_KRN':'Krn','C_KRT':'Krt'}).head(15))
+                    
+                    if flips:
+                        st.markdown("---")
+                        st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
+                        for f in flips:
+                            st.warning(f"⚠️ **{f['m']}**: Geçmiş benzer oranlı örneklerin **%{f['p']}** kadarı sürpriz (HT/FT) bitmiş!")
                 else: st.warning("Eşleşen örnek bulunamadı.")
             else: st.error("Bülten boş.")
-else: st.info("👈 Soldan ayarları yapıp başlat Ersin.")
+        else: # 🏀 BASKETBOL
+            bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "🏀 Basketbol")
+            if not bulten.empty:
+                st.subheader(f"🏀 {secili_tarih} Basketbol Bülteni")
+                st.dataframe(bulten, use_container_width=True)
+            else: st.error("Basketbol maçı bulunamadı.")
+else: st.info("👈 Ayarları yapıp analizi başlat Ersin.")
