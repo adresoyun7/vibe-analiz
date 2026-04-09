@@ -6,9 +6,9 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz - AI & Surprise Pro", layout="wide")
+st.set_page_config(page_title="Vibe Analiz - AI Pro Ultra", layout="wide")
 
-# GEMINI AYARI (Senin Key'in)
+# GEMINI AYARI (Kalıcı Key)
 GEMINI_KEY = "AIzaSyBhy1PQMaY5PtZVr59OCas2T_Zqg7lLwWE"
 genai.configure(api_key=GEMINI_KEY)
 
@@ -32,7 +32,7 @@ secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun, min_value=bug
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=2)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.15)
 
-# --- LİG HAVUZLARI ---
+# --- LİG HAVUZLARI (TAM LİSTE) ---
 FUTBOL_LIGLERI = {
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
@@ -151,14 +151,14 @@ if API_KEY and secili_kodlar:
                     
                     st.download_button(label="📥 Excel Olarak İndir", data=to_excel(df_res.drop(columns=['orig_idx'])), file_name=f"Vibe_{secili_tarih}.xlsx", mime="application/vnd.ms-excel")
                     
-                    # --- OTOMATİK GEMİNİ ANALİZİ ---
+                    # --- OTOMATİK GEMİNİ ANALİZİ (DÜZELTİLMİŞ) ---
                     st.markdown("---")
                     st.markdown("### 🤖 Gemini AI Analiz Raporu")
                     with st.spinner('Gemini verileri yorumluyor...'):
                         try:
-                            # Hata veren model ismi düzeltildi
-                            model = genai.GenerativeModel('gemini-1.5-flash')
-                            prompt = f"Sen bir profesyonel bahis analiz asistanısın. Aşağıdaki tabloyu incele. En yüksek ÖRNEK sayısına sahip güvenilir 3 maçı seç ve nedenlerini açıkla. Ayrıca sürpriz ihtimalleri varsa belirt. Türkçe ve maddeler halinde yaz. Veriler: {df_res.drop(columns=['orig_idx']).to_string()}"
+                            # Hatanın çözümü: Model ismini tırnak içinde yalın halde kullanıyoruz
+                            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                            prompt = f"Sen bir profesyonel futbol analiz asistanısın. Aşağıdaki verileri incele. ÖRNEK sayısı yüksek olan en mantıklı 3 maçı seç ve nedenleriyle açıkla. Türkçe ve samimi bir dille yaz. Veriler: {df_res.drop(columns=['orig_idx']).to_string()}"
                             response = model.generate_content(prompt)
                             st.info(response.text)
                         except Exception as e:
