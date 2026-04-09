@@ -25,12 +25,12 @@ secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=2)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.15)
 
-# --- LİG HAVUZLARI ---
+# --- LİG HAVUZLARI (DÜZELTİLDİ) ---
 FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
-    "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
-    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İsviçre': 'soccer_switzerland_league', 'Danimarka': 'soccer_denmark_superliga', 'Polonya': 'soccer_poland_ekstraklasa'}
+    "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
+    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İskoçya': 'soccer_scotland_premier_league', 'Polonya': 'soccer_poland_ekstraklasa'}
 }
 
 BASKETBOL_LIGLERI = {
@@ -47,14 +47,14 @@ def toggler_all():
     for kat in lig_havuzu.values():
         for kod in kat.values(): st.session_state[f"cb_{kod}"] = st.session_state["genel_secici"]
 
-st.sidebar.checkbox(f"🚀 Bütün Ligleri Seç", key="genel_secici", on_change=toggler_all)
+st.sidebar.checkbox(f"🚀 Bütün {spor_turu} Liglerini Seç", key="genel_secici", on_change=toggler_all)
 
 for kat_isim, ligler in lig_havuzu.items():
     with st.sidebar.expander(kat_isim):
         for isim, kod in ligler.items():
             if st.checkbox(isim, key=f"cb_{kod}"): secili_kodlar.append(kod)
 
-# --- VERİ MOTORU ---
+# --- VERİ MOTORU (2026 GÜNCEL) ---
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru():
     lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT'}
@@ -80,23 +80,26 @@ def futbol_veri_motoru():
     return pd.concat(liste).sort_values(by='Date', ascending=False) if liste else pd.DataFrame()
 
 def bulten_cek(key, kodlar, t, spor):
-    res_list = []
+    all_res = []
     for k in kodlar:
         try:
+            # Burası kritik: timeout ve kontrol eklendi
             r = requests.get(f'https://api.the-odds-api.com/v4/sports/{k}/odds/?apiKey={key}&regions=eu&markets=h2h', timeout=10).json()
             if not isinstance(r, list): continue
             for m in r:
                 try:
                     tm = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
                     if tm.date() == t:
-                        o = m['bookmakers'][0]['markets'][0]['outcomes']
+                        bookies = m.get('bookmakers', [])
+                        if not bookies: continue
+                        o = bookies[0]['markets'][0]['outcomes']
                         h = next((x['price'] for x in o if x['name'] == m['home_team']), 0)
                         a = next((x['price'] for x in o if x['name'] == m['away_team']), 0)
                         b = next((x['price'] for x in o if x['name'].lower() in ['draw', 'tie']), 0) if spor == "⚽ Futbol" else 0
-                        res_list.append({'lig': m['sport_title'], 'zaman': tm, 'ev': m['home_team'], 'dep': m['away_team'], 'h': h, 'b': b, 'a': a})
+                        all_res.append({'lig': m['sport_title'], 'zaman': tm, 'ev': m['home_team'], 'dep': m['away_team'], 'h': h, 'b': b, 'a': a})
                 except: continue
         except: continue
-    return pd.DataFrame(res_list)
+    return pd.DataFrame(all_res)
 
 def style_engine(val):
     if val in ['Over', 'Yes', 'Home']: return 'background-color: #27ae60; color: white;'
@@ -133,8 +136,8 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     st.subheader(f"⚽ {secili_tarih} Tarihli Futbol Analizleri")
                     st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
                     st.download_button("📥 Excel İndir", to_excel(df.drop(columns=['idx'])), f"Vibe_Futbol.xlsx")
-                else: st.warning("Eşleşen geçmiş örnek bulunamadı.")
-            else: st.error("Bülten çekilemedi.")
+                else: st.warning("Seçilen oranlara göre geçmişte örnek bulunamadı.")
+            else: st.error("Seçili liglerde bugün bülten çekilemedi.")
         
         else: # 🏀 BASKETBOL
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "🏀 Basketbol")
@@ -148,5 +151,5 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         '1Y': 'Home', 'MS': 'Away', 'ÖRNEK': 25, 'idx': i
                     })
                 st.dataframe(pd.DataFrame(basket_list).drop(columns=['idx']).style.map(style_engine, subset=['P1 (1Y 0.5)','P2 (1Y 1.5)','P3 (MS 1.5)','P4 (MS 2.5)','1Y TOPLAM','MS TOPLAM','1Y','MS']), use_container_width=True)
-            else: st.error("Basketbol bulunamadı.")
-else: st.info("Seçim yapıp analizi başlat.")
+            else: st.error("Basketbol bülteni bulunamadı.")
+else: st.info("Seçim yapıp analizi başlat Ersin!")
