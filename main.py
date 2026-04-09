@@ -4,14 +4,9 @@ import requests
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz - Pro Max", layout="wide")
+st.set_page_config(page_title="Vibe Analiz Pro Max", layout="wide")
 
-st.markdown("""
-    <style>
-    div[data-testid="stDataFrame"] { width: 100%; }
-    .stExpander { border: 1px solid #444; border-radius: 5px; margin-bottom: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown("<style>div[data-testid='stDataFrame'] { width: 100%; }</style>", unsafe_allow_html=True)
 
 st.title("⚽ Profesyonel Oran Analiz Üssü")
 
@@ -19,7 +14,6 @@ st.title("⚽ Profesyonel Oran Analiz Üssü")
 st.sidebar.header("⚙️ Ayarlar")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 
-# GENİŞ LİG LİSTESİ (Legal Bülten Odaklı)
 Dunya_Ligleri = {
     "TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
@@ -37,8 +31,8 @@ TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.20)
 
 # --- 1. VERİ MOTORU ---
 @st.cache_data(ttl=86400)
-def veri_motoru_yukle():
-    ligler = {'T1':'Tür1','E0':'İng1','E1':'İng2','SP1':'İsp1','D1':'Alm1','I1':'İta1','F1':'Fra1','N1':'Hol1','BRA':'Brz'}
+def veri_hazirla():
+    ligler = {'T1':'Tür','E0':'İng1','E1':'İng2','SP1':'İsp1','D1':'Alm1','I1':'İta1','F1':'Fra1','N1':'Hol1','BRA':'Brz'}
     sezonlar = ['2324', '2425', '2526']
     liste = []
     for k in ligler.keys():
@@ -48,17 +42,17 @@ def veri_motoru_yukle():
                 df = pd.read_csv(url)
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 temp = df[cols].dropna().copy()
-                # Analiz Sütunları
-                temp['GOL_MS'] = temp['FTHG'] + temp['FTAG']
-                temp['GOL_1Y'] = temp['HTHG'] + temp['HTAG']
-                temp['1Y_05'] = temp['GOL_1Y'] > 0.5
-                temp['1Y_15'] = temp['GOL_1Y'] > 1.5
-                temp['MS_15'] = temp['GOL_MS'] > 1.5
-                temp['MS_25'] = temp['GOL_MS'] > 2.5
-                temp['MS_35'] = temp['GOL_MS'] > 3.5
-                temp['KG'] = (temp['FTHG'] > 0) & (temp['FTAG'] > 0)
-                temp['KORNER'] = temp['HC'] + temp['AC']
-                temp['KART'] = temp['HY'] + temp['AY']
+                # Sütunları standartlaştırıyoruz (KeyError'u önlemek için)
+                ms_gol = temp['FTHG'] + temp['FTAG']
+                iy_gol = temp['HTHG'] + temp['HTAG']
+                temp['COL_1Y05'] = iy_gol > 0.5
+                temp['COL_1Y15'] = iy_gol > 1.5
+                temp['COL_MS15'] = ms_gol > 1.5
+                temp['COL_MS25'] = ms_gol > 2.5
+                temp['COL_MS35'] = ms_gol > 3.5
+                temp['COL_KG'] = (temp['FTHG'] > 0) & (temp['FTAG'] > 0)
+                temp['COL_KRN'] = temp['HC'] + temp['AC']
+                temp['COL_KRT'] = temp['HY'] + temp['AY']
                 temp['SKOR_1Y'] = temp['HTHG'].astype(int).astype(str) + "-" + temp['HTAG'].astype(int).astype(str)
                 temp['SKOR_MS'] = temp['FTHG'].astype(int).astype(str) + "-" + temp['FTAG'].astype(int).astype(str)
                 temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
@@ -80,7 +74,7 @@ def bulten_cek(key, kodlar):
         except: continue
     return pd.DataFrame(res)
 
-def style_row(val):
+def style_engine(val):
     if val in ['Over', 'Yes', 'Home']: return 'background-color: #27ae60; color: white;'
     if val in ['Under', 'No', 'Away']: return 'background-color: #c0392b; color: white;'
     if val == 'Draw': return 'background-color: #f39c12; color: white;'
@@ -88,8 +82,8 @@ def style_row(val):
 
 # --- 4. ANA PROGRAM ---
 if API_KEY and secili_kodlar:
-    if st.button("🚀 GENİŞLETİLMİŞ ANALİZİ BAŞLAT"):
-        gecmis = veri_motoru_yukle()
+    if st.button("🚀 ANALİZİ BAŞLAT"):
+        gecmis = veri_hazirla()
         bulten = bulten_cek(API_KEY, secili_kodlar)
         
         if not bulten.empty:
@@ -102,16 +96,16 @@ if API_KEY and secili_kodlar:
                 if not b.empty:
                     final_list.append({
                         'ID': i, 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
-                        '1Y 0.5': 'Over' if b['1Y_05'].mean() > 0.5 else 'Under',
-                        '1Y 1.5': 'Over' if b['1Y_15'].mean() > 0.5 else 'Under',
-                        'MS 1.5': 'Over' if b['MS_15'].mean() > 0.5 else 'Under',
-                        'MS 2.5': 'Over' if b['MS_2.5'].mean() > 0.5 else 'Under',
-                        'MS 3.5': 'Over' if b['MS_3.5'].mean() > 0.5 else 'Under',
-                        'K/G': 'Yes' if b['KG'].mean() > 0.5 else 'No',
+                        '1Y 0.5': 'Over' if b['COL_1Y05'].mean() > 0.5 else 'Under',
+                        '1Y 1.5': 'Over' if b['COL_1Y15'].mean() > 0.5 else 'Under',
+                        'MS 1.5': 'Over' if b['COL_MS15'].mean() > 0.5 else 'Under',
+                        'MS 2.5': 'Over' if b['COL_MS25'].mean() > 0.5 else 'Under',
+                        'MS 3.5': 'Over' if b['COL_MS35'].mean() > 0.5 else 'Under',
+                        'KG': 'Yes' if b['COL_KG'].mean() > 0.5 else 'No',
                         '1Y SKOR': b['SKOR_1Y'].mode()[0],
-                        'SKOR': b['SKOR_MS'].mode()[0],
-                        'KRN (ORT)': round(b['KORNER'].mean(), 1),
-                        'KRT (ORT)': round(b['KART'].mean(), 1),
+                        'MS SKOR': b['SKOR_MS'].mode()[0],
+                        'KRN (ORT)': round(b['COL_KRN'].mean(), 1),
+                        'KRT (ORT)': round(b['COL_KRT'].mean(), 1),
                         '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
                         'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'),
                         'ÖRNEK': len(b)
@@ -119,16 +113,19 @@ if API_KEY and secili_kodlar:
 
             if final_list:
                 df_res = pd.DataFrame(final_list)
-                st.subheader("📊 Analiz Edilen Tüm Maçlar (Geniş Tablo)")
-                st.dataframe(df_res.style.map(style_row, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','K/G','1Y','MS']), use_container_width=True)
+                st.subheader("📊 Genişletilmiş Analiz Tablosu")
+                # Görseldeki geniş tablo düzeni (Tüm sütunlar renkli)
+                st.dataframe(df_res.style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
                 
-                st.markdown("### 📚 Maç Bazlı Geçmiş Sonuçlar (Tıkla ve Gör)")
+                st.markdown("---")
+                st.subheader("📚 Maç Detayları ve Geçmiş Skorlar")
                 for row in final_list:
                     with st.expander(f"👁️ {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
                         m_orig = bulten.loc[row['ID']]
                         b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & 
                                        (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & 
                                        (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
-                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'SKOR_MS', 'KORNER', 'KART']].head(10))
-            else: st.warning("Maç bulunamadı.")
-else: st.info("Lig seç ve API Key gir.")
+                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'SKOR_MS', 'COL_KRN', 'COL_KRT']].rename(columns={'SKOR_MS':'Skor','COL_KRN':'Korner','COL_KRT':'Kart'}).head(10))
+            else: st.warning("Eşleşen örnek bulunamadı.")
+        else: st.error("Bülten boş.")
+else: st.info("Lig seçip API Key girerek başlayın.")
