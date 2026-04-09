@@ -8,31 +8,31 @@ st.set_page_config(page_title="Vibe Analiz Pro Max", layout="wide")
 
 st.markdown("<style>div[data-testid='stDataFrame'] { width: 100%; }</style>", unsafe_allow_html=True)
 
-st.title("⚽ Profesyonel Oran Analiz Üssü")
+st.title("⚽ Profesyonel Oran Analiz & Detayli Gecmis Paneli")
 
 # --- YAN MENÜ ---
 st.sidebar.header("⚙️ Ayarlar")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 
 Dunya_Ligleri = {
-    "TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
-    "MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
-    "DİĞER": {'Hollanda': 'soccer_netherlands_ere_divisie', 'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya': 'soccer_brazil_campeonato_serie_a'}
+    "TURKIYE": {'Super Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
+    "MAJOR": {'Ingiltere Premier': 'soccer_epl', 'Ispanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'Italya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
+    "DIGER": {'Hollanda': 'soccer_netherlands_ere_divisie', 'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya': 'soccer_brazil_campeonato_serie_a'}
 }
 
 secili_kodlar = []
 for kat, ligler in Dunya_Ligleri.items():
     with st.sidebar.expander(kat):
         for isim, kod in ligler.items():
-            if st.checkbox(isim, value=(kat == "TÜRKİYE"), key=kod):
+            if st.checkbox(isim, value=(kat == "TURKIYE"), key=kod):
                 secili_kodlar.append(kod)
 
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.20)
 
-# --- 1. VERİ MOTORU ---
+# --- 1. VERI MOTORU ---
 @st.cache_data(ttl=86400)
 def veri_hazirla():
-    ligler = {'T1':'Tür','E0':'İng1','E1':'İng2','SP1':'İsp1','D1':'Alm1','I1':'İta1','F1':'Fra1','N1':'Hol1','BRA':'Brz'}
+    ligler = {'T1':'Tur','E0':'Ing1','E1':'Ing2','SP1':'Isp1', 'SP2':'Isp2', 'D1':'Alm1','I1':'Ita1','F1':'Fra1','N1':'Hol1','BRA':'Brz'}
     sezonlar = ['2324', '2425', '2526']
     liste = []
     for k in ligler.keys():
@@ -42,7 +42,7 @@ def veri_hazirla():
                 df = pd.read_csv(url)
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 temp = df[cols].dropna().copy()
-                # Sütunları standartlaştırıyoruz (KeyError'u önlemek için)
+                
                 ms_gol = temp['FTHG'] + temp['FTAG']
                 iy_gol = temp['HTHG'] + temp['HTAG']
                 temp['COL_1Y05'] = iy_gol > 0.5
@@ -82,7 +82,7 @@ def style_engine(val):
 
 # --- 4. ANA PROGRAM ---
 if API_KEY and secili_kodlar:
-    if st.button("🚀 ANALİZİ BAŞLAT"):
+    if st.button("🚀 ANALIZI BASLAT"):
         gecmis = veri_hazirla()
         bulten = bulten_cek(API_KEY, secili_kodlar)
         
@@ -95,7 +95,7 @@ if API_KEY and secili_kodlar:
                 
                 if not b.empty:
                     final_list.append({
-                        'ID': i, 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
+                        'ID': i, 'LIG': m['lig'], 'EV SAHIBI': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y 0.5': 'Over' if b['COL_1Y05'].mean() > 0.5 else 'Under',
                         '1Y 1.5': 'Over' if b['COL_1Y15'].mean() > 0.5 else 'Under',
                         'MS 1.5': 'Over' if b['COL_MS15'].mean() > 0.5 else 'Under',
@@ -108,24 +108,27 @@ if API_KEY and secili_kodlar:
                         'KRT (ORT)': round(b['COL_KRT'].mean(), 1),
                         '1Y': 'Home' if b['HTR'].mode()[0]=='H' else ('Draw' if b['HTR'].mode()[0]=='D' else 'Away'),
                         'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'),
-                        'ÖRNEK': len(b)
+                        'ORNEK': len(b)
                     })
 
             if final_list:
                 df_res = pd.DataFrame(final_list)
-                st.subheader("📊 Genişletilmiş Analiz Tablosu")
-                # Görseldeki geniş tablo düzeni (Tüm sütunlar renkli)
+                st.subheader("📊 Genisletilmis Analiz Tablosu")
                 st.dataframe(df_res.style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Maç Detayları ve Geçmiş Skorlar")
+                st.subheader("📚 Mac Detaylari ve Gecmis Skorlar")
                 for row in final_list:
-                    with st.expander(f"👁️ {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
+                    with st.expander(f"👁️ {row['EV SAHIBI']} - {row['DEPLASMAN']}"):
                         m_orig = bulten.loc[row['ID']]
                         b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & 
                                        (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & 
                                        (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
-                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'SKOR_MS', 'COL_KRN', 'COL_KRT']].rename(columns={'SKOR_MS':'Skor','COL_KRN':'Korner','COL_KRT':'Kart'}).head(10))
+                        
+                        # Detay tablosuna SKOR_1Y eklendi
+                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'SKOR_1Y', 'SKOR_MS', 'COL_KRN', 'COL_KRT']]
+                                 .rename(columns={'SKOR_1Y':'1Y Skor', 'SKOR_MS':'MS Skor', 'COL_KRN':'Korner', 'COL_KRT':'Kart'})
+                                 .head(10))
             else: st.warning("Eşleşen örnek bulunamadı.")
         else: st.error("Bülten boş.")
 else: st.info("Lig seçip API Key girerek başlayın.")
