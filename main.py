@@ -21,8 +21,19 @@ st.sidebar.title("🎮 Vibe Kontrol Merkezi")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
+
+# YENİ: YIL FİLTRESİ
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Veri Havuzu Ayarları")
+yillar = st.sidebar.multiselect(
+    "Analiz Edilecek Sezonlar",
+    options=['2122', '2223', '2324', '2425', '2526'],
+    default=['2324', '2425', '2526'], # Varsayılan son 3 sezon
+    help="Daha eski yıllar daha çok örnek verir, daha yeni yıllar taze form durumunu yansıtır."
+)
+
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=1)
-TOLERANS = st.sidebar.slider("Oran Hassasiyeti (0.00 = Birebir)", 0.00, 0.30, 0.10, step=0.01)
+TOLERANS = st.sidebar.slider("Oran Hassasiyeti (0.00 = Birebir)", 0.00, 0.30, 0.05, step=0.01)
 
 FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
@@ -39,12 +50,12 @@ for kat_isim, ligler in FUTBOL_LIGLERI.items():
 
 # --- VERİ MOTORU ---
 @st.cache_data(ttl=86400)
-def futbol_veri_motoru():
-    sezonlar = ['2122', '2223', '2324', '2425', '2526']
+def futbol_veri_motoru(secili_sezonlar):
+    if not secili_sezonlar: return pd.DataFrame()
     lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT'}
     liste = []
     for k in lig_map.keys():
-        for s in sezonlar:
+        for s in secili_sezonlar:
             try:
                 url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
                 df = pd.read_csv(url)
@@ -88,15 +99,15 @@ def bulten_cek(key, kodlar, t):
 
 # --- ANA PROGRAM ---
 if st.button("🚀 ANALİZİ BAŞLAT"):
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Lütfen API Key girin ve lig seçin.")
+    if not API_KEY or not secili_kodlar or not yillar:
+        st.error("⚠️ Eksik giriş: API Key, Lig ve Sezon seçimi yapmalısınız.")
     else:
-        with st.spinner("📊 Analizler ve 1Y/MS Tahminleri Yapılıyor..."):
-            gecmis = futbol_veri_motoru()
+        with st.spinner(f"📊 {yillar} Sezonları Analiz Ediliyor..."):
+            gecmis = futbol_veri_motoru(yillar)
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
         if bulten.empty:
-            st.warning(f"ℹ️ Seçilen liglerde {secili_tarih} tarihinde maç bulunamadı.")
+            st.warning("ℹ️ Seçilen tarihte maç bulunamadı.")
         else:
             final_list, flips = [], []
             for i, m in bulten.iterrows():
@@ -137,14 +148,12 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     })
 
             if final_list:
-                # 1. TABLO
-                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Mod Skorlar")
+                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri (Sezonlar: {', '.join(yillar)})")
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
                 df_ana = pd.DataFrame(final_list)
                 st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
-                # 2. TABLO VE DETAYLAR
                 st.subheader("📚 Detaylı Geçmiş Örnekler")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
@@ -168,7 +177,6 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['H_Oran'] = b_det['B365H']; dt['B_Oran'] = b_det['B365D']; dt['A_Oran'] = b_det['B365A']
                         st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
 
-                # 3. SÜRPRİZ RADARI (EN ALTA)
                 if flips:
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
