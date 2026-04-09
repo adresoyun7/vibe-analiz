@@ -32,22 +32,34 @@ BASKETBOL_LIGLERI = {
     "🌎 GLOBAL": {'Çin CBA': 'basketball_china_cba', 'Avustralya NBL': 'basketball_australia_nbl'}
 }
 
-secili_kodlar = []
+# --- SEÇİM MANTIĞI (SESSION STATE) ---
 lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else BASKETBOL_LIGLERI
+secili_kodlar = []
 
-# --- LİG SEÇİMİ (GELİŞTİRİLMİŞ TÜMÜNÜ SEÇ) ---
 st.sidebar.markdown("---")
-# En üste Genel "Bütün Ligleri Seç" butonu
-genel_sec = st.sidebar.checkbox(f"🚀 Bütün {spor_turu} Liglerini Seç", value=False)
 
-for kat, ligler in lig_havuzu.items():
-    with st.sidebar.expander(f"{kat}"):
-        # Kategori bazlı Hepsini Seç (Eğer genel seçiliyse bu da seçili gelir)
-        kat_sec = st.checkbox(f"Hepsini Seç ({kat})", value=genel_sec, key=f"all_{spor_turu}_{kat}")
+# 1. Bütün Kategorileri Seç Fonksiyonu
+def toggler_all():
+    state = st.session_state["genel_secici"]
+    for kat in lig_havuzu.values():
+        for kod in kat.values():
+            st.session_state[f"cb_{kod}"] = state
+
+genel_sec = st.sidebar.checkbox(f"🚀 Bütün {spor_turu} Liglerini Seç", value=False, key="genel_secici", on_change=toggler_all)
+
+# 2. Kategorilere Göre Seçim
+for kat_isim, ligler in lig_havuzu.items():
+    with st.sidebar.expander(kat_isim):
+        # Kategori bazlı seçim fonksiyonu
+        def toggler_kat(k=kat_isim, l=ligler):
+            state = st.session_state[f"kat_sec_{k}"]
+            for kod in l.values():
+                st.session_state[f"cb_{kod}"] = state
+
+        st.checkbox(f"Hepsini Seç ({kat_isim})", value=genel_sec, key=f"kat_sec_{kat_isim}", on_change=toggler_kat)
         
         for isim, kod in ligler.items():
-            # Eğer kategori kutusu seçiliyse bu kutular da otomatik işaretlenir
-            if st.checkbox(isim, value=kat_sec, key=f"{spor_turu}_{kod}"):
+            if st.checkbox(isim, key=f"cb_{kod}"):
                 secili_kodlar.append(kod)
 
 # --- VERİ MOTORU (FUTBOL) ---
@@ -64,7 +76,7 @@ def futbol_veri_motoru():
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 temp = df[cols].dropna().copy()
                 ms_gol = temp['FTHG'] + temp['FTAG']
-                iy_gol = temp['HTHG'] + temp['HTAG']
+                iy_gol = temp['HTHG'] + temp['FTAG']
                 temp['C_1Y05'] = iy_gol > 0.5
                 temp['C_1Y15'] = iy_gol > 1.5
                 temp['C_MS15'] = ms_gol > 1.5
@@ -140,7 +152,7 @@ if API_KEY and secili_kodlar:
                         st.markdown("---")
                         st.subheader("🔥 HT/FT Sürpriz Radarı")
                         for f in flips: st.warning(f"**{f['m']}**: Geçmiş örneklerin %{int(f['o']*100)} kadarı sürpriz bitmiş!")
-                else: st.warning("Eşleşen örnek bulunamadı.")
+            else: st.warning("Eşleşen örnek bulunamadı.")
         else:
             bulten_bsk = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             if not bulten_bsk.empty:
