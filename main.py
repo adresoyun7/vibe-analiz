@@ -22,24 +22,52 @@ API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 
-# YENİ: YIL FİLTRESİ
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Veri Havuzu Ayarları")
 yillar = st.sidebar.multiselect(
     "Analiz Edilecek Sezonlar",
     options=['2122', '2223', '2324', '2425', '2526'],
-    default=['2324', '2425', '2526'], # Varsayılan son 3 sezon
-    help="Daha eski yıllar daha çok örnek verir, daha yeni yıllar taze form durumunu yansıtır."
+    default=['2324', '2425', '2526']
 )
 
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=1)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti (0.00 = Birebir)", 0.00, 0.30, 0.05, step=0.01)
 
+# --- NESİNE TARZI GENİŞ LİG HAVUZU ---
 FUTBOL_LIGLERI = {
-    "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
-    "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
-    "🇸🇦 ARAP LİGLERİ": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league'},
-    "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'}
+    "🏆 AVRUPA KUPALARI": {
+        'Şampiyonlar Ligi': 'soccer_uefa_champs_league',
+        'Avrupa Ligi': 'soccer_uefa_europa_league',
+        'Konferans Ligi': 'soccer_uefa_europa_conference_league'
+    },
+    "🇹🇷 TÜRKİYE": {
+        'Süper Lig': 'soccer_turkey_super_league',
+        '1. Lig': 'soccer_turkey_pTT_1_lig'
+    },
+    "🇪🇺 AVRUPA MAJÖR": {
+        'İngiltere Premier': 'soccer_epl',
+        'İspanya La Liga': 'soccer_spain_la_liga',
+        'Almanya Bundesliga': 'soccer_germany_bundesliga',
+        'İtalya Serie A': 'soccer_italy_serie_a',
+        'Fransa Ligue 1': 'soccer_france_ligue_one'
+    },
+    "⚽ AVRUPA DİĞER (Popüler)": {
+        'Hollanda Eredivisie': 'soccer_netherlands_eredivisie',
+        'Belçika Pro League': 'soccer_belgium_first_division',
+        'Portekiz Primeiralga': 'soccer_portugal_primeira_liga',
+        'İskoçya Premiership': 'soccer_scotland_premiership',
+        'Avusturya Bundesliga': 'soccer_austria_bundesliga',
+        'Danimarka Superliga': 'soccer_denmark_superliga',
+        'Norveç Eliteserien': 'soccer_norway_eliteserien',
+        'İsveç Allsvenskan': 'soccer_sweden_allsvenskan'
+    },
+    "🌎 GÜNEY AMERİKA & DİĞER": {
+        'Brezilya Serie A': 'soccer_brazil_campeonato_serie_a',
+        'Arjantin Primera': 'soccer_argentina_primera_division',
+        'Meksika Liga MX': 'soccer_mexico_liga_mx',
+        'Suudi Arabistan Pro Lig': 'soccer_saudi_arabia_pro_league',
+        'ABD MLS': 'soccer_usa_mls'
+    }
 }
 
 secili_kodlar = []
@@ -52,7 +80,12 @@ for kat_isim, ligler in FUTBOL_LIGLERI.items():
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(secili_sezonlar):
     if not secili_sezonlar: return pd.DataFrame()
-    lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT'}
+    # Lig haritasını Nesine bültenindeki tüm ülkeleri kapsayacak şekilde genişlettik
+    lig_map = {
+        'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1',
+        'N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT','D1':'DK',
+        'N1':'NO','S1':'SE','BR1':'BR','ARG':'AR','MEX':'MX'
+    }
     liste = []
     for k in lig_map.keys():
         for s in secili_sezonlar:
@@ -66,6 +99,8 @@ def futbol_veri_motoru(secili_sezonlar):
                 liste.append(temp)
             except: continue
     return pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
+
+# ... (form_analizi_yap ve bulten_cek fonksiyonları aynı kalacak) ...
 
 def form_analizi_yap(gecmis, ev_takim, dep_takim):
     def get_avg(takim):
@@ -102,12 +137,12 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar or not yillar:
         st.error("⚠️ Eksik giriş: API Key, Lig ve Sezon seçimi yapmalısınız.")
     else:
-        with st.spinner(f"📊 {yillar} Sezonları Analiz Ediliyor..."):
+        with st.spinner(f"📊 {len(secili_kodlar)} Lig Analiz Ediliyor..."):
             gecmis = futbol_veri_motoru(yillar)
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
         if bulten.empty:
-            st.warning("ℹ️ Seçilen tarihte maç bulunamadı.")
+            st.warning("ℹ️ Seçilen liglerde bugün maç bulunamadı.")
         else:
             final_list, flips = [], []
             for i, m in bulten.iterrows():
@@ -148,13 +183,13 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     })
 
             if final_list:
-                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri (Sezonlar: {', '.join(yillar)})")
-                style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
                 df_ana = pd.DataFrame(final_list)
+                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Mod Skorlar")
+                style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
                 st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Detaylı Geçmiş Örnekler")
+                st.subheader("📚 Detaylı Örnekler")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
                         m_o = bulten.loc[row['idx']]
@@ -181,5 +216,5 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     st.markdown("---")
                     st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
                     for f in flips:
-                        st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz geri dönüş ihtimali!")
+                        st.warning(f"⚠️ **{f['m']}**: %{f['p']} sürpriz potansiyeli!")
             else: st.warning("Eşleşen örnek bulunamadı.")
