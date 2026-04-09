@@ -38,7 +38,7 @@ lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else BASKETBOL_LIGLERI
 for kat, ligler in lig_havuzu.items():
     with st.sidebar.expander(kat):
         for isim, kod in ligler.items():
-            if st.checkbox(isim, value=False, key=kod):
+            if st.sidebar.checkbox(isim, value=False, key=kod):
                 secili_kodlar.append(kod)
 
 # --- VERİ MOTORU (FUTBOL) ---
@@ -81,10 +81,12 @@ def bulten_cek(key, kodlar, hedef_tarih):
                 t = datetime.strptime(m['commence_time'], '%Y-%m-%dT%H:%M:%SZ') + timedelta(hours=3)
                 if t.date() == hedef_tarih:
                     o = m['bookmakers'][0]['markets'][0]['outcomes']
+                    # Hata düzelten next() yapısı
+                    h = next((x['price'] for x in o if x['name']==m['home_team']), 0)
+                    a = next((x['price'] for x in o if x['name']==m['away_team']), 0)
+                    b = next((x['price'] for x in o if x['name'].lower() == 'draw'), 0)
                     res.append({'lig': m['sport_title'], 'zaman': t, 'ev': m['home_team'], 'dep': m['away_team'], 
-                                'h': next(x['price'] for x in o if x['name']==m['home_team']),
-                                'a': next(x['price'] for x in o if x['name']==m['away_team']),
-                                'b': next(x['price'] for x in o if x['name']=='Draw' or x['name']=='draw', 0)})
+                                'h': h, 'b': b, 'a': a})
         except: continue
     return pd.DataFrame(res)
 
@@ -127,18 +129,16 @@ if API_KEY and secili_kodlar:
                             m_orig = bulten.loc[row['ID']]
                             b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
                             st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'COL_KRN', 'COL_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','COL_KRN':'Krn','COL_KRT':'Krt'}).head(10))
-                    if flips:
-                        st.markdown("---")
-                        st.subheader("🔥 HT/FT Sürpriz Radarı")
-                        for f in flips: st.warning(f"**{f['m']}**: Geçmiş örneklerin %{int(f['o']*100)} kadarı sürpriz bitmiş!")
+                else: st.warning("Eşleşen örnek bulunamadı.")
             else: st.warning("Maç bulunamadı.")
         else:
-            # BASKETBOL MANTIĞI (Özet Tablo)
+            # BASKETBOL GÖRÜNÜMÜ
             bulten_bsk = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             if not bulten_bsk.empty:
                 st.subheader(f"🏀 {secili_tarih} Tarihli Basketbol Bülteni")
-                st.dataframe(bulten_bsk[['lig', 'zaman', 'ev', 'dep', 'h', 'a']], use_container_width=True)
-                st.info("Basketbol için geçmiş veri eşleşmesi oran benzerliği üzerinden işleniyor.")
+                # Basketbol tablosunda beraberlik sütununu göstermiyoruz
+                st.dataframe(bulten_bsk[['lig', 'zaman', 'ev', 'dep', 'h', 'a']].rename(columns={'h':'Ev Oran','a':'Dep Oran'}), use_container_width=True)
+                st.info("Basketbol analizi için sistemimiz şu an oran bazlı listeleme yapmaktadır.")
             else: st.warning("Basketbol maçı bulunamadı.")
 else:
     st.info("Lig seç ve API Key gir.")
