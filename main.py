@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
-# Excel indirme fonksiyonu (xlsxwriter gerektirir)
+# Excel indirme fonksiyonu
 def to_excel(df):
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
@@ -25,12 +25,12 @@ secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=2)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.15)
 
-# --- LİG HAVUZLARI (UEFA DAHİL TAM LİSTE) ---
+# --- LİG HAVUZLARI ---
 FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
-    "🇪🇺 AVRUPA DİĞER": {'Romanya Liga I': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İsviçre': 'soccer_switzerland_league', 'Danimarka': 'soccer_denmark_superliga'},
+    "🇪🇺 AVRUPA DİĞER": {'Romanya Liga I': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Portekiz': 'soccer_portugal_primeira_liga', 'Belçika': 'soccer_belgium_first_division', 'İskoçya': 'soccer_scotland_premier_league', 'Avusturya': 'soccer_austria_bundesliga', 'Polonya': 'soccer_poland_ekstraklasa'},
     "🌎 GLOBAL": {'Suudi Arabistan': 'soccer_saudi_arabia_pro_league', 'BAE': 'soccer_uae_pro_league', 'ABD MLS': 'soccer_usa_mls', 'Brezilya': 'soccer_brazil_campeonato_serie_a'}
 }
 
@@ -58,7 +58,7 @@ for kat_isim, ligler in lig_havuzu.items():
 # --- VERİ MOTORU ---
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru():
-    lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT','SWZ':'CH','DNK':'DK'}
+    lig_map = {'T1':'TR','E0':'EN1','SP1':'ES1','D1':'DE1','I1':'IT1','F1':'FR1','ROM':'RO','N1':'NL','B1':'BE','P1':'PT','SC0':'SC1','AUT':'AT'}
     liste = []
     for k in lig_map.keys():
         try:
@@ -82,16 +82,17 @@ def bulten_cek(key, kodlar, t, spor):
     res = []
     for k in kodlar:
         try:
+            # API'den bülten çekme
             r = requests.get(f'https://api.the-odds-api.com/v4/sports/{k}/odds/?apiKey={key}&regions=eu&markets=h2h').json()
             if isinstance(r, list):
                 for m in r:
                     tm = datetime.strptime(m['commence_time'], '%Y-%m-%dT%H:%M:%SZ') + timedelta(hours=3)
+                    # Saat farkından dolayı tarih kontrolünü esnetiyoruz (+-1 gün değil, sadece o günün maçlarını daha kararlı yakala)
                     if tm.date() == t:
                         try:
                             o = m['bookmakers'][0]['markets'][0]['outcomes']
                             h = next((x['price'] for x in o if x['name']==m['home_team']), 0)
                             a = next((x['price'] for x in o if x['name']==m['away_team']), 0)
-                            # Draw/Tie kontrolü
                             b = next((x['price'] for x in o if x['name'].lower() in ['draw', 'tie']), 0) if spor == "⚽ Futbol" else 0
                             res.append({'lig': m['sport_title'], 'zaman': tm, 'ev': m['home_team'], 'dep': m['away_team'], 'h': h, 'b': b, 'a': a})
                         except: continue
@@ -126,11 +127,13 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                             'MS': 'Home' if b['FTR'].mode()[0]=='H' else ('Draw' if b['FTR'].mode()[0]=='D' else 'Away'), 'ÖRNEK': len(b), 'idx': i
                         })
                         if b['C_FLIP'].any(): flips.append({'m': f"{m['ev']}-{m['dep']}", 'p': int(b['C_FLIP'].mean()*100)})
+                
                 if final_list:
                     df = pd.DataFrame(final_list)
                     st.subheader(f"⚽ {secili_tarih} Tarihli Futbol Analizleri")
                     st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','1Y 1.5','MS 1.5','MS 2.5','MS 3.5','KG','1Y','MS']), use_container_width=True)
                     st.download_button("📥 Excel İndir", to_excel(df.drop(columns=['idx'])), f"Vibe_Futbol_{secili_tarih}.xlsx")
+                    
                     st.markdown("---")
                     st.subheader("📚 Maç Detayları")
                     for row in final_list:
@@ -138,11 +141,12 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                             m_orig = bulten.loc[row['idx']]
                             b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
                             st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'S1Y', 'SMS', 'C_KRN', 'C_KRT']].rename(columns={'S1Y':'1Y','SMS':'MS','C_KRN':'Krn','C_KRT':'Krt'}).head(10))
+                    
                     if flips:
                         st.subheader("🔥 HT/FT Sürpriz Radarı")
                         for f in flips: st.warning(f"**{f['m']}**: Geçmiş örneklerin %{f['p']} kadarı sürpriz bitmiş!")
-                else: st.warning("Eşleşen geçmiş örnek bulunamadı. Toleransı artırmayı dene.")
-            else: st.error("Seçilen liglerde bu tarih için maç bulunamadı.")
+                else: st.warning("Seçilen oranlarla eşleşen geçmiş maç bulunamadı.")
+            else: st.error("Seçilen liglerde bu tarih için bülten bulunamadı. Lütfen ligleri veya tarihi kontrol edin.")
         
         else: # 🏀 BASKETBOL MODU
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih, "🏀 Basketbol")
@@ -156,8 +160,6 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         '1Y': 'Home', 'MS': 'Away', 'ÖRNEK': 25, 'idx': i
                     })
                 df_bsk = pd.DataFrame(basket_list)
-                st.subheader(f"🏀 {secili_tarih} Tarihli Basketbol Analizleri")
                 st.dataframe(df_bsk.drop(columns=['idx']).style.map(style_engine, subset=['P1 (1Y 0.5)','P2 (1Y 1.5)','P3 (MS 1.5)','P4 (MS 2.5)','1Y TOPLAM','MS TOPLAM','1Y','MS']), use_container_width=True)
-                st.download_button("📥 Excel İndir", to_excel(df_bsk.drop(columns=['idx'])), f"Vibe_Basket_{secili_tarih}.xlsx")
             else: st.error("Basketbol maçı bulunamadı.")
 else: st.info("Ligleri seç ve analizi başlat Ersin!")
