@@ -91,7 +91,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ Lütfen API Key girin ve lig seçin.")
     else:
-        with st.spinner("📊 Sürpriz Analizleri ve Form Durumları Hesaplanıyor..."):
+        with st.spinner("📊 Veriler Hazırlanıyor..."):
             gecmis = futbol_veri_motoru()
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
@@ -117,7 +117,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     iy_skor = (b['HTHG'].fillna(0).astype(int).astype(str) + "-" + b['HTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     ms_skor = (b['FTHG'].fillna(0).astype(int).astype(str) + "-" + b['FTAG'].fillna(0).astype(int).astype(str)).mode()[0]
                     
-                    # HT/FT Sürpriz (1/2 - 2/1) Kontrolü
+                    # HT/FT Sürpriz Kontrolü
                     c_flip = ((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))
                     if c_flip.any():
                         flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(c_flip.mean()*100)})
@@ -136,18 +136,15 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     })
 
             if final_list:
-                df_ana = pd.DataFrame(final_list)
-                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Sürpriz Radarı")
+                # 1. BÖLÜM: ANA VIBE ANALİZİ
+                st.subheader(f"⚽ {secili_tarih} Vibe Analizleri & Mod Skorlar")
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V']
+                df_ana = pd.DataFrame(final_list)
                 st.dataframe(df_ana.drop(columns=['idx']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
-                if flips:
-                    st.markdown("---")
-                    st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
-                    for f in flips:
-                        st.warning(f"⚠️ **{f['m']}**: Geçmişte bu oranlarla %{f['p']} sürpriz geri dönüş (1/2 veya 2/1) yaşanmış!")
-
                 st.markdown("---")
+                
+                # 2. BÖLÜM: DETAYLI GEÇMİŞ ÖRNEKLER (EXPANDERS)
                 st.subheader("📚 Detaylı Geçmiş Örnekler")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
@@ -168,4 +165,11 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['Krt'] = (b_det.get('HY', 0).fillna(0) + b_det.get('AY', 0).fillna(0)).astype(int)
                         dt['H_Oran'] = b_det['B365H']; dt['B_Oran'] = b_det['B365D']; dt['A_Oran'] = b_det['B365A']
                         st.dataframe(dt.style.map(style_engine, subset=style_cols), use_container_width=True, hide_index=True)
+
+                # 3. BÖLÜM: SÜRPRİZ RADARI (EN ALTA ALINDI)
+                if flips:
+                    st.markdown("---")
+                    st.subheader("🔥 HT/FT Sürpriz Radarı (1/2 - 2/1)")
+                    for f in flips:
+                        st.warning(f"⚠️ **{f['m']}**: Geçmişte bu oranlarla %{f['p']} sürpriz geri dönüş (1/2 veya 2/1) yaşanmış!")
             else: st.warning("Eşleşen örnek bulunamadı.")
