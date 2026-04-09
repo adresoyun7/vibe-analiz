@@ -9,18 +9,16 @@ from datetime import datetime, timedelta
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
+# POISSON SKOR TAHMİN MOTORU
 def poisson_skor_tahmin(ev_lambda, dep_lambda):
-    # 0-5 gol arası olasılık matrisi oluşturur
+    if ev_lambda == 0 and dep_lambda == 0: return "0-0"
     max_goals = 6
     ev_prob = [poisson.pmf(i, ev_lambda) for i in range(max_goals)]
     dep_prob = [poisson.pmf(i, dep_lambda) for i in range(max_goals)]
-    
-    # En yüksek olasılıklı skoru bul
     m = np.outer(ev_prob, dep_prob)
     ev_skor, dep_skor = np.unravel_index(m.argmax(), m.shape)
     return f"{ev_skor}-{dep_skor}"
 
-# Excel indirme
 def to_excel(df):
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
@@ -43,7 +41,8 @@ FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
     "🇸🇦 ARAP LİGLERİ": {'Suudi Arabistan Pro Lig': 'soccer_saudi_arabia_pro_league', 'BAE Pro Lig': 'soccer_uae_pro_league'},
-    "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'}
+    "🇪🇺 AVRUPA MAJÖR": {'İngiltere': 'soccer_epl', 'İspanya': 'soccer_spain_la_liga', 'Almanya': 'soccer_germany_bundesliga', 'İtalya': 'soccer_italy_serie_a', 'Fransa': 'soccer_france_ligue_one'},
+    "🇪🇺 AVRUPA DİĞER": {'Romanya': 'soccer_romania_liga_1', 'Hollanda': 'soccer_netherlands_ere_divisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'Avusturya': 'soccer_austria_bundesliga', 'İskoçya': 'soccer_scotland_premier_league'}
 }
 
 lig_havuzu = FUTBOL_LIGLERI if "Futbol" in spor_turu else {}
@@ -75,11 +74,6 @@ def futbol_veri_motoru():
                 df = pd.read_csv(url)
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 temp = df[cols].dropna().copy()
-                ms_gol, iy_gol = (temp['FTHG'] + temp['FTAG']), (temp['HTHG'] + temp['FTAG'])
-                temp['C_1Y05'] = iy_gol > 0.5
-                temp['C_MS25'] = ms_gol > 2.5
-                temp['C_KG'] = (temp['FTHG'] > 0) & (temp['FTAG'] > 0)
-                temp['C_KRN'], temp['C_KRT'] = (temp['HC'] + temp['AC']), (temp['HY'] + temp['AY'])
                 temp['C_FLIP'] = ((temp['HTR'] == 'H') & (temp['FTR'] == 'A')) | ((temp['HTR'] == 'A') & (temp['FTR'] == 'H'))
                 temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
                 liste.append(temp)
@@ -124,35 +118,40 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))]
                 if len(b) >= min_ornek:
-                    # POISSON HESABI
-                    avg_ev = b['FTHG'].mean()
-                    avg_dep = b['FTAG'].mean()
-                    iy_ev_avg = b['HTHG'].mean()
-                    iy_dep_avg = b['HTAG'].mean()
-                    
+                    # POISSON VE ANALİZ
+                    avg_ev, avg_dep = b['FTHG'].mean(), b['FTAG'].mean()
+                    iy_ev_a, iy_dep_a = b['HTHG'].mean(), b['HTAG'].mean()
                     ms_skor = poisson_skor_tahmin(avg_ev, avg_dep)
-                    iy_skor = poisson_skor_tahmin(iy_ev_avg, iy_dep_avg)
-                    
-                    ms_ev, ms_dep = map(int, ms_skor.split('-'))
-                    iy_ev, iy_dep = map(int, iy_skor.split('-'))
+                    iy_skor = poisson_skor_tahmin(iy_ev_a, iy_dep_a)
+                    ms_e, ms_d = map(int, ms_skor.split('-'))
+                    iy_e, iy_d = map(int, iy_skor.split('-'))
                     
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'LİG': m['lig'], 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
-                        '1Y 0.5': 'Over' if (iy_ev + iy_dep) >= 1 else 'Under',
-                        'MS 2.5': 'Over' if (ms_ev + ms_dep) >= 3 else 'Under',
-                        'KG': 'Yes' if (ms_ev > 0 and ms_dep > 0) else 'No',
-                        '1Y SKOR (Poisson)': iy_skor, 'MS SKOR (Poisson)': ms_skor, 
-                        'KRN (ORT)': round(b['C_KRN'].mean(), 1), 'KRT (ORT)': round(b['C_KRT'].mean(), 1),
-                        '1Y': 'Home' if iy_ev > iy_dep else ('Draw' if iy_ev == iy_dep else 'Away'),
-                        'MS': 'Home' if ms_ev > ms_dep else ('Draw' if ms_ev == ms_dep else 'Away'),
+                        '1Y 0.5': 'Over' if (iy_e + iy_d) >= 1 else 'Under',
+                        'MS 1.5': 'Over' if (ms_e + ms_d) >= 2 else 'Under',
+                        'MS 2.5': 'Over' if (ms_e + ms_d) >= 3 else 'Under',
+                        'KG': 'Yes' if (ms_e > 0 and ms_d > 0) else 'No',
+                        '1Y SKOR': iy_skor, 'MS SKOR': ms_skor, 
+                        'KRN (ORT)': round((b['HC'] + b['AC']).mean(), 1), 'KRT (ORT)': round((b['HY'] + b['AY']).mean(), 1),
+                        '1Y': 'Home' if iy_e > iy_d else ('Draw' if iy_e == iy_d else 'Away'),
+                        'MS': 'Home' if ms_e > ms_dep else ('Draw' if ms_e == ms_dep else 'Away'),
                         'ÖRNEK': len(b), 'idx': i
                     })
                     if b['C_FLIP'].any(): flips.append({'m': f"{m['ev']} - {m['dep']}", 'p': int(b['C_FLIP'].mean()*100)})
             
             if final_list:
                 df = pd.DataFrame(final_list)
-                st.subheader(f"⚽ {secili_tarih} Tarihli Poisson Destekli Analizler")
-                st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
+                st.subheader(f"⚽ {secili_tarih} Tarihli Poisson Analizleri")
+                st.dataframe(df.drop(columns=['idx']).style.map(style_engine, subset=['1Y 0.5','MS 1.5','MS 2.5','KG','1Y','MS']), use_container_width=True)
+                
+                st.markdown("---")
+                st.subheader("📚 Maç Detayları ve Geçmiş Skorlar")
+                for row in final_list:
+                    with st.expander(f"👁️ {row['SAAT']} | {row['EV SAHİBİ']} - {row['DEPLASMAN']}"):
+                        m_orig = bulten.loc[row['idx']]
+                        b_det = gecmis[(gecmis['B365H'].between(m_orig['h']-TOLERANS, m_orig['h']+TOLERANS)) & (gecmis['B365D'].between(m_orig['b']-TOLERANS, m_orig['b']+TOLERANS)) & (gecmis['B365A'].between(m_orig['a']-TOLERANS, m_orig['a']+TOLERANS))]
+                        st.table(b_det[['Date', 'HomeTeam', 'AwayTeam', 'HTHG', 'HTAG', 'FTHG', 'FTAG']].head(15))
                 
                 if flips:
                     st.markdown("---")
