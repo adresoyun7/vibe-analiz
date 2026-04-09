@@ -14,7 +14,7 @@ st.title("⚽ Maksimum Kapsamlı Global Analiz Sistemi")
 st.sidebar.header("⚙️ Ayarlar")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 
-# --- LİG KATEGORİLERİ (SENİN LİSTENE GÖRE) ---
+# --- LİG KATEGORİLERİ ---
 Dunya_Ligleri = {
     "🇹🇷 TÜRKİYE": {
         'Süper Lig': 'soccer_turkey_super_league',
@@ -62,12 +62,11 @@ st.sidebar.markdown("### 🏟️ Lig Seçimi")
 for kategori, ligler in Dunya_Ligleri.items():
     with st.sidebar.expander(kategori):
         for isim, kod in ligler.items():
-            if st.checkbox(isim, value=(kategori == "🇹🇷 TÜRKİYE")):
+            if st.sidebar.checkbox(isim, value=(kategori == "🇹🇷 TÜRKİYE"), key=kod):
                 secili_kodlar.append(kod)
 
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.05, 0.45, 0.20)
 
-# --- 1. VERİ MOTORU (GLOBAL HAVUZ) ---
 @st.cache_data(ttl=86400)
 def ultra_global_veri_yukle():
     lig_sozlugu = {
@@ -120,7 +119,6 @@ def style_vibe(val):
     if val == 'Draw': return 'background-color: #f39c12; color: white;'
     return ''
 
-# --- 4. ANA PROGRAM ---
 if API_KEY and secili_kodlar:
     if st.button("🚀 SEÇİLİ TÜM LİGLERİ TARA"):
         gecmis = ultra_global_veri_yukle()
@@ -159,7 +157,7 @@ if API_KEY and secili_kodlar:
 
                 if surpriz_list:
                     st.markdown("---")
-                    st.subheader("🔥 HT/FT Sürpriz Dedektörü")
+                    st.subheader("🔥 HT/FT SÜPRİZ ANALİZİ")
                     for s in surpriz_list:
                         st.warning(f"**{s['m']}**: {s['t']} benzer maçın **{s['s']}** tanesi ters döndü!")
             else: st.warning("Benzer maç bulunamadı.")
