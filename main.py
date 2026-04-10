@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
+# Senin sevdiğin o renk motoru
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
@@ -20,14 +21,13 @@ def style_engine(val):
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v4.6")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v4.7")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
 
 st.sidebar.markdown("---")
 yillar = st.sidebar.multiselect("Sezonlar", options=['2122', '2223', '2324', '2425', '2526'], default=['2324', '2425', '2526'])
-min_ornek = st.sidebar.number_input("Min. Örnek Sayısı", min_value=1, value=1)
 TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
 
 FUTBOL_LIGLERI = {
@@ -84,9 +84,9 @@ def bulten_cek(key, kodlar, t):
 
 if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Key girin ve lig seçin.")
+        st.error("⚠️ Key ve Lig seçimi yapın.")
     else:
-        with st.spinner("📊 Veriler işleniyor..."):
+        with st.spinner("📊 Vibe Hesaplanıyor..."):
             gecmis = futbol_veri_motoru(yillar)
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
@@ -95,7 +95,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))].copy()
                 
-                if len(b) >= min_ornek:
+                if len(b) >= 1:
                     for col in ['FTHG','FTAG','HTHG','HTAG']: b[col] = b[col].fillna(0)
                     iy05 = (b['HTHG'] + b['HTAG'] >= 1).mean()
                     ms25 = (b['FTHG'] + b['FTAG'] >= 3).mean()
@@ -112,8 +112,6 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'MS_25': f"Over ({int(ms25*100)}%)",
                         'MS_35': f"Over ({int((b['FTHG']+b['FTAG']>=4).mean()*100)}%)",
                         'KG_V': f"Yes ({int(kg*100)}%)",
-                        '1Y_SKOR': (b['HTHG'].astype(int).astype(str)+"-"+b['HTAG'].astype(int).astype(str)).mode()[0],
-                        'MS_SKOR': (b['FTHG'].astype(int).astype(str)+"-"+b['FTAG'].astype(int).astype(str)).mode()[0],
                         '1Y_V': f"{iy_mod.replace('H','Ev').replace('A','Dep').replace('D','Ber')} ({int(iy_p*100)}%)",
                         'MS_V': f"{ms_mod.replace('H','Ev').replace('A','Dep').replace('D','Ber')} ({int(ms_p*100)}%)",
                         'ÖRNEK': len(b), 'idx': i, 'iy05_r': iy05, 'ms25_r': ms25, 'kg_r': kg, 'ms_m_r': ms_mod
@@ -128,10 +126,10 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
                         # --- ANALİZ ÖZETİ ---
-                        st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V']} | "
+                        st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V'].split(' ')[0]} | "
                                 f"🥈 **KOMBO:** {row['MS_V'].split(' ')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'}")
                         
-                        # --- GENİŞ DETAYLI TABLO ---
+                        # --- GENİŞ VE RENKLİ DETAYLI TABLO ---
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         
