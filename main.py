@@ -6,23 +6,28 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Pro Expert v5.6", layout="wide")
+st.set_page_config(page_title="Vibe Pro Expert v5.7", layout="wide")
 
-# Renk Motoru - Takım isimlerini (Everton vb.) boyamaması için logic güncellendi
+# Akıllı Renk Motoru - Under artık kesinlikle kırmızı!
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
-    # Sadece tahmin hücrelerini boya
+    # Sadece tahmin ve istatistik içeren hücreleri boya
     if any(x in val_str for x in ['Over', 'Yes', '1/1', '2/2', '1/2', '2/1']) or val_str in ['Ev', 'Dep']:
         if 'Ev' in val_str: return 'background-color: #27ae60; color: white;'
         if 'Dep' in val_str: return 'background-color: #c0392b; color: white;'
         return 'background-color: #27ae60; color: white;' if 'Over' in val_str or 'Yes' in val_str else 'background-color: #c0392b; color: white;'
+    
+    # Under ve No durumları için kesin kırmızı kuralı
+    if 'Under' in val_str or 'No' in val_str:
+        return 'background-color: #c0392b; color: white;'
+        
     if 'Beraberlik' in val_str or 'X/' in val_str: 
         return 'background-color: #f39c12; color: white;'
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.6")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.7")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -35,7 +40,7 @@ TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
 FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
-    "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
+    "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İitalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
     "⚽ AVRUPA DİĞER": {'Hollanda': 'soccer_netherlands_eredivisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'İskoçya': 'soccer_scotland_premiership'}
 }
 
@@ -123,7 +128,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                # Sadece Tahmin sütunlarını boya (Everton hatası bu sayede çözüldü)
+                # Stil subsetini kesinleştir
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
                 st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
