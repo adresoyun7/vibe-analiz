@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Vibe Analiz Pro Ultra", layout="wide")
 
+# Renk Motoru: Over/Under, Yes/No ve HT/FT için tam destek
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
-    # HT/FT ve Skor renklendirmeleri
     if any(x in val_str for x in ['Over', 'Yes', 'Home', '1/1', '2/2', '1/2', '2/1']): 
         return 'background-color: #27ae60; color: white;'
     if any(x in val_str for x in ['Under', 'No', 'Away']): 
@@ -21,7 +21,7 @@ def style_engine(val):
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v4.8")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v4.9")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -56,7 +56,7 @@ def futbol_veri_motoru(sezonlar):
             try:
                 url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
                 df = pd.read_csv(url)
-                cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC']
+                cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG','FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY']
                 df = df[df.columns.intersection(cols)]
                 temp = df.dropna(subset=['B365H','B365D','B365A']).copy()
                 temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
@@ -85,7 +85,7 @@ def bulten_cek(key, kodlar, t):
 
 if st.button("🚀 ANALİZİ BAŞLAT"):
     if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Key girin ve yan menüden ligleri seçin.")
+        st.error("⚠️ Key ve Lig seçin.")
     else:
         with st.spinner("📊 Vibe Hesaplanıyor..."):
             gecmis = futbol_veri_motoru(yillar)
@@ -93,29 +93,22 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
 
         if not bulten.empty:
             st.subheader(f"⚽ {secili_tarih} Vibe Ana Bülten")
-            
             final_list = []
             for i, m in bulten.iterrows():
                 b = gecmis[(gecmis['B365H'].between(m['h']-TOLERANS, m['h']+TOLERANS)) & (gecmis['B365D'].between(m['b']-TOLERANS, m['b']+TOLERANS)) & (gecmis['B365A'].between(m['a']-TOLERANS, m['a']+TOLERANS))].copy()
-                
                 if len(b) >= min_ornek:
                     for col in ['FTHG','FTAG','HTHG','HTAG']: b[col] = b[col].fillna(0)
-                    iy05 = (b['HTHG'] + b['HTAG'] >= 1).mean()
-                    ms25 = (b['FTHG'] + b['FTAG'] >= 3).mean()
-                    kg = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
-                    ms_mod = b['FTR'].mode()[0]
-                    
+                    iy05_p = (b['HTHG'] + b['HTAG'] >= 1).mean(); ms25_p = (b['FTHG'] + b['FTAG'] >= 3).mean(); kg_p = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
+                    ms_mod = b['FTR'].mode()[0]; iy_mod = b['HTR'].mode()[0]
+                    ms_p = b['FTR'].value_counts(normalize=True).get(ms_mod, 0); iy_p = b['HTR'].value_counts(normalize=True).get(iy_mod, 0)
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
-                        '1Y_05': f"Over ({int(iy05*100)}%)",
-                        'İY_15': f"Over ({int((b['HTHG']+b['HTAG']>=2).mean()*100)}%)",
-                        'MS_15': f"Over ({int((b['FTHG']+b['FTAG']>=2).mean()*100)}%)",
-                        'MS_25': f"Over ({int(ms25*100)}%)",
-                        'MS_35': f"Over ({int((b['FTHG']+b['FTAG']>=4).mean()*100)}%)",
-                        'KG_V': f"Yes ({int(kg*100)}%)",
-                        '1Y_V': b['HTR'].mode()[0].replace('H','Ev').replace('A','Dep').replace('D','Ber'),
-                        'MS_V': ms_mod.replace('H','Ev').replace('A','Dep').replace('D','Ber'),
-                        'ÖRNEK': len(b), 'idx': i, 'iy05_r': iy05, 'ms25_r': ms25, 'kg_r': kg, 'ms_m_r': ms_mod
+                        '1Y_05': f"Over ({int(iy05_p*100)}%)", 'İY_15': f"Over ({int((b['HTHG']+b['HTAG']>=2).mean()*100)}%)",
+                        'MS_15': f"Over ({int((b['FTHG']+b['FTAG']>=2).mean()*100)}%)", 'MS_25': f"Over ({int(ms25_p*100)}%)",
+                        'MS_35': f"Over ({int((b['FTHG']+b['FTAG']>=4).mean()*100)}%)", 'KG_V': f"Yes ({int(kg_p*100)}%)",
+                        '1Y_V': f"{iy_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(iy_p*100)}%)",
+                        'MS_V': f"{ms_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(ms_p*100)}%)",
+                        'ÖRNEK': len(b), 'idx': i, 'iy05_r': iy05_p, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod
                     })
 
             if final_list:
@@ -123,18 +116,9 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 st.dataframe(df_ana.drop(columns=['idx','iy05_r','ms25_r','kg_r','ms_m_r']).style.map(style_engine), use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📚 Detaylı Geçmiş Maçlar & HT/FT Analizi")
+                st.subheader("📚 Detaylı Analiz & HT/FT Geçmişi")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
-                        # --- ANALİZ ÖZETİ ---
-                        st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V']} | "
-                                f"🥈 **KOMBO:** {row['MS_V'].split(' ')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'} | "
-                                f"🔥 **HT/FT:** {(gecmis.loc[gecmis.index.isin(b.index), 'HTR'] + '/' + gecmis.loc[gecmis.index.isin(b.index), 'FTR']).mode()[0].replace('H','1').replace('A','2').replace('D','X')}")
-                        
-                        if row['ms25_r'] > 0.65 and row['kg_r'] < 0.50:
-                            st.warning("⚠️ TEK TARAFLI MAÇ RİSKİ (3-0 vb.)")
-
-                        # --- DETAYLI TABLO (ESKİ GENİŞ HALİ) ---
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         
@@ -147,11 +131,10 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         dt['MS_25'] = (b_det['FTHG']+b_det['FTAG']>=3).map({True:'Over', False:'Under'})
                         dt['KG'] = ((b_det['FTHG']>0)&(b_det['FTAG']>0)).map({True:'Yes', False:'No'})
                         dt['HT/FT'] = b_det['HTR'].replace({'H':'1','A':'2','D':'X'}) + "/" + b_det['FTR'].replace({'H':'1','A':'2','D':'X'})
-                        dt['Krn'] = (b_det.get('HC',0)+b_det.get('AC',0)).astype(int)
+                        dt['Krn'] = (b_det.get('HC',0)+b_det.get('AC',0)).astype(int); dt['Krt'] = (b_det.get('HY',0)+b_det.get('AY',0)).astype(int)
                         
                         st.dataframe(dt.style.map(style_engine, subset=['1Y_05','MS_25','KG','HT/FT']), use_container_width=True, hide_index=True)
 
-                        # --- SÜRPRİZ RADARI ---
                         flip_p = ((b_det['HTR']=='H')&(b_det['FTR']=='A')|(b_det['HTR']=='A')&(b_det['FTR']=='H')).mean()
                         if flip_p >= 0.10:
-                            st.error(f"🔥 SÜRPRİZ RADARI: Bu maçta %{int(flip_p*100)} oranında HT/FT sürprizi (1/2-2/1) saptandı!")
+                            st.error(f"🔥 SÜRPRİZ RADARI: Bu oranda %{int(flip_p*100)} ihtimalle HT/FT sürprizi (1/2-2/1) saptandı!")
