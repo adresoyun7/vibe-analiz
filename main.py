@@ -6,28 +6,29 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Pro Expert v5.7", layout="wide")
+st.set_page_config(page_title="Vibe Pro Expert v5.8", layout="wide")
 
-# Akıllı Renk Motoru - Under artık kesinlikle kırmızı!
+# Akıllı Renk Motoru - İçerik eşleşmesine göre tam boyama
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
-    # Sadece tahmin ve istatistik içeren hücreleri boya
-    if any(x in val_str for x in ['Over', 'Yes', '1/1', '2/2', '1/2', '2/1']) or val_str in ['Ev', 'Dep']:
-        if 'Ev' in val_str: return 'background-color: #27ae60; color: white;'
-        if 'Dep' in val_str: return 'background-color: #c0392b; color: white;'
-        return 'background-color: #27ae60; color: white;' if 'Over' in val_str or 'Yes' in val_str else 'background-color: #c0392b; color: white;'
     
-    # Under ve No durumları için kesin kırmızı kuralı
-    if 'Under' in val_str or 'No' in val_str:
+    # 1. Ev Sahibi ve Olumlu Durumlar (Yeşil)
+    if any(x in val_str for x in ['Over', 'Yes', '1/1', '2/2', '1/2', '2/1']) or 'Ev (' in val_str or val_str == 'Ev':
+        return 'background-color: #27ae60; color: white;'
+    
+    # 2. Deplasman ve Olumsuz Durumlar (Kırmızı)
+    if 'Under' in val_str or 'No' in val_str or 'Dep (' in val_str or val_str == 'Dep':
         return 'background-color: #c0392b; color: white;'
         
+    # 3. Beraberlik Durumları (Turuncu)
     if 'Beraberlik' in val_str or 'X/' in val_str: 
         return 'background-color: #f39c12; color: white;'
+    
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.7")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.8")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -40,7 +41,7 @@ TOLERANS = st.sidebar.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
 FUTBOL_LIGLERI = {
     "🏆 AVRUPA KUPALARI": {'Şampiyonlar Ligi': 'soccer_uefa_champs_league', 'Avrupa Ligi': 'soccer_uefa_europa_league', 'Konferans Ligi': 'soccer_uefa_europa_conference_league'},
     "🇹🇷 TÜRKİYE": {'Süper Lig': 'soccer_turkey_super_league', '1. Lig': 'soccer_turkey_pTT_1_lig'},
-    "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İitalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
+    "🇪🇺 AVRUPA MAJÖR": {'İngiltere Premier': 'soccer_epl', 'İspanya La Liga': 'soccer_spain_la_liga', 'Almanya Bundesliga': 'soccer_germany_bundesliga', 'İtalya Serie A': 'soccer_italy_serie_a', 'Fransa Ligue 1': 'soccer_france_ligue_one'},
     "⚽ AVRUPA DİĞER": {'Hollanda': 'soccer_netherlands_eredivisie', 'Belçika': 'soccer_belgium_first_division', 'Portekiz': 'soccer_portugal_primeira_liga', 'İskoçya': 'soccer_scotland_premiership'}
 }
 
@@ -128,16 +129,14 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                # Stil subsetini kesinleştir
+                # Stil subsetini kesinleştir (Takım isimlerini boyama!)
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
                 st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
-                        # --- ORANLI VİBE RAPORU ---
                         ana_oran = row['h_o'] if row['ms_m_r'] == 'H' else row['a_o'] if row['ms_m_r'] == 'A' else row['b_o']
-                        
                         st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V'].split(' ')[0]} (Oran: {ana_oran:.2f}) | "
                                 f"🥈 **KOMBO:** {row['MS_V'].split(' ')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'}")
 
