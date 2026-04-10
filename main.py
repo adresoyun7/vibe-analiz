@@ -6,13 +6,12 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Pro Expert v6.1", layout="wide")
+st.set_page_config(page_title="Vibe Pro Expert v6.2", layout="wide")
 
 # Akıllı Renk Motoru
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
-    # Sadece tahmin sütunlarını boya (Takım isimleri boyanmaz)
     if any(x in val_str for x in ['Over', 'Yes', '1/1', '2/2', '1/2', '2/1']) or 'Ev (' in val_str or val_str == 'Ev':
         return 'background-color: #27ae60; color: white;'
     if 'Under' in val_str or 'No' in val_str or 'Dep (' in val_str or val_str == 'Dep':
@@ -22,7 +21,7 @@ def style_engine(val):
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v6.1")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v6.2")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -108,45 +107,57 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     ms_mod = b['FTR'].mode()[0]; iy_mod = b['HTR'].mode()[0]
                     ms_p = b['FTR'].value_counts(normalize=True).get(ms_mod, 0); iy_p = b['HTR'].value_counts(normalize=True).get(iy_mod, 0)
                     
-                    # Sadeleştirilmiş Format
-                    iy_res = "Ev" if iy_mod == 'H' else "Dep" if iy_mod == 'A' else "Beraberlik"
-                    ms_res = "Ev" if ms_mod == 'H' else "Dep" if ms_mod == 'A' else "Beraberlik"
-
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y_05': get_status(iy05_p), 'İY_15': get_status((b['HTHG']+b['HTAG']>=2).mean()),
                         'MS_15': get_status((b['FTHG']+b['FTAG']>=2).mean()), 'MS_25': get_status(ms25_p),
                         'MS_35': get_status((b['FTHG']+b['FTAG']>=4).mean()), 'KG_V': f"Yes ({int(kg_p*100)}%)" if kg_p >= 0.5 else f"No ({int((1-kg_p)*100)}%)",
-                        '1Y_V': f"{iy_res} ({int(iy_p*100)}%)",
-                        'MS_V': f"{ms_res} ({int(ms_p*100)}%)",
-                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod, 'h_o': m['h'], 'a_o': m['a'], 'b_o': m['b']
+                        '1Y_V': f"{iy_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(iy_p*100)}%)",
+                        'MS_V': f"{ms_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(ms_p*100)}%)",
+                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod, 'iy05_r': iy05_p, 'h_o': m['h'], 'a_o': m['a'], 'b_o': m['b']
                     })
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
-                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o']).style.map(style_engine, subset=style_cols), use_container_width=True)
+                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o', 'iy05_r']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
-                        # --- ORANLI VİBE RAPORU ---
-                        ana_oran = row['h_o'] if row['ms_m_r'] == 'H' else row['a_o'] if row['ms_m_r'] == 'A' else row['b_o']
+                        # --- VERİ HAZIRLIĞI ---
+                        b_det = gecmis[(gecmis['B365H'].between(row['h_o']-TOLERANS, row['h_o']+TOLERANS)) & (gecmis['B365D'].between(row['b_o']-TOLERANS, row['b_o']+TOLERANS)) & (gecmis['B365A'].between(row['a_o']-TOLERANS, row['a_o']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         
+                        ana_oran = row['h_o'] if row['ms_m_r'] == 'H' else row['a_o'] if row['ms_m_r'] == 'A' else row['b_o']
+                        htft_series = (b_det['HTR'] + "/" + b_det['FTR']).replace({'H':'1','A':'2','D':'X'})
+                        htft_mod = htft_series.mode()[0]
+                        htft_p = int(htft_series.value_counts(normalize=True).get(htft_mod, 0) * 100)
+                        
+                        if row['ms25_r'] > 0.65:
+                            ana_t = '2.5 ÜST'
+                            ana_p = int(row['ms25_r'] * 100)
+                        elif row['kg_r'] > 0.6:
+                            ana_t = 'KG VAR'
+                            ana_p = int(row['kg_r'] * 100)
+                        else:
+                            ana_t = f"MS {row['ms_m_r'].replace('H','1').replace('A','2').replace('D','X')}"
+                            ana_p = int(b_det['FTR'].value_counts(normalize=True).get(row['ms_m_r'], 0) * 100)
+
+                        # --- YENİ NESİL VİBE RAPORU ---
                         st.markdown(f"""
                         <div style="background-color: #1e272e; padding: 15px; border-radius: 10px; border-left: 8px solid #27ae60; margin-bottom: 20px;">
                             <h4 style="color: white; margin-top: 0; margin-bottom: 10px;">🎯 VİBE ANALİZ RAPORU</h4>
-                            <p style="font-size: 16px; margin: 5px 0; color: white;">🎯 <b>ANA TERCİH :</b> <span style="color: #27ae60;">{'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V'].split(' (')[0]}</span> <span style="color: #888;">({ana_oran:.2f})</span></p>
+                            <p style="font-size: 16px; margin: 5px 0; color: white;">🎯 <b>ANA TERCİH :</b> <span style="color: #27ae60;">{ana_t}</span> <span style="color: #f1c40f;">(%{ana_p})</span> <span style="color: #888;">({ana_oran:.2f})</span></p>
+                            <p style="font-size: 16px; margin: 5px 0; color: white;">🥈 <b>HT/FT TAHMİN :</b> <span style="color: #3498db;">{htft_mod}</span> <span style="color: #f1c40f;">(%{htft_p})</span></p>
                             <p style="font-size: 16px; margin: 5px 0; color: white;">🥈 <b>KOMBO :</b> <span style="color: #f39c12;">{row['MS_V'].split(' (')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'}</span></p>
                         </div>
                         """, unsafe_allow_html=True)
 
-                        b_det = gecmis[(gecmis['B365H'].between(row['h_o']-TOLERANS, row['h_o']+TOLERANS)) & (gecmis['B365D'].between(row['b_o']-TOLERANS, row['b_o']+TOLERANS)) & (gecmis['B365A'].between(row['a_o']-TOLERANS, row['a_o']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         dt = pd.DataFrame()
                         dt['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y'); dt['Maç'] = b_det['HomeTeam'] + "-" + b_det['AwayTeam']
                         dt['İY'] = b_det['HTHG'].astype(int).astype(str)+"-"+b_det['HTAG'].astype(int).astype(str); dt['MS'] = b_det['FTHG'].astype(int).astype(str)+"-"+b_det['FTAG'].astype(int).astype(str)
                         dt['1Y_05'] = (b_det['HTHG']+b_det['HTAG']>=1).map({True:'Over', False:'Under'}); dt['MS_25'] = (b_det['FTHG']+b_det['FTAG']>=3).map({True:'Over', False:'Under'})
-                        dt['KG'] = ((b_det['FTHG']>0)&(b_det['FTAG']>0)).map({True:'Yes', False:'No'}); dt['HT/FT'] = b_det['HTR'].replace({'H':'1','A':'2','D':'X'}) + "/" + b_det['FTR'].replace({'H':'1','A':'2','D':'X'})
+                        dt['KG'] = ((b_det['FTHG']>0)&(b_det['FTAG']>0)).map({True:'Yes', False:'No'}); dt['HT/FT'] = htft_series
                         dt['Krn'] = (b_det.get('HC',0)+b_det.get('AC',0)).astype(int); dt['Krt'] = (b_det.get('HY',0)+b_det.get('AY',0)).astype(int)
                         
                         st.dataframe(dt.style.map(style_engine, subset=['1Y_05','MS_25','KG','HT/FT']), use_container_width=True, hide_index=True)
