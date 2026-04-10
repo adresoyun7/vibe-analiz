@@ -6,22 +6,23 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz Pro Expert v5.3", layout="wide")
+st.set_page_config(page_title="Vibe Pro Expert v5.6", layout="wide")
 
-# Renk Motoru
+# Renk Motoru - Takım isimlerini (Everton vb.) boyamaması için logic güncellendi
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
-    if any(x in val_str for x in ['Over', 'Yes', 'Home', 'Ev', '1/1', '2/2', '1/2', '2/1']): 
-        return 'background-color: #27ae60; color: white;'
-    if any(x in val_str for x in ['Under', 'No', 'Away', 'Dep']): 
-        return 'background-color: #c0392b; color: white;'
-    if any(x in val_str for x in ['Draw', 'Tie', 'Beraberlik', 'X/']): 
+    # Sadece tahmin hücrelerini boya
+    if any(x in val_str for x in ['Over', 'Yes', '1/1', '2/2', '1/2', '2/1']) or val_str in ['Ev', 'Dep']:
+        if 'Ev' in val_str: return 'background-color: #27ae60; color: white;'
+        if 'Dep' in val_str: return 'background-color: #c0392b; color: white;'
+        return 'background-color: #27ae60; color: white;' if 'Over' in val_str or 'Yes' in val_str else 'background-color: #c0392b; color: white;'
+    if 'Beraberlik' in val_str or 'X/' in val_str: 
         return 'background-color: #f39c12; color: white;'
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.3")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.6")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -107,7 +108,6 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     ms_mod = b['FTR'].mode()[0]; iy_mod = b['HTR'].mode()[0]
                     ms_p = b['FTR'].value_counts(normalize=True).get(ms_mod, 0); iy_p = b['HTR'].value_counts(normalize=True).get(iy_mod, 0)
                     
-                    # Tahmin formatını düzeltme (H=Ev, A=Dep, D=Beraberlik)
                     iy_pred = "Ev" if iy_mod == 'H' else "Dep" if iy_mod == 'A' else "Beraberlik"
                     ms_pred = "Ev" if ms_mod == 'H' else "Dep" if ms_mod == 'A' else "Beraberlik"
 
@@ -118,17 +118,22 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         'MS_35': get_status((b['FTHG']+b['FTAG']>=4).mean()), 'KG_V': f"Yes ({int(kg_p*100)}%)" if kg_p >= 0.5 else f"No ({int((1-kg_p)*100)}%)",
                         '1Y_V': f"{iy_pred} ({int(iy_p*100)}%)",
                         'MS_V': f"{ms_pred} ({int(ms_p*100)}%)",
-                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod, 'iy05_r': iy05_p
+                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod, 'h_o': m['h'], 'a_o': m['a'], 'b_o': m['b']
                     })
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','iy05_r']).style.map(style_engine), use_container_width=True)
+                # Sadece Tahmin sütunlarını boya (Everton hatası bu sayede çözüldü)
+                style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
+                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
-                        st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V'].split(' ')[0]} | "
+                        # --- ORANLI VİBE RAPORU ---
+                        ana_oran = row['h_o'] if row['ms_m_r'] == 'H' else row['a_o'] if row['ms_m_r'] == 'A' else row['b_o']
+                        
+                        st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V'].split(' ')[0]} (Oran: {ana_oran:.2f}) | "
                                 f"🥈 **KOMBO:** {row['MS_V'].split(' ')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'}")
 
                         m_o = bulten.loc[row['idx']]
