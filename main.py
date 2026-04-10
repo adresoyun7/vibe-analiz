@@ -6,13 +6,13 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Pro Expert v5.4", layout="wide")
+st.set_page_config(page_title="Vibe Pro Expert v5.5", layout="wide")
 
-# Akıllı Renk Motoru - Takım isimlerini boyamaması için logic güncellendi
+# Akıllı Renk Motoru - Takım isimlerini (Everton vb.) kesinlikle boyamaz
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
-    # Sadece tahmin ve istatistik içeren hücreleri boya (Takım isimlerini pas geç)
+    # Sadece tahmin, ihtimal ve HT/FT içeren hücreleri boya
     if any(x in val_str for x in ['Over', 'Yes', '1/1', '2/2', '1/2', '2/1']) or val_str in ['Ev', 'Dep']:
         if 'Ev' in val_str: return 'background-color: #27ae60; color: white;'
         if 'Dep' in val_str: return 'background-color: #c0392b; color: white;'
@@ -22,7 +22,7 @@ def style_engine(val):
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.4")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.5")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -120,7 +120,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                # Sadece Tahmin sütunlarına stil uygula (Takım isimlerini koru)
+                # Sadece Tahmin sütunlarını boya
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
                 st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
@@ -128,13 +128,15 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
                         # --- ORANLI VİBE RAPORU ---
-                        ana_oran = row['h_o'] if row['ms_m_r'] == 'H' else row['a_o'] if row['ms_m_r'] == 'A' else row['b_o']
-                        st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V'].split(' ')[0]} (Oran: {ana_oran:.2f}) | "
-                                f"🥈 **KOMBO:** {row['MS_V'].split(' ')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'}")
-
                         m_o = bulten.loc[row['idx']]
-                        b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
+                        ana_oran = row['h_o'] if row['ms_m_r'] == 'H' else row['a_o'] if row['ms_m_r'] == 'A' else row['b_o']
+                        # Ev KG Var için tahmini oran (API'den KG Var oranını alamıyorsak bileşik oran tahmini)
+                        kombo_oran = (ana_oran * 1.5) if row['kg_r'] > 0.5 else (ana_oran * 2.1)
                         
+                        st.info(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V'].split(' ')[0]} (Oran: {ana_oran:.2f}) | "
+                                f"🥈 **KOMBO:** {row['MS_V'].split(' ')[0]} & KG {'VAR' if row['kg_r'] > 0.55 else 'YOK'} (Tahmini Oran: {kombo_oran:.2f})")
+
+                        b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         dt = pd.DataFrame()
                         dt['Tarih'] = b_det['Date'].dt.strftime('%d.%m.%Y')
                         dt['Maç'] = b_det['HomeTeam'] + "-" + b_det['AwayTeam']
