@@ -6,25 +6,23 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Pro Expert v6.0", layout="wide")
+st.set_page_config(page_title="Vibe Pro Expert v6.1", layout="wide")
 
 # Akıllı Renk Motoru
 def style_engine(val):
     if val is None: return ''
     val_str = str(val)
-    # 1. Ev Sahibi ve Olumlu Durumlar (Yeşil)
+    # Sadece tahmin sütunlarını boya (Takım isimleri boyanmaz)
     if any(x in val_str for x in ['Over', 'Yes', '1/1', '2/2', '1/2', '2/1']) or 'Ev (' in val_str or val_str == 'Ev':
         return 'background-color: #27ae60; color: white;'
-    # 2. Deplasman ve Olumsuz Durumlar (Kırmızı)
     if 'Under' in val_str or 'No' in val_str or 'Dep (' in val_str or val_str == 'Dep':
         return 'background-color: #c0392b; color: white;'
-    # 3. Beraberlik Durumları (Turuncu)
     if 'Beraberlik' in val_str or 'X/' in val_str: 
         return 'background-color: #f39c12; color: white;'
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v6.0")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v6.1")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -110,9 +108,9 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     ms_mod = b['FTR'].mode()[0]; iy_mod = b['HTR'].mode()[0]
                     ms_p = b['FTR'].value_counts(normalize=True).get(ms_mod, 0); iy_p = b['HTR'].value_counts(normalize=True).get(iy_mod, 0)
                     
-                    # --- DEPLASMAN İSMİ ONARIMI ---
-                    iy_res = "Ev" if iy_mod == 'H' else f"Dep ({m['dep']})" if iy_mod == 'A' else "Beraberlik"
-                    ms_res = "Ev" if ms_mod == 'H' else f"Dep ({m['dep']})" if ms_mod == 'A' else "Beraberlik"
+                    # Sadeleştirilmiş Format
+                    iy_res = "Ev" if iy_mod == 'H' else "Dep" if iy_mod == 'A' else "Beraberlik"
+                    ms_res = "Ev" if ms_mod == 'H' else "Dep" if ms_mod == 'A' else "Beraberlik"
 
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
