@@ -6,7 +6,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Analiz Pro Expert v5.0", layout="wide")
+st.set_page_config(page_title="Vibe Analiz Pro Expert v5.1", layout="wide")
 
 # Akıllı Renk Motoru: Over/Yes = Yeşil, Under/No = Kırmızı, Draw = Turuncu
 def style_engine(val):
@@ -21,7 +21,7 @@ def style_engine(val):
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.0")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v5.1")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -99,33 +99,43 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                 if len(b) >= min_ornek:
                     for col in ['FTHG','FTAG','HTHG','HTAG']: b[col] = b[col].fillna(0)
                     
-                    # Dinamik Mantık Fonksiyonu
                     def get_status(prob, label_over="Over", label_under="Under"):
-                        return f"{label_over} ({int(prob*100)}%)" if prob >= 0.50 else f"{label_under} ({int((1-prob)*100)}%)"
+                        fire = " 🔥" if prob >= 0.75 or prob <= 0.25 else ""
+                        return f"{label_over} ({int(prob*100)}%){fire}" if prob >= 0.50 else f"{label_under} ({int((1-prob)*100)}%){fire}"
 
                     iy05_p = (b['HTHG'] + b['HTAG'] >= 1).mean(); ms25_p = (b['FTHG'] + b['FTAG'] >= 3).mean(); kg_p = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
                     ms_mod = b['FTR'].mode()[0]; iy_mod = b['HTR'].mode()[0]
+                    ms_p = b['FTR'].value_counts(normalize=True).get(ms_mod, 0)
                     
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
-                        '1Y_05': get_status(iy05_p),
-                        'İY_15': get_status((b['HTHG']+b['HTAG']>=2).mean()),
-                        'MS_15': get_status((b['FTHG']+b['FTAG']>=2).mean()),
-                        'MS_25': get_status(ms25_p),
+                        '1Y_05': get_status(iy05_p), 'İY_15': get_status((b['HTHG']+b['HTAG']>=2).mean()),
+                        'MS_15': get_status((b['FTHG']+b['FTAG']>=2).mean()), 'MS_25': get_status(ms25_p),
                         'MS_35': get_status((b['FTHG']+b['FTAG']>=4).mean()),
                         'KG_V': f"Yes ({int(kg_p*100)}%)" if kg_p >= 0.5 else f"No ({int((1-kg_p)*100)}%)",
-                        '1Y_V': f"{iy_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(b['HTR'].value_counts(normalize=True).get(iy_mod,0)*100)}%)",
-                        'MS_V': f"{ms_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(b['FTR'].value_counts(normalize=True).get(ms_mod,0)*100)}%)",
-                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod
+                        '1Y_V': f"{iy_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')}",
+                        'MS_V': f"{ms_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(ms_p*100)}%)",
+                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod, 'iy05_r': iy05_p
                     })
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
-                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r']).style.map(style_engine), use_container_width=True)
+                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','iy05_r']).style.map(style_engine), use_container_width=True)
                 
                 st.markdown("---")
                 for row in final_list:
                     with st.expander(f"🔍 {row['SAAT']} | {row['EV SAHİBİ']} vs {row['DEPLASMAN']}"):
+                        # --- VIBE RAPORU (KUTU) ---
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.success(f"🎯 **ANA TERCİH:** {'2.5 ÜST' if row['ms25_r'] > 0.65 else 'KG VAR' if row['kg_r'] > 0.6 else row['MS_V']}")
+                        with c2:
+                            st.info(f"🥈 **KOMBO:** {row['MS_V'].split(' ')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'}")
+                        
+                        if row['ms25_r'] > 0.65 and row['kg_r'] < 0.50:
+                            st.warning("⚠️ TEK TARAFLI MAÇ RİSKİ: 3-0 veya 4-0 bitebilir!")
+
+                        # --- DETAYLI TABLO ---
                         m_o = bulten.loc[row['idx']]
                         b_det = gecmis[(gecmis['B365H'].between(m_o['h']-TOLERANS, m_o['h']+TOLERANS)) & (gecmis['B365D'].between(m_o['b']-TOLERANS, m_o['b']+TOLERANS)) & (gecmis['B365A'].between(m_o['a']-TOLERANS, m_o['a']+TOLERANS))].copy().sort_values('Date', ascending=False)
                         
