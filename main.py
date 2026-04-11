@@ -6,7 +6,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Vibe Pro Expert v6.2", layout="wide")
+st.set_page_config(page_title="Vibe Pro Expert v6.3", layout="wide")
 
 # Akıllı Renk Motoru
 def style_engine(val):
@@ -21,7 +21,7 @@ def style_engine(val):
     return ''
 
 # --- YAN MENÜ ---
-st.sidebar.title("🎮 Vibe Kontrol Merkezi v6.2")
+st.sidebar.title("🎮 Vibe Kontrol Merkezi v6.3")
 API_KEY = st.sidebar.text_input("The Odds API Key", type="password")
 bugun = datetime.now().date()
 secili_tarih = st.sidebar.date_input("Analiz Tarihi", value=bugun)
@@ -107,20 +107,23 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                     ms_mod = b['FTR'].mode()[0]; iy_mod = b['HTR'].mode()[0]
                     ms_p = b['FTR'].value_counts(normalize=True).get(ms_mod, 0); iy_p = b['HTR'].value_counts(normalize=True).get(iy_mod, 0)
                     
+                    iy_res = "Ev" if iy_mod == 'H' else "Dep" if iy_mod == 'A' else "Beraberlik"
+                    ms_res = "Ev" if ms_mod == 'H' else "Dep" if ms_mod == 'A' else "Beraberlik"
+
                     final_list.append({
                         'SAAT': m['zaman'].strftime('%H:%M'), 'EV SAHİBİ': m['ev'], 'DEPLASMAN': m['dep'],
                         '1Y_05': get_status(iy05_p), 'İY_15': get_status((b['HTHG']+b['HTAG']>=2).mean()),
                         'MS_15': get_status((b['FTHG']+b['FTAG']>=2).mean()), 'MS_25': get_status(ms25_p),
                         'MS_35': get_status((b['FTHG']+b['FTAG']>=4).mean()), 'KG_V': f"Yes ({int(kg_p*100)}%)" if kg_p >= 0.5 else f"No ({int((1-kg_p)*100)}%)",
-                        '1Y_V': f"{iy_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(iy_p*100)}%)",
-                        'MS_V': f"{ms_mod.replace('H','Ev').replace('A','Dep').replace('D','Beraberlik')} ({int(ms_p*100)}%)",
-                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod, 'iy05_r': iy05_p, 'h_o': m['h'], 'a_o': m['a'], 'b_o': m['b']
+                        '1Y_V': f"{iy_res} ({int(iy_p*100)}%)",
+                        'MS_V': f"{ms_res} ({int(ms_p*100)}%)",
+                        'ÖRNEK': len(b), 'idx': i, 'ms25_r': ms25_p, 'kg_r': kg_p, 'ms_m_r': ms_mod, 'h_o': m['h'], 'a_o': m['a'], 'b_o': m['b']
                     })
 
             if final_list:
                 df_ana = pd.DataFrame(final_list)
                 style_cols = ['1Y_05', 'İY_15', 'MS_15', 'MS_25', 'MS_35', 'KG_V', '1Y_V', 'MS_V']
-                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o', 'iy05_r']).style.map(style_engine, subset=style_cols), use_container_width=True)
+                st.dataframe(df_ana.drop(columns=['idx','ms25_r','kg_r','ms_m_r','h_o','a_o', 'b_o']).style.map(style_engine, subset=style_cols), use_container_width=True)
                 
                 st.markdown("---")
                 for row in final_list:
@@ -133,15 +136,19 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                         htft_mod = htft_series.mode()[0]
                         htft_p = int(htft_series.value_counts(normalize=True).get(htft_mod, 0) * 100)
                         
+                        # --- ANA TERCİH MANTIĞI ---
                         if row['ms25_r'] > 0.65:
-                            ana_t = '2.5 ÜST'
-                            ana_p = int(row['ms25_r'] * 100)
+                            ana_t, ana_p = '2.5 ÜST', int(row['ms25_r'] * 100)
                         elif row['kg_r'] > 0.6:
-                            ana_t = 'KG VAR'
-                            ana_p = int(row['kg_r'] * 100)
+                            ana_t, ana_p = 'KG VAR', int(row['kg_r'] * 100)
                         else:
-                            ana_t = f"MS {row['ms_m_r'].replace('H','1').replace('A','2').replace('D','X')}"
-                            ana_p = int(b_det['FTR'].value_counts(normalize=True).get(row['ms_m_r'], 0) * 100)
+                            side = "Ev" if row['ms_m_r'] == 'H' else "Dep" if row['ms_m_r'] == 'A' else "Beraberlik"
+                            ana_t, ana_p = f"MS {side}", int(b_det['FTR'].value_counts(normalize=True).get(row['ms_m_r'], 0) * 100)
+
+                        # --- KOMBO TERCİH MANTIĞI (FİXED) ---
+                        side_name = "Ev" if row['ms_m_r'] == 'H' else "Dep" if row['ms_m_r'] == 'A' else "Beraberlik"
+                        kg_status = "KG VAR" if row['kg_r'] > 0.55 else "KG YOK"
+                        kombo_t = f"{side_name} & {kg_status}"
 
                         # --- YENİ NESİL VİBE RAPORU ---
                         st.markdown(f"""
@@ -149,7 +156,7 @@ if st.button("🚀 ANALİZİ BAŞLAT"):
                             <h4 style="color: white; margin-top: 0; margin-bottom: 10px;">🎯 VİBE ANALİZ RAPORU</h4>
                             <p style="font-size: 16px; margin: 5px 0; color: white;">🎯 <b>ANA TERCİH :</b> <span style="color: #27ae60;">{ana_t}</span> <span style="color: #f1c40f;">(%{ana_p})</span> <span style="color: #888;">({ana_oran:.2f})</span></p>
                             <p style="font-size: 16px; margin: 5px 0; color: white;">🥈 <b>HT/FT TAHMİN :</b> <span style="color: #3498db;">{htft_mod}</span> <span style="color: #f1c40f;">(%{htft_p})</span></p>
-                            <p style="font-size: 16px; margin: 5px 0; color: white;">🥈 <b>KOMBO :</b> <span style="color: #f39c12;">{row['MS_V'].split(' (')[0]} & {'KG VAR' if row['kg_r'] > 0.55 else 'KG YOK'}</span></p>
+                            <p style="font-size: 16px; margin: 5px 0; color: white;">🥈 <b>KOMBO :</b> <span style="color: #f39c12;">{kombo_t}</span></p>
                         </div>
                         """, unsafe_allow_html=True)
 
