@@ -1,3 +1,4 @@
+code = r'''
 import math
 from datetime import datetime, timedelta
 
@@ -7,7 +8,7 @@ import streamlit as st
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 7
+APP_SCHEMA_VERSION = 8
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -187,7 +188,7 @@ section[data-testid="stSidebar"] label {
     display:inline-block;
     margin-bottom:8px;
 }
-.surp-pill {
+.combo-pill {
     background:#1e2130;
     color:#f39c12;
     font-size:0.8rem;
@@ -196,8 +197,6 @@ section[data-testid="stSidebar"] label {
     border-radius:6px;
     display:inline-block;
 }
-.surp-pill.yok { color:#e74c3c; }
-
 .oran-row {
     display:flex;
     gap:12px;
@@ -652,7 +651,6 @@ def hesapla(b_df, m_row, tolerans):
     htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
 
     oran_ev = float(m_row["h"])
-    oran_ber = float(m_row["b"])
     oran_dep = float(m_row["a"])
 
     sample_factor = sample_factor_hesapla(sample, float(tolerans))
@@ -675,17 +673,47 @@ def hesapla(b_df, m_row, tolerans):
     ou_label = "2.5 Üst" if ms25_raw >= 0.5 else "2.5 Alt"
     kg_label = "KG Var" if kg_raw >= 0.5 else "KG Yok"
 
-    # --- GÜÇLÜ KOMBO MOTORU ---
+    cands = [
+        {
+            "label": ms_label,
+            "raw_prob": ms_raw,
+            "conf_prob": ms_prob,
+            "market": "ms",
+        },
+        {
+            "label": ou_label,
+            "raw_prob": ou25_best_raw,
+            "conf_prob": ou25_prob,
+            "market": "ou25",
+        },
+        {
+            "label": kg_label,
+            "raw_prob": kg_best_raw,
+            "conf_prob": kg_prob,
+            "market": "kg",
+        },
+    ]
+
+    best = max(cands, key=lambda x: x["raw_prob"])
+    best_conf, fake_drop = fake_confidence_duzelt(best["conf_prob"], sample, float(tolerans))
+
+    ana_label = best["label"]
+    ana_p = int(round(best_conf * 100))
+    ana_raw_p = int(round(best["raw_prob"] * 100))
+
+    others = [c for c in cands if c["label"] != ana_label]
+    alt = max(others, key=lambda x: x["raw_prob"]) if others else cands[1]
+    alt_conf, _ = fake_confidence_duzelt(alt["conf_prob"], sample, float(tolerans))
+    alt_label = alt["label"]
+    alt_p = int(round(alt_conf * 100))
+
     cond_ms1 = (b["FTR"] == "H")
     cond_msx = (b["FTR"] == "D")
     cond_ms2 = (b["FTR"] == "A")
-
     cond_ust25 = (toplam_gol >= 3)
     cond_alt25 = (toplam_gol <= 2)
-
     cond_kg_var = ((b["FTHG"] > 0) & (b["FTAG"] > 0))
     cond_kg_yok = ~cond_kg_var
-
     htft_series = b["HTR"].replace({"H": "1", "D": "X", "A": "2"}) + "/" + b["FTR"].replace({"H": "1", "D": "X", "A": "2"})
 
     combo_defs = [
@@ -693,22 +721,19 @@ def hesapla(b_df, m_row, tolerans):
         ("MS1 + KG Yok", cond_ms1 & cond_kg_yok, "mskg"),
         ("MS1 + 2.5 Üst", cond_ms1 & cond_ust25, "msou"),
         ("MS1 + 2.5 Alt", cond_ms1 & cond_alt25, "msou"),
-
         ("MSX + KG Var", cond_msx & cond_kg_var, "mskg"),
         ("MSX + KG Yok", cond_msx & cond_kg_yok, "mskg"),
         ("MSX + 2.5 Üst", cond_msx & cond_ust25, "msou"),
         ("MSX + 2.5 Alt", cond_msx & cond_alt25, "msou"),
-
         ("MS2 + KG Var", cond_ms2 & cond_kg_var, "mskg"),
         ("MS2 + KG Yok", cond_ms2 & cond_kg_yok, "mskg"),
         ("MS2 + 2.5 Üst", cond_ms2 & cond_ust25, "msou"),
         ("MS2 + 2.5 Alt", cond_ms2 & cond_alt25, "msou"),
-
         ("2.5 Üst + KG Var", cond_ust25 & cond_kg_var, "oukg"),
         ("2.5 Alt + KG Yok", cond_alt25 & cond_kg_yok, "oukg"),
     ]
 
-    combo_list = []
+    raw_combo_list = []
 
     for combo_label, combo_cond, combo_type in combo_defs:
         combo_hit = int(combo_cond.sum())
@@ -716,10 +741,7 @@ def hesapla(b_df, m_row, tolerans):
         combo_conf = combo_raw * guven_carpani
         combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, sample, float(tolerans))
 
-        if combo_type == "htft":
-            gerekli_raw = 0.22
-            gerekli_hit = max(3, onerilen_min_mac)
-        elif combo_type == "oukg":
+        if combo_type == "oukg":
             gerekli_raw = 0.30
             gerekli_hit = max(4, onerilen_min_mac)
         else:
@@ -727,7 +749,7 @@ def hesapla(b_df, m_row, tolerans):
             gerekli_hit = max(3, onerilen_min_mac)
 
         if combo_hit >= gerekli_hit and combo_raw >= gerekli_raw:
-            combo_list.append({
+            raw_combo_list.append({
                 "label": combo_label,
                 "raw_prob": combo_raw,
                 "conf_prob": combo_conf,
@@ -745,7 +767,7 @@ def hesapla(b_df, m_row, tolerans):
         gerekli_hit = max(3, onerilen_min_mac)
 
         if htft_hit >= gerekli_hit and float(htft_raw_prob) >= gerekli_raw:
-            combo_list.append({
+            raw_combo_list.append({
                 "label": f"HT/FT {htft_label}",
                 "raw_prob": float(htft_raw_prob),
                 "conf_prob": htft_conf,
@@ -753,6 +775,29 @@ def hesapla(b_df, m_row, tolerans):
                 "fake_drop": htft_fake_drop,
                 "type": "htft",
             })
+
+    combo_list = raw_combo_list
+
+    if best["label"] == "2.5 Üst":
+        combo_list = [
+            c for c in combo_list
+            if ("2.5 Üst" in c["label"]) or ("KG Var" in c["label"]) or ("HT/FT 1/1" in c["label"]) or ("HT/FT 2/2" in c["label"])
+        ]
+    elif best["label"] == "2.5 Alt":
+        combo_list = [
+            c for c in combo_list
+            if ("2.5 Alt" in c["label"]) or ("KG Yok" in c["label"]) or ("HT/FT X/X" in c["label"]) or ("HT/FT 1/X" in c["label"]) or ("HT/FT X/1" in c["label"]) or ("HT/FT 2/X" in c["label"]) or ("HT/FT X/2" in c["label"])
+        ]
+    elif best["label"] == "KG Var":
+        combo_list = [c for c in combo_list if ("KG Var" in c["label"]) or ("2.5 Üst + KG Var" in c["label"])]
+    elif best["label"] == "KG Yok":
+        combo_list = [c for c in combo_list if ("KG Yok" in c["label"]) or ("2.5 Alt + KG Yok" in c["label"])]
+    elif best["label"] == "MS 1":
+        combo_list = [c for c in combo_list if ("MS1" in c["label"]) or ("HT/FT 1/" in c["label"]) or ("HT/FT X/1" in c["label"])]
+    elif best["label"] == "MS 2":
+        combo_list = [c for c in combo_list if ("MS2" in c["label"]) or ("HT/FT 2/" in c["label"]) or ("HT/FT X/2" in c["label"])]
+    elif best["label"] == "Beraberlik":
+        combo_list = [c for c in combo_list if ("MSX" in c["label"]) or ("HT/FT X/X" in c["label"])]
 
     combo_list = sorted(combo_list, key=lambda x: (x["conf_prob"], x["raw_prob"], x["hit"]), reverse=True)
 
@@ -769,44 +814,6 @@ def hesapla(b_df, m_row, tolerans):
         combo_raw_p = 0
         combo_hit = 0
         combo_var = False
-        combo_list = []
-
-    cands = [
-        {
-            "label": ms_label,
-            "raw_prob": ms_raw,
-            "conf_prob": ms_prob,
-            "oran": oran_ev if ms_mod == "H" else oran_dep if ms_mod == "A" else oran_ber,
-            "market": "ms",
-        },
-        {
-            "label": ou_label,
-            "raw_prob": ou25_best_raw,
-            "conf_prob": ou25_prob,
-            "oran": "-",
-            "market": "ou25",
-        },
-        {
-            "label": kg_label,
-            "raw_prob": kg_best_raw,
-            "conf_prob": kg_prob,
-            "oran": "-",
-            "market": "kg",
-        },
-    ]
-
-    best = max(cands, key=lambda x: x["raw_prob"])
-    best_conf, fake_drop = fake_confidence_duzelt(best["conf_prob"], sample, float(tolerans))
-
-    ana_label = best["label"]
-    ana_p = int(round(best_conf * 100))
-    ana_raw_p = int(round(best["raw_prob"] * 100))
-
-    others = [c for c in cands if c["label"] != ana_label]
-    alt = max(others, key=lambda x: x["raw_prob"]) if others else cands[1]
-    alt_conf, _ = fake_confidence_duzelt(alt["conf_prob"], sample, float(tolerans))
-    alt_label = alt["label"]
-    alt_p = int(round(alt_conf * 100))
 
     if ana_p < 35:
         ana_label = "Tahmin Zayıf"
@@ -872,7 +879,6 @@ def hesapla(b_df, m_row, tolerans):
         "combo_raw_p": combo_raw_p,
         "combo_hit": combo_hit,
         "combo_var": combo_var,
-        "combo_list": combo_list[:5],
         "canli_label": canli_label,
         "canli_p": canli_p,
         "ms_side": ms_side,
@@ -1243,7 +1249,7 @@ if st.session_state.detay_idx is not None:
         if combo_text:
             st.markdown(f"""
             <div class="diger-row">
-              <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">Ortak eşleşme</div></div></div>
+              <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">Ana tahminle aynı yön</div></div></div>
               <span class="diger-badge {combo_cls}">{combo_text} %{int(t.get('combo_p', 0))}</span>
             </div>
             """, unsafe_allow_html=True)
@@ -1274,30 +1280,6 @@ if st.session_state.detay_idx is not None:
       {neden_html}
     </div>
     """, unsafe_allow_html=True)
-
-    if t.get("combo_list"):
-        combo_rows = "".join([
-            f"""
-            <div class="diger-row">
-              <div class="diger-left">
-                <span class="diger-icon">➕</span>
-                <div>
-                  <div class="diger-name">{c['label']}</div>
-                  <div class="diger-sub">{c['hit']} eşleşme</div>
-                </div>
-              </div>
-              <span class="diger-badge db-gold">%{int(round(c['conf_prob'] * 100))}</span>
-            </div>
-            """
-            for c in t["combo_list"]
-        ])
-
-        st.markdown(f"""
-        <div class="diger-kart" style="margin-bottom:14px">
-          <div class="tk-title">ORTAK EŞLEŞEN KOMBOLAR</div>
-          {combo_rows}
-        </div>
-        """, unsafe_allow_html=True)
 
     st.markdown(f"""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:16px 22px;margin-bottom:0">
@@ -1416,8 +1398,7 @@ else:
         elif "Zayıf" in t["ana_label"]:
             pill_cls = "gri"
 
-        surp_text = t.get("combo_label", "")
-        surp_cls = "" if surp_text else "yok"
+        combo_text = t.get("combo_label", "")
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -1450,11 +1431,11 @@ else:
                 <span class="alt-pill">{t['alt_label']}</span>
             """, unsafe_allow_html=True)
 
-            if surp_text:
+            if combo_text:
                 st.markdown(f"""
                 <div style="margin-top:8px">
                   <div class="mk-label">GÜÇLÜ KOMBO</div>
-                  <span class="surp-pill {surp_cls}">{surp_text}</span>
+                  <span class="combo-pill">{combo_text}</span>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1502,3 +1483,6 @@ else:
         if st.button("🗑️ Kuponu Temizle", key="kupon_temizle_btn"):
             st.session_state.kupona = []
             st.rerun()
+'''
+open('/mnt/data/main.py','w',encoding='utf-8').write(code)
+print(len(code.splitlines()))
