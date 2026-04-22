@@ -677,26 +677,53 @@ FUTBOL_LIGLERI = {
 
 def init_league_states():
     for kat, ligler in FUTBOL_LIGLERI.items():
-    with st.expander(kat, expanded=(kat == "TÜRKİYE")):
-        st.checkbox(
-            "Tümünü Seç",
-            key=f"group_{kat}",
-            on_change=toggle_group,
-            args=(kat, ligler)
+        group_key = f"group_{kat}"
+        if group_key not in st.session_state:
+            st.session_state[group_key] = False
+
+        for _, kod in ligler.items():
+            item_key = f"cb_{kod}"
+            if item_key not in st.session_state:
+                st.session_state[item_key] = False
+
+def toggle_group(kat, ligler):
+    group_value = st.session_state[f"group_{kat}"]
+    for _, kod in ligler.items():
+        st.session_state[f"cb_{kod}"] = group_value
+
+init_league_states()
+secili_kodlar = []
+
+with st.sidebar:
+    for kat, ligler in FUTBOL_LIGLERI.items():
+        with st.expander(kat, expanded=(kat == "TÜRKİYE")):
+            st.checkbox(
+                "Tümünü Seç",
+                key=f"group_{kat}",
+                on_change=toggle_group,
+                args=(kat, ligler)
+            )
+
+            for isim, kod in ligler.items():
+                st.checkbox(isim, key=f"cb_{kod}")
+                if st.session_state.get(f"cb_{kod}", False):
+                    secili_kodlar.append(kod)
+
+    st.markdown("---")
+    analiz_btn = st.button(
+        "🚀 ANALİZİ BAŞLAT",
+        use_container_width=True,
+        type="primary",
+        key="analiz_baslat_btn"
+    )
+
+    if 'son_analiz' in st.session_state:
+        st.markdown(
+            f'''<div style="font-size:0.74rem;color:#666;margin-top:10px">
+            Son analiz: {st.session_state.son_analiz}<br>
+            Toplam maç: {st.session_state.get('toplam_mac',0)}</div>''',
+            unsafe_allow_html=True
         )
-
-        for isim, kod in ligler.items():
-            st.checkbox(isim, key=f"cb_{kod}")
-            if st.session_state.get(f"cb_{kod}", False):
-                secili_kodlar.append(kod)
-
-st.markdown("---")
-analiz_btn = st.button(
-    "🚀 ANALİZİ BAŞLAT",
-    use_container_width=True,
-    type="primary",
-    key="analiz_baslat_btn"
-)
 
 if 'son_analiz' in st.session_state:
     st.markdown(
@@ -705,7 +732,6 @@ if 'son_analiz' in st.session_state:
         Toplam maç: {st.session_state.get('toplam_mac',0)}</div>""",
         unsafe_allow_html=True
     )
-    analiz_btn = st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True, type="primary")
 
     if 'son_analiz' in st.session_state:
         st.markdown(
