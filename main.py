@@ -559,19 +559,26 @@ def hesapla(b_df, m_row, tolerans):
     htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
     htft_p   = int(htft_s.value_counts(normalize=True).get(htft_mod, 0) * 100)
 
-    cands = [
-        (ms_p,   ms_side,   int(ms_p * 100),   m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']),
-        (ms25_p, "2.5 Üst", int(ms25_p * 100), "-"),
-        (kg_p,   "KG Var",  int(kg_p * 100),   "-"),
-    ]
-    best = max(cands, key=lambda x: x[0])
-    ana_label, ana_p, ana_oran = best[1], best[2], best[3]
+ms_label = "MS 1" if ms_mod == 'H' else "MS 2" if ms_mod == 'A' else "Beraberlik"
+ms_prob = ms_p
 
-    others = [c for c in cands if c[1] != ana_label]
-    alt = max(others, key=lambda x: x[0]) if others else cands[1]
-    alt_label, alt_p = alt[1], alt[2]
+ou_label = "2.5 Üst" if ms25_p >= 0.5 else "2.5 Alt"
+ou_prob = max(ms25_p, 1 - ms25_p)
 
-    kg_label = "KG Var" if kg_p >= 0.5 else "KG Yok"
+kg_prob = max(kg_p, 1 - kg_p)
+
+cands = [
+    (ms_prob, ms_label, int(ms_prob * 100), m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']),
+    (ou_prob, ou_label, int(ou_prob * 100), "-"),
+    (kg_prob, kg_label, int(kg_prob * 100), "-"),
+]
+
+best = max(cands, key=lambda x: x[0])
+ana_label, ana_p, ana_oran = best[1], best[2], best[3]
+
+others = [c for c in cands if c[1] != ana_label]
+alt = max(others, key=lambda x: x[0]) if others else cands[1]
+alt_label, alt_p = alt[1], alt[2]
 
     if iy05_p >= 0.68:
         canli_label = "İY 0.5 Üst" + (" · 3.5 Üst" if ms35_p >= 0.6 else " · 2.5 Üst" if ms25_p >= 0.6 else "")
