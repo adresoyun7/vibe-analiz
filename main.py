@@ -1429,17 +1429,7 @@ else:
               <div>
                 <div class="mk-label">ALTERNATİF</div>
                 <span class="alt-pill">{t['alt_label']}</span>
-            """, unsafe_allow_html=True)
-
-            if combo_text:
-                st.markdown(f"""
-                <div style="margin-top:8px">
-                  <div class="mk-label">GÜÇLÜ KOMBO</div>
-                  <span class="combo-pill">{combo_text}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-            st.markdown(f"""
+                {f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO</div><span class="combo-pill">{combo_text}</span></div>' if combo_text else ''}
               </div>
 
               <div>
