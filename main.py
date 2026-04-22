@@ -646,39 +646,68 @@ with st.sidebar:
 
     st.markdown("---")
 
-    FUTBOL_LIGLERI = {
-        "🏆 AVRUPA KUPALARI": {
-            'Şampiyonlar Ligi':'soccer_uefa_champs_league',
-            'Avrupa Ligi':'soccer_uefa_europa_league',
-            'Konferans Ligi':'soccer_uefa_europa_conference_league'
-        },
-        "🇹🇷 TÜRKİYE": {
-            'Süper Lig':'soccer_turkey_super_league',
-            '1. Lig':'soccer_turkey_pTT_1_lig'
-        },
-        "🇪🇺 AVRUPA MAJÖR": {
-            'İngiltere Premier':'soccer_epl',
-            'İspanya La Liga':'soccer_spain_la_liga',
-            'Almanya Bundesliga':'soccer_germany_bundesliga',
-            'İtalya Serie A':'soccer_italy_serie_a',
-            'Fransa Ligue 1':'soccer_france_ligue_one'
-        },
-        "⚽ AVRUPA DİĞER": {
-            'Hollanda':'soccer_netherlands_eredivisie',
-            'Belçika':'soccer_belgium_first_division',
-            'Portekiz':'soccer_portugal_primeira_liga',
-            'İskoçya':'soccer_scotland_premiership'
-        }
+# ═══════════════════════════════════════════
+# LIG SECIMI - CALISAN TUMUNU SEC
+# ═══════════════════════════════════════════
+
+FUTBOL_LIGLERI = {
+    "AVRUPA KUPALARI": {
+        'Şampiyonlar Ligi':'soccer_uefa_champs_league',
+        'Avrupa Ligi':'soccer_uefa_europa_league',
+        'Konferans Ligi':'soccer_uefa_europa_conference_league'
+    },
+    "TÜRKİYE": {
+        'Süper Lig':'soccer_turkey_super_league',
+        '1. Lig':'soccer_turkey_pTT_1_lig'
+    },
+    "AVRUPA MAJÖR": {
+        'İngiltere Premier':'soccer_epl',
+        'İspanya La Liga':'soccer_spain_la_liga',
+        'Almanya Bundesliga':'soccer_germany_bundesliga',
+        'İtalya Serie A':'soccer_italy_serie_a',
+        'Fransa Ligue 1':'soccer_france_ligue_one'
+    },
+    "AVRUPA DİĞER": {
+        'Hollanda':'soccer_netherlands_eredivisie',
+        'Belçika':'soccer_belgium_first_division',
+        'Portekiz':'soccer_portugal_primeira_liga',
+        'İskoçya':'soccer_scotland_premiership'
     }
+}
 
-    secili_kodlar = []
+def init_league_states():
     for kat, ligler in FUTBOL_LIGLERI.items():
-        with st.expander(kat):
-            all_cb = st.checkbox("Tümünü Seç", key=f"all_{kat}")
-            for isim, kod in ligler.items():
-                if st.checkbox(isim, value=all_cb, key=f"cb_{kod}"):
-                    secili_kodlar.append(kod)
+        group_key = f"group_{kat}"
+        if group_key not in st.session_state:
+            st.session_state[group_key] = False
 
+        for isim, kod in ligler.items():
+            item_key = f"cb_{kod}"
+            if item_key not in st.session_state:
+                st.session_state[item_key] = False
+
+init_league_states()
+
+def toggle_group(kat, ligler):
+    group_value = st.session_state[f"group_{kat}"]
+    for _, kod in ligler.items():
+        st.session_state[f"cb_{kod}"] = group_value
+
+secili_kodlar = []
+
+for kat, ligler in FUTBOL_LIGLERI.items():
+    with st.expander(kat, expanded=(kat == "TÜRKİYE")):
+        st.checkbox(
+            "Tümünü Seç",
+            key=f"group_{kat}",
+            on_change=toggle_group,
+            args=(kat, ligler)
+        )
+
+        for isim, kod in ligler.items():
+            st.checkbox(isim, key=f"cb_{kod}")
+            if st.session_state.get(f"cb_{kod}", False):
+                secili_kodlar.append(kod)
     st.markdown("---")
     analiz_btn = st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True, type="primary")
 
