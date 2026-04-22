@@ -388,13 +388,15 @@ def bulten_cek(api_key, kodlar, target_date):
                     continue
 
                 outcomes = market.get("outcomes", [])
-                home = m.get("home_team", "")
-                teams = m.get("teams", [])
-                away = ""
-                for t in teams:
-                    if t != home:
-                        away = t
-                        break
+          home = m.get("home_team", "")
+away = m.get("away_team", "")
+
+if not away:
+    teams = m.get("teams", [])
+    for t in teams:
+        if t != home:
+            away = t
+            break
 
                 h_odd = next((x["price"] for x in outcomes if x["name"] == home), None)
                 a_odd = next((x["price"] for x in outcomes if x["name"] == away), None)
