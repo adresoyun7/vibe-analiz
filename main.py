@@ -1,4 +1,4 @@
-code = r'''
+
 import math
 from datetime import datetime, timedelta
 
@@ -1483,6 +1483,3 @@ else:
         if st.button("🗑️ Kuponu Temizle", key="kupon_temizle_btn"):
             st.session_state.kupona = []
             st.rerun()
-'''
-open('/mnt/data/main.py','w',encoding='utf-8').write(code)
-print(len(code.splitlines()))
