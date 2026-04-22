@@ -603,6 +603,35 @@ def bulten_cek(key, kodlar, t):
     return df.sort_values("zaman").reset_index(drop=True)
 
 
+
+
+def build_top3_coupon(indexed_items, mode="best_favorites"):
+    candidates = []
+    for idx, item in indexed_items:
+        m, t = item["m"], item["t"]
+        if t.get("belirsiz") or not t.get("oynanabilir"):
+            continue
+        ana_odd = t.get("ana_odd")
+        if ana_odd is None:
+            continue
+        if t.get("match_type") != "Favori":
+            continue
+        candidates.append({
+            "idx": idx,
+            "m": m,
+            "t": t,
+            "ana_odd": ana_odd
+        })
+
+    if mode == "best_favorites":
+        candidates.sort(key=lambda c: (c["ana_odd"], -c["t"].get("playable_score", 0)))
+    else:
+        candidates = [c for c in candidates if c["ana_odd"] >= 1.70]
+        candidates.sort(key=lambda c: (c["ana_odd"], c["t"].get("playable_score", 0)), reverse=True)
+
+    picks = candidates[:3]
+    return [f"{c['m']['ev']} vs {c['m']['dep']} — {c['t']['ana_label']} ({fmt_odd(c['ana_odd'])})" for c in picks]
+
 def hesapla(b_df, m_row, tolerans):
     rehber = tolerans_rehberi(float(tolerans))
     onerilen_min_mac = dinamik_min_mac(float(tolerans))
@@ -1537,6 +1566,18 @@ else:
     with fc4:
         if st.button(f"🎯 Güçlü Kombo {len(kombolu)}", use_container_width=True, key="f4"):
             st.session_state.filtre = "kombo"
+            st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        if st.button("🏆 Günün En Favori 3'lü Kuponu", use_container_width=True, key="top3_bestfav_btn"):
+            st.session_state.kupona = build_top3_coupon(indexed_fl, mode="best_favorites")
+            st.rerun()
+    with cc2:
+        if st.button("🎯 Günün En Yüksek Oranlı 3 Favorisi", use_container_width=True, key="top3_highfav_btn"):
+            st.session_state.kupona = build_top3_coupon(indexed_fl, mode="high_favorites")
             st.rerun()
 
     filtre = st.session_state.filtre
