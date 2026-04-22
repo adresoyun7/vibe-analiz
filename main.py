@@ -388,6 +388,68 @@ def format_tr_date(d):
     }
     return f"{d.day} {aylar[d.month]} {d.year} {gunler[d.weekday()]}"
 
+
+
+def tolerans_rehberi(tolerans: float):
+    if tolerans <= 0.00:
+        return {
+            'onerilen_tolerans': '0.08 - 0.10',
+            'onerilen_min_mac': 40,
+            'yorum': 'Aşırı dar filtre. Veri çok hızlı düşebilir.',
+            'durum': 'riskli'
+        }
+    if tolerans <= 0.03:
+        return {
+            'onerilen_tolerans': '0.08 - 0.10',
+            'onerilen_min_mac': 50,
+            'yorum': 'Çok dar filtre. Sadece çok yakın oranları yakalar.',
+            'durum': 'riskli'
+        }
+    if tolerans <= 0.05:
+        return {
+            'onerilen_tolerans': '0.08 - 0.10',
+            'onerilen_min_mac': 60,
+            'yorum': 'Dar filtre. Veri azsa güven yapay yükselebilir.',
+            'durum': 'dikkat'
+        }
+    if tolerans <= 0.08:
+        return {
+            'onerilen_tolerans': '0.08 - 0.10',
+            'onerilen_min_mac': 80,
+            'yorum': 'Dengeli filtre.',
+            'durum': 'iyi'
+        }
+    if tolerans <= 0.10:
+        return {
+            'onerilen_tolerans': '0.08 - 0.10',
+            'onerilen_min_mac': 100,
+            'yorum': 'En sağlıklı aralık.',
+            'durum': 'iyi'
+        }
+    if tolerans <= 0.12:
+        return {
+            'onerilen_tolerans': '0.08 - 0.10',
+            'onerilen_min_mac': 120,
+            'yorum': 'Biraz geniş filtre. Veri artar ama benzerlik azalabilir.',
+            'durum': 'dikkat'
+        }
+    return {
+        'onerilen_tolerans': '0.08 - 0.10',
+        'onerilen_min_mac': 150,
+        'yorum': 'Geniş filtre. Sonuçlar fazla genelleşebilir.',
+        'durum': 'riskli'
+    }
+
+
+def guven_metni(sample, onerilen_min_mac):
+    if sample >= max(150, onerilen_min_mac):
+        return 'Çok Sağlam', '#27ae60'
+    if sample >= onerilen_min_mac:
+        return 'Sağlıklı', '#2ecc71'
+    if sample >= max(40, int(onerilen_min_mac * 0.7)):
+        return 'Sınırda', '#f39c12'
+    return 'Riskli', '#e74c3c'
+
 def guven_renk(pct):
     if pct >= 70:
         return "#27ae60", "badge-yuksek", "Yüksek Güven"
@@ -522,6 +584,9 @@ def bulten_cek(key, kodlar, t):
     return df.sort_values('zaman').reset_index(drop=True)
 
 def hesapla(b_df, m_row, tolerans):
+    rehber = tolerans_rehberi(float(tolerans))
+    onerilen_min_mac = rehber['onerilen_min_mac']
+
     b = b_df[
         (b_df['B365H'].between(m_row['h'] - tolerans, m_row['h'] + tolerans)) &
         (b_df['B365D'].between(m_row['b'] - tolerans, m_row['b'] + tolerans)) &
@@ -531,82 +596,122 @@ def hesapla(b_df, m_row, tolerans):
     if b.empty:
         return None, b
 
-    for c in ['FTHG','FTAG','HTHG','HTAG']:
-        b[c] = b[c].fillna(0)
+    for c in ['FTHG', 'FTAG', 'HTHG', 'HTAG']:
+        b[c] = pd.to_numeric(b[c], errors='coerce').fillna(0)
 
-    ms25_p = (b['FTHG'] + b['FTAG'] >= 3).mean()
-    ms35_p = (b['FTHG'] + b['FTAG'] >= 4).mean()
-    ms15_p = (b['FTHG'] + b['FTAG'] >= 2).mean()
-    kg_p   = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
-    iy05_p = (b['HTHG'] + b['HTAG'] >= 1).mean()
-    iy15_p = (b['HTHG'] + b['HTAG'] >= 2).mean()
+    sample = len(b)
+    alt_sinir = max(25, int(onerilen_min_mac * 0.60))
+    sample_factor = min(sample / max(onerilen_min_mac, 1), 1.0)
 
-    ms_vc  = b['FTR'].value_counts(normalize=True)
-    iy_vc  = b['HTR'].value_counts(normalize=True)
+    toplam_gol = b['FTHG'] + b['FTAG']
+    ilk_yari_gol = b['HTHG'] + b['HTAG']
 
-    ms_mod = ms_vc.idxmax()
-    ms_p   = ms_vc.get(ms_mod, 0)
-    ms_side= "MS 1" if ms_mod == 'H' else "MS 2" if ms_mod == 'A' else "Beraberlik"
+    ms25_raw = (toplam_gol >= 3).mean()
+    ms35_raw = (toplam_gol >= 4).mean()
+    ms15_raw = (toplam_gol >= 2).mean()
+    kg_raw   = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
+    iy05_raw = (ilk_yari_gol >= 1).mean()
+    iy15_raw = (ilk_yari_gol >= 2).mean()
 
-    htft_s   = b['HTR'].replace({'H':'1','A':'2','D':'X'}) + "/" + b['FTR'].replace({'H':'1','A':'2','D':'X'})
-    htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
-    htft_p   = int(htft_s.value_counts(normalize=True).get(htft_mod, 0) * 100)
+    ms_vc = b['FTR'].value_counts(normalize=True)
+    iy_vc = b['HTR'].value_counts(normalize=True)
+
+    ms_mod = ms_vc.idxmax() if not ms_vc.empty else 'D'
+    ms_raw = float(ms_vc.get(ms_mod, 0))
+    ms_side = 'MS 1' if ms_mod == 'H' else 'MS 2' if ms_mod == 'A' else 'Beraberlik'
+
+    htft_s = b['HTR'].replace({'H': '1', 'A': '2', 'D': 'X'}) + '/' + b['FTR'].replace({'H': '1', 'A': '2', 'D': 'X'})
+    htft_mod = htft_s.mode()[0] if not htft_s.empty else '-'
+    htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
+
+    oran_ev = float(m_row['h'])
+    oran_dep = float(m_row['a'])
+    if oran_ev < 1.40 or oran_dep < 1.40:
+        oran_factor = 0.93
+    elif oran_ev > 6.50 or oran_dep > 6.50:
+        oran_factor = 0.95
+    else:
+        oran_factor = 1.0
+
+    guven_carpani = sample_factor * oran_factor
+
+    ms_prob = ms_raw * guven_carpani
+    ou25_prob = max(ms25_raw, 1 - ms25_raw) * guven_carpani
+    kg_prob = max(kg_raw, 1 - kg_raw) * guven_carpani
 
     ms_label = ms_side
-    ms_prob = ms_p
-
-    ou_label = "2.5 Üst" if ms25_p >= 0.5 else "2.5 Alt"
-    ou_prob = max(ms25_p, 1 - ms25_p)
-
-    kg_label = "KG Var" if kg_p >= 0.5 else "KG Yok"
-    kg_prob = max(kg_p, 1 - kg_p)
+    ou_label = '2.5 Üst' if ms25_raw >= 0.5 else '2.5 Alt'
+    kg_label = 'KG Var' if kg_raw >= 0.5 else 'KG Yok'
 
     cands = [
-        (ms_prob, ms_label, int(ms_prob * 100), m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']),
-        (ou_prob, ou_label, int(ou_prob * 100), "-"),
-        (kg_prob, kg_label, int(kg_prob * 100), "-"),
+        (ms_prob, ms_label, int(round(ms_prob * 100)), m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']),
+        (ou25_prob, ou_label, int(round(ou25_prob * 100)), '-'),
+        (kg_prob, kg_label, int(round(kg_prob * 100)), '-'),
     ]
 
     best = max(cands, key=lambda x: x[0])
     ana_label, ana_p, ana_oran = best[1], best[2], best[3]
-
     others = [c for c in cands if c[1] != ana_label]
     alt = max(others, key=lambda x: x[0]) if others else cands[1]
     alt_label, alt_p = alt[1], alt[2]
 
-    if iy05_p >= 0.68:
-        canli_label = "İY 0.5 Üst" + (" · 3.5 Üst" if ms35_p >= 0.6 else " · 2.5 Üst" if ms25_p >= 0.6 else "")
-        canli_p = int(iy05_p * 100)
-    elif iy15_p >= 0.55:
-        canli_label, canli_p = "İY 1.5 Üst", int(iy15_p * 100)
+    if iy05_raw * guven_carpani >= 0.68:
+        canli_label = 'İY 0.5 Üst' + (' · 3.5 Üst' if ms35_raw * guven_carpani >= 0.60 else ' · 2.5 Üst' if ms25_raw * guven_carpani >= 0.60 else '')
+        canli_p = int(round(iy05_raw * guven_carpani * 100))
+    elif iy15_raw * guven_carpani >= 0.55:
+        canli_label = 'İY 1.5 Üst'
+        canli_p = int(round(iy15_raw * guven_carpani * 100))
     else:
-        canli_label, canli_p = "Canlı İzle", 50
+        canli_label, canli_p = 'Canlı İzle', 50
 
     flip_p = (((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))).mean()
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
     gc, gb_cls, gb_lbl = guven_renk(ana_p)
+    ornek_durum, ornek_renk = guven_metni(sample, onerilen_min_mac)
+
+    if sample < alt_sinir:
+        tavsiye = 'Toleransı artır'
+    elif sample < onerilen_min_mac:
+        tavsiye = 'Biraz artırılabilir'
+    elif sample > onerilen_min_mac * 2 and tolerans > 0.10:
+        tavsiye = 'Biraz düşürülebilir'
+    else:
+        tavsiye = 'Uygun'
 
     return {
         'ana_label': ana_label, 'ana_p': ana_p, 'ana_oran': ana_oran,
         'alt_label': alt_label, 'alt_p': alt_p,
-        'kg_label': kg_label, 'kg_p': int(kg_p * 100),
+        'kg_label': kg_label, 'kg_p': int(round(kg_raw * guven_carpani * 100)),
         'canli_label': canli_label, 'canli_p': canli_p,
-        'ms_side': ms_side, 'ms_p': int(ms_p * 100), 'ms_mod': ms_mod,
-        'ms1_p': int(ms_vc.get('H', 0) * 100), 'msx_p': int(ms_vc.get('D', 0) * 100), 'ms2_p': int(ms_vc.get('A', 0) * 100),
-        'ms25_p': int(ms25_p * 100), 'ms25a_p': int((1 - ms25_p) * 100),
-        'ms15_p': int(ms15_p * 100), 'ms35_p': int(ms35_p * 100),
-        'kg_var_p': int(kg_p * 100), 'kg_yok_p': int((1 - kg_p) * 100),
-        'iy05_p': int(iy05_p * 100), 'iy05a_p': int((1 - iy05_p) * 100),
-        'iy15_p': int(iy15_p * 100),
-        'iy1_p': int(iy_vc.get('H', 0) * 100), 'iyx_p': int(iy_vc.get('D', 0) * 100), 'iy2_p': int(iy_vc.get('A', 0) * 100),
-        'htft_mod': htft_mod, 'htft_p': htft_p,
+        'ms_side': ms_side, 'ms_p': int(round(ms_raw * guven_carpani * 100)), 'ms_mod': ms_mod,
+        'ms1_p': int(round(float(ms_vc.get('H', 0)) * guven_carpani * 100)),
+        'msx_p': int(round(float(ms_vc.get('D', 0)) * guven_carpani * 100)),
+        'ms2_p': int(round(float(ms_vc.get('A', 0)) * guven_carpani * 100)),
+        'ms25_p': int(round(ms25_raw * guven_carpani * 100)), 'ms25a_p': int(round((1 - ms25_raw) * guven_carpani * 100)),
+        'ms15_p': int(round(ms15_raw * guven_carpani * 100)), 'ms35_p': int(round(ms35_raw * guven_carpani * 100)),
+        'kg_var_p': int(round(kg_raw * guven_carpani * 100)), 'kg_yok_p': int(round((1 - kg_raw) * guven_carpani * 100)),
+        'iy05_p': int(round(iy05_raw * guven_carpani * 100)), 'iy05a_p': int(round((1 - iy05_raw) * guven_carpani * 100)),
+        'iy15_p': int(round(iy15_raw * guven_carpani * 100)),
+        'iy1_p': int(round(float(iy_vc.get('H', 0)) * guven_carpani * 100)),
+        'iyx_p': int(round(float(iy_vc.get('D', 0)) * guven_carpani * 100)),
+        'iy2_p': int(round(float(iy_vc.get('A', 0)) * guven_carpani * 100)),
+        'htft_mod': htft_mod, 'htft_p': int(round(htft_raw * guven_carpani * 100)),
         'flip_p': flip_p,
         'risk_label': risk_l, 'risk_cls': risk_cls,
         'eg': eg, 'dg': dg,
         'guven_renk': gc, 'guven_badge_cls': gb_cls, 'guven_badge_lbl': gb_lbl,
-        'ornek': len(b),
+        'ornek': sample,
+        'ornek_durum': ornek_durum,
+        'ornek_renk': ornek_renk,
+        'onerilen_tolerans': rehber['onerilen_tolerans'],
+        'onerilen_min_mac': onerilen_min_mac,
+        'tolerans_yorumu': rehber['yorum'],
+        'tolerans_tavsiyesi': tavsiye,
+        'min_mac_alt_sinir': alt_sinir,
+        'kullanilan_tolerans': round(float(tolerans), 2),
+        'guven_carpani': round(guven_carpani, 3),
     }, b.sort_values('Date', ascending=False)
 
 for key, default in [('final_list',[]),('detay_idx',None),('filtre','tumu'),('kupona',[])]:
@@ -690,8 +795,24 @@ with st.sidebar:
         options=['2122','2223','2324','2425','2526'],
         default=['2324','2425','2526']
     )
-    min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=1)
+    min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=60)
     TOLERANS = st.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
+
+    rehber = tolerans_rehberi(TOLERANS)
+    st.markdown(
+        f"""<div style="margin-top:10px;background:#151a23;border:1px solid #253046;border-radius:12px;padding:10px 12px">
+"
+        f"<div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Tolerans Rehberi</div>
+"
+        f"<div style="font-size:0.82rem;color:#fff">Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b></div>
+"
+        f"<div style="font-size:0.8rem;color:#c7cfdd;margin-top:4px">Önerilen min maç: <b>{rehber['onerilen_min_mac']}</b></div>
+"
+        f"<div style="font-size:0.76rem;color:#7f8a9e;margin-top:6px">{rehber['yorum']}</div>
+"
+        f"</div>""",
+        unsafe_allow_html=True
+    )
 
     st.markdown("---")
 
@@ -793,6 +914,21 @@ if st.session_state.detay_idx is not None:
         <div class="hb-label">TAHMİNİ SKOR</div>
         <div class="hb-val">{t['eg']} – {t['dg']}</div>
         <div class="hb-sub">En Olası Skor</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:14px 18px;margin-bottom:14px">
+      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between">
+        <div style="font-size:0.82rem;color:#c7cfdd">Kullanılan tolerans: <b>{t['kullanilan_tolerans']:.2f}</b> · Önerilen: <b>{t['onerilen_tolerans']}</b></div>
+        <div style="font-size:0.82rem;color:#c7cfdd">Örnek: <b>{int(t['ornek'])}</b> · Önerilen min maç: <b>{t['onerilen_min_mac']}</b></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
+        <span style="background:{t['ornek_renk']};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t['ornek_durum']}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">{t['tolerans_yorumu']}</span>
+        <span style="font-size:0.78rem;color:#77b4ff">Tavsiye: {t['tolerans_tavsiyesi']}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">Güven çarpanı: {t['guven_carpani']}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -917,7 +1053,7 @@ if st.session_state.detay_idx is not None:
     st.markdown(f"""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:16px 22px;margin-bottom:0">
       <div class="tk-title" style="margin-bottom:4px">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
-      <div style="font-size:0.72rem;color:#666">ℹ️ Tablodaki maçlar seçili oran aralığına (±{int(TOLERANS*100)}%) en yakın bulunan benzer maçlardır.</div>
+      <div style="font-size:0.72rem;color:#666">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1067,7 +1203,7 @@ else:
                   <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#666">📊 {int(t['ornek'])} örnek</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">📊 {int(t['ornek'])} örnek · {t['ornek_durum']}</div>
               </div>
             </div>
             """, unsafe_allow_html=True)
