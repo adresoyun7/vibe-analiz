@@ -617,31 +617,86 @@ def fmt_odd(odd):
 
 def build_top3_coupon(indexed_items, mode="best_favorites"):
     candidates = []
+
     for idx, item in indexed_items:
         m, t = item["m"], item["t"]
+
         if t.get("belirsiz") or not t.get("oynanabilir"):
             continue
+
         ana_odd = t.get("ana_odd")
         if ana_odd is None:
             continue
+
         if t.get("match_type") != "Favori":
             continue
+
         candidates.append({
             "idx": idx,
             "m": m,
             "t": t,
-            "ana_odd": ana_odd
+            "ana_odd": ana_odd,
+            "ana_label": t.get("ana_label", ""),
+            "playable_score": t.get("playable_score", 0),
+            "ana_p": t.get("ana_p", 0),
         })
 
     if mode == "best_favorites":
-        candidates.sort(key=lambda c: (c["ana_odd"], -c["t"].get("playable_score", 0)))
+        # 🔥 GÜVEN ODAKLI
+        candidates.sort(
+            key=lambda c: (
+                c["playable_score"],
+                c["ana_p"],
+                -c["ana_odd"]
+            ),
+            reverse=True
+        )
+
+        picks = []
+        label_counts = {}
+
+        for c in candidates:
+            label = c["ana_label"]
+
+            # aynı tahminden spam olmasın
+            if label_counts.get(label, 0) >= 1:
+                continue
+
+            picks.append(c)
+            label_counts[label] = 1
+
+            if len(picks) == 3:
+                break
+
+        # 3'e tamamla
+        if len(picks) < 3:
+            used = {p["idx"] for p in picks}
+            for c in candidates:
+                if c["idx"] in used:
+                    continue
+                picks.append(c)
+                if len(picks) == 3:
+                    break
+
     else:
-        candidates = [c for c in candidates if c["ana_odd"] >= 1.70]
-        candidates.sort(key=lambda c: (c["ana_odd"], c["t"].get("playable_score", 0)), reverse=True)
+        # 🎯 ORAN ODAKLI
+        candidates = [c for c in candidates if c["ana_odd"] >= 1.55]
 
-    picks = candidates[:3]
-    return [f"{c['m']['ev']} vs {c['m']['dep']} — {c['t']['ana_label']} ({fmt_odd(c['ana_odd'])})" for c in picks]
+        candidates.sort(
+            key=lambda c: (
+                c["ana_odd"],
+                c["playable_score"],
+                c["ana_p"]
+            ),
+            reverse=True
+        )
 
+        picks = candidates[:3]
+
+    return [
+        f"{c['m']['ev']} vs {c['m']['dep']} — {c['t']['ana_label']} ({fmt_odd(c['ana_odd'])})"
+        for c in picks
+    ]
 
 
 def market_label_to_odd(m_row, label):
