@@ -7,7 +7,7 @@ import streamlit as st
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 5
+APP_SCHEMA_VERSION = 6
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -706,6 +706,66 @@ def hesapla(b_df, m_row, tolerans):
     ou_label = "2.5 Üst" if ms25_raw >= 0.5 else "2.5 Alt"
     kg_label = "KG Var" if kg_raw >= 0.5 else "KG Yok"
 
+    # --- KOMBO / ORTAK EŞLEŞME MOTORU ---
+    cond_ms1 = (b["FTR"] == "H")
+    cond_msx = (b["FTR"] == "D")
+    cond_ms2 = (b["FTR"] == "A")
+    cond_ust25 = (toplam_gol >= 3)
+    cond_alt25 = (toplam_gol <= 2)
+    cond_kg_var = ((b["FTHG"] > 0) & (b["FTAG"] > 0))
+    cond_kg_yok = ~cond_kg_var
+
+    combo_defs = [
+        ("MS1 + 2.5 Üst", cond_ms1 & cond_ust25),
+        ("MS1 + 2.5 Alt", cond_ms1 & cond_alt25),
+        ("MS1 + KG Var", cond_ms1 & cond_kg_var),
+        ("MS1 + KG Yok", cond_ms1 & cond_kg_yok),
+
+        ("MSX + 2.5 Üst", cond_msx & cond_ust25),
+        ("MSX + 2.5 Alt", cond_msx & cond_alt25),
+        ("MSX + KG Var", cond_msx & cond_kg_var),
+        ("MSX + KG Yok", cond_msx & cond_kg_yok),
+
+        ("MS2 + 2.5 Üst", cond_ms2 & cond_ust25),
+        ("MS2 + 2.5 Alt", cond_ms2 & cond_alt25),
+        ("MS2 + KG Var", cond_ms2 & cond_kg_var),
+        ("MS2 + KG Yok", cond_ms2 & cond_kg_yok),
+    ]
+
+    combo_list = []
+    min_combo_hits = max(2, min(5, onerilen_min_mac))
+    for combo_label, combo_cond in combo_defs:
+        combo_hit = int(combo_cond.sum())
+        combo_raw = float(combo_cond.mean())
+        combo_conf = combo_raw * guven_carpani
+        combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, sample, float(tolerans))
+
+        if combo_hit >= min_combo_hits and combo_raw >= 0.18:
+            combo_list.append({
+                "label": combo_label,
+                "raw_prob": combo_raw,
+                "conf_prob": combo_conf,
+                "hit": combo_hit,
+                "fake_drop": combo_fake_drop,
+            })
+
+    combo_list = sorted(combo_list, key=lambda x: (x["raw_prob"], x["hit"]), reverse=True)
+
+    if combo_list:
+        best_combo = combo_list[0]
+        combo_label = best_combo["label"]
+        combo_p = int(round(best_combo["conf_prob"] * 100))
+        combo_raw_p = int(round(best_combo["raw_prob"] * 100))
+        combo_hit = int(best_combo["hit"])
+        combo_var = True
+    else:
+        combo_label = kg_label
+        kg_conf, _ = fake_confidence_duzelt(kg_best_raw * guven_carpani, sample, float(tolerans))
+        combo_p = int(round(kg_conf * 100))
+        combo_raw_p = int(round(kg_best_raw * 100))
+        combo_hit = 0
+        combo_var = False
+
     cands = [
         {
             "label": ms_label,
@@ -782,6 +842,8 @@ def hesapla(b_df, m_row, tolerans):
 
     ana_value = value_hesapla(best["raw_prob"], best["oran"])
     ana_value_text, ana_value_cls = value_sinifi(ana_value)
+    ana_value_text = ana_value_text or "N/A"
+    ana_value_cls = ana_value_cls or "value-neutral"
 
     nedenler = [
         f"Bu oran aralığında {sample} benzer maç bulundu.",
@@ -789,6 +851,8 @@ def hesapla(b_df, m_row, tolerans):
         f"Ortalama toplam gol {avg_goal:.2f} ({goal_profile}).",
         f"Maç tipi: {match_type}.",
     ]
+    if combo_var:
+        nedenler.append(f"Ortak eşleşme bulundu: {combo_label} (%{combo_raw_p}, {combo_hit} maç).")
     if fake_drop:
         nedenler.append("Düşük örnek + yüksek güven görüldüğü için fake confidence freni uygulandı.")
     if ana_value is not None:
@@ -810,6 +874,12 @@ def hesapla(b_df, m_row, tolerans):
         "alt_p": alt_p,
         "kg_label": kg_label,
         "kg_p": int(round(kg_raw * guven_carpani * 100)),
+        "combo_label": combo_label,
+        "combo_p": combo_p,
+        "combo_raw_p": combo_raw_p,
+        "combo_hit": combo_hit,
+        "combo_var": combo_var,
+        "combo_list": combo_list[:5],
         "canli_label": canli_label,
         "canli_p": canli_p,
         "ms_side": ms_side,
@@ -1066,7 +1136,7 @@ if st.session_state.detay_idx is not None:
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
         <span style="background:{t.get('ornek_renk', '#44506b')};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t.get('ornek_durum', 'Standart')}</span>
-        <span class="value-pill {t['ana_value_cls']}">{t['ana_value_text']}</span>
+        <span class="value-pill {t.get('ana_value_cls', 'value-neutral')}">{t.get('ana_value_text', 'N/A')}</span>
         <span style="font-size:0.78rem;color:#8f98ab">{t['tolerans_yorumu']}</span>
         <span style="font-size:0.78rem;color:#77b4ff">Tavsiye: {t['tolerans_tavsiyesi']}</span>
         <span style="font-size:0.78rem;color:#8f98ab">Güven çarpanı: {t['guven_carpani']}</span>
@@ -1150,6 +1220,7 @@ if st.session_state.detay_idx is not None:
         iy_lbl = f"Üst %{int(t['iy05_p'])}" if t["iy05_p"] >= 50 else f"Alt %{int(t['iy05a_p'])}"
 
         htft_cls = "db-green" if t["htft_p"] >= 40 else "db-gold"
+        combo_cls = "db-gold" if t.get("combo_var", False) else "db-red"
 
         st.markdown(f"""
         <div class="diger-kart">
@@ -1176,13 +1247,18 @@ if st.session_state.detay_idx is not None:
           </div>
 
           <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Sürpriz / Kombo</div><div class="diger-sub">Ortak eşleşme</div></div></div>
+            <span class="diger-badge {combo_cls}">{t.get('combo_label', 'N/A')} %{int(t.get('combo_p', 0))}</span>
+          </div>
+
+          <div class="diger-row">
             <div class="diger-left"><span class="diger-icon">📍</span><div><div class="diger-name">Canlı Tercih</div><div class="diger-sub">{t['canli_label']}</div></div></div>
             <span class="diger-badge db-green">%{int(t['canli_p'])}</span>
           </div>
 
           <div class="diger-row">
             <div class="diger-left"><span class="diger-icon">💹</span><div><div class="diger-name">Value</div><div class="diger-sub">Model vs oran</div></div></div>
-            <span class="diger-badge db-blue">{t['ana_value_text']}</span>
+            <span class="diger-badge db-blue">{t.get('ana_value_text', 'N/A')}</span>
           </div>
 
           <div class="risk-row" style="margin-top:14px">
@@ -1205,6 +1281,30 @@ if st.session_state.detay_idx is not None:
       {neden_html}
     </div>
     """, unsafe_allow_html=True)
+
+    if t.get("combo_list"):
+        combo_rows = "".join([
+            f"""
+            <div class="diger-row">
+              <div class="diger-left">
+                <span class="diger-icon">➕</span>
+                <div>
+                  <div class="diger-name">{c['label']}</div>
+                  <div class="diger-sub">{c['hit']} eşleşme</div>
+                </div>
+              </div>
+              <span class="diger-badge db-gold">%{int(round(c['conf_prob'] * 100))}</span>
+            </div>
+            """
+            for c in t["combo_list"]
+        ])
+
+        st.markdown(f"""
+        <div class="diger-kart" style="margin-bottom:14px">
+          <div class="tk-title">ORTAK EŞLEŞEN KOMBOLAR</div>
+          {combo_rows}
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown(f"""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:16px 22px;margin-bottom:0">
@@ -1324,7 +1424,8 @@ else:
         elif "Zayıf" in t["ana_label"]:
             pill_cls = "gri"
 
-        surp_cls = "" if "Var" in t["kg_label"] else "yok"
+        surp_text = t.get("combo_label", t.get("kg_label", "N/A"))
+        surp_cls = "" if "Var" in surp_text or "+" in surp_text else "yok"
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -1356,11 +1457,11 @@ else:
                 <div class="mk-label">ALTERNATİF</div>
                 <span class="alt-pill">{t['alt_label']}</span>
                 <div style="margin-top:8px">
-                  <div class="mk-label">SÜRPRİZ</div>
-                  <span class="surp-pill {surp_cls}">{t['kg_label']}</span>
+                  <div class="mk-label">SÜRPRİZ / KOMBO</div>
+                  <span class="surp-pill {surp_cls}">{surp_text}</span>
                 </div>
                 <div style="margin-top:8px">
-                  <span class="value-pill {t['ana_value_cls']}">{t['ana_value_text']}</span>
+                  <span class="value-pill {t.get('ana_value_cls', 'value-neutral')}">{t.get('ana_value_text', 'N/A')}</span>
                 </div>
               </div>
 
