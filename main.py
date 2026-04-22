@@ -1222,6 +1222,7 @@ if analiz_btn:
                 final.append({"m": m.to_dict(), "t": t, "b": b_det})
 
         final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0), x["t"].get("ornek", 0)), reverse=True)
+        final = sorted(final, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
         st.session_state.final_list = final
         st.session_state.detay_idx = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -1481,7 +1482,7 @@ if st.session_state.detay_idx is not None:
 
     st.stop()
 
-fl = sorted(st.session_state.final_list, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
+fl = st.session_state.final_list
 
 hc1, hc2 = st.columns([6, 1])
 with hc1:
@@ -1563,10 +1564,21 @@ else:
             pill_cls = "gri"
 
         combo_text = t.get("combo_label", "")
+        belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
+        combo_html = ''
+        if combo_text:
+            combo_level = t.get("combo_level", "")
+            level_text = f' · {combo_level}' if combo_level else ''
+            combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
+        stability_early_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>' if t.get('stability_early_text') else ''
+        stability_late_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>' if t.get('stability_late_text') else ''
+        stability_fallback_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>' if (not t.get('stability_early_text') and not t.get('stability_late_text')) else ''
+
+        alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
 
         kc, bc = st.columns([9, 1.4])
         with kc:
-            st.markdown(f"""
+            card_html = f"""
             <div class="mac-kart">
               <div class="mk-zaman">
                 <span class="mk-star">☆</span>
@@ -1578,7 +1590,7 @@ else:
                 <div class="mk-ev">⬜ {m['ev']}</div>
                 <div class="mk-dep">🟦 {m['dep']}</div>
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
-                {f'<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''}
+                {belirsiz_html}
               </div>
 
               <div>
@@ -1593,8 +1605,8 @@ else:
 
               <div>
                 <div class="mk-label">ALTERNATİF</div>
-                <span class="alt-pill">{t['alt_label']}</span>
-                {f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO · {t.get("combo_level", "")}</div><span class="combo-pill">{combo_text}</span></div>' if combo_text else ''}
+                {alt_html}
+                {combo_html}
               </div>
 
               <div>
@@ -1608,13 +1620,13 @@ else:
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
-                {f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>' if t.get('stability_early_text') else ''}
-                {f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>' if t.get('stability_late_text') else ''}
-                {f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>' if (not t.get('stability_early_text') and not t.get('stability_late_text')) else ''}
+                {stability_early_html}
+                {stability_late_html}
+                {stability_fallback_html}
               </div>
             </div>
-            """, unsafe_allow_html=True)
-
+            """
+            st.markdown(card_html, unsafe_allow_html=True)
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
