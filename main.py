@@ -714,6 +714,13 @@ def hesapla(b_df, m_row, tolerans):
         'guven_carpani': round(guven_carpani, 3),
     }, b.sort_values('Date', ascending=False)
 
+APP_SCHEMA_VERSION = 2
+if st.session_state.get('app_schema_version') != APP_SCHEMA_VERSION:
+    st.session_state.final_list = []
+    st.session_state.detay_idx = None
+    st.session_state.kupona = []
+    st.session_state.app_schema_version = APP_SCHEMA_VERSION
+
 for key, default in [('final_list',[]),('detay_idx',None),('filtre','tumu'),('kupona',[])]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -925,7 +932,7 @@ if st.session_state.detay_idx is not None:
         <div style="font-size:0.82rem;color:#c7cfdd">Örnek: <b>{int(t['ornek'])}</b> · Önerilen min maç: <b>{t['onerilen_min_mac']}</b></div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
-        <span style="background:{t['ornek_renk']};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t['ornek_durum']}</span>
+        <span style="background:{t.get('ornek_renk', '#44506b')};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t.get('ornek_durum', 'Standart')}</span>
         <span style="font-size:0.78rem;color:#8f98ab">{t['tolerans_yorumu']}</span>
         <span style="font-size:0.78rem;color:#77b4ff">Tavsiye: {t['tolerans_tavsiyesi']}</span>
         <span style="font-size:0.78rem;color:#8f98ab">Güven çarpanı: {t['guven_carpani']}</span>
@@ -1203,7 +1210,7 @@ else:
                   <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#666">📊 {int(t['ornek'])} örnek · {t['ornek_durum']}</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
               </div>
             </div>
             """, unsafe_allow_html=True)
