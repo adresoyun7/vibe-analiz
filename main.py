@@ -390,65 +390,70 @@ def format_tr_date(d):
 
 
 
+
+
+def dinamik_min_mac(tolerans: float):
+    if tolerans <= 0.02:
+        return 1
+    elif tolerans <= 0.05:
+        return 3
+    elif tolerans <= 0.08:
+        return 5
+    elif tolerans <= 0.12:
+        return 10
+    return 20
+
+
+def sample_factor_hesapla(sample, tolerans):
+    if tolerans <= 0.02:
+        hedef = 5
+    elif tolerans <= 0.05:
+        hedef = 10
+    elif tolerans <= 0.08:
+        hedef = 15
+    elif tolerans <= 0.12:
+        hedef = 25
+    else:
+        hedef = 40
+    return min(0.75 + 0.25 * (sample / max(hedef, 1)), 1.0)
+
 def tolerans_rehberi(tolerans: float):
-    if tolerans <= 0.00:
-        return {
-            'onerilen_tolerans': '0.08 - 0.10',
-            'onerilen_min_mac': 40,
-            'yorum': 'Aşırı dar filtre. Veri çok hızlı düşebilir.',
-            'durum': 'riskli'
-        }
-    if tolerans <= 0.03:
-        return {
-            'onerilen_tolerans': '0.08 - 0.10',
-            'onerilen_min_mac': 50,
-            'yorum': 'Çok dar filtre. Sadece çok yakın oranları yakalar.',
-            'durum': 'riskli'
-        }
-    if tolerans <= 0.05:
-        return {
-            'onerilen_tolerans': '0.08 - 0.10',
-            'onerilen_min_mac': 60,
-            'yorum': 'Dar filtre. Veri azsa güven yapay yükselebilir.',
-            'durum': 'dikkat'
-        }
-    if tolerans <= 0.08:
-        return {
-            'onerilen_tolerans': '0.08 - 0.10',
-            'onerilen_min_mac': 80,
-            'yorum': 'Dengeli filtre.',
-            'durum': 'iyi'
-        }
-    if tolerans <= 0.10:
-        return {
-            'onerilen_tolerans': '0.08 - 0.10',
-            'onerilen_min_mac': 100,
-            'yorum': 'En sağlıklı aralık.',
-            'durum': 'iyi'
-        }
-    if tolerans <= 0.12:
-        return {
-            'onerilen_tolerans': '0.08 - 0.10',
-            'onerilen_min_mac': 120,
-            'yorum': 'Biraz geniş filtre. Veri artar ama benzerlik azalabilir.',
-            'durum': 'dikkat'
-        }
+    onerilen_tolerans = '0.08 - 0.10'
+    onerilen_min_mac = dinamik_min_mac(tolerans)
+
+    if tolerans <= 0.02:
+        yorum = 'Aşırı dar filtre. Az sayıda ama çok yakın oranlı maçlar gelir.'
+        durum = 'riskli'
+    elif tolerans <= 0.05:
+        yorum = 'Dar filtre. Az maçla da güçlü benzerlik yakalanabilir.'
+        durum = 'dikkat'
+    elif tolerans <= 0.08:
+        yorum = 'Dengeli filtre. Veri ve benzerlik birlikte korunur.'
+        durum = 'iyi'
+    elif tolerans <= 0.12:
+        yorum = 'Biraz geniş filtre. Veri artar ama benzerlik biraz düşer.'
+        durum = 'iyi'
+    else:
+        yorum = 'Geniş filtre. Sonuçlar daha genel olabilir.'
+        durum = 'dikkat'
+
     return {
-        'onerilen_tolerans': '0.08 - 0.10',
-        'onerilen_min_mac': 150,
-        'yorum': 'Geniş filtre. Sonuçlar fazla genelleşebilir.',
-        'durum': 'riskli'
+        'onerilen_tolerans': onerilen_tolerans,
+        'onerilen_min_mac': onerilen_min_mac,
+        'yorum': yorum,
+        'durum': durum,
     }
 
 
 def guven_metni(sample, onerilen_min_mac):
-    if sample >= max(150, onerilen_min_mac):
+    if sample >= max(20, onerilen_min_mac * 2):
         return 'Çok Sağlam', '#27ae60'
-    if sample >= onerilen_min_mac:
+    if sample >= max(10, onerilen_min_mac):
         return 'Sağlıklı', '#2ecc71'
-    if sample >= max(40, int(onerilen_min_mac * 0.7)):
-        return 'Sınırda', '#f39c12'
+    if sample >= max(3, onerilen_min_mac):
+        return 'Yeterli', '#f39c12'
     return 'Riskli', '#e74c3c'
+
 
 def guven_renk(pct):
     if pct >= 70:
@@ -585,7 +590,7 @@ def bulten_cek(key, kodlar, t):
 
 def hesapla(b_df, m_row, tolerans):
     rehber = tolerans_rehberi(float(tolerans))
-    onerilen_min_mac = rehber['onerilen_min_mac']
+    onerilen_min_mac = dinamik_min_mac(float(tolerans))
 
     b = b_df[
         (b_df['B365H'].between(m_row['h'] - tolerans, m_row['h'] + tolerans)) &
@@ -600,8 +605,8 @@ def hesapla(b_df, m_row, tolerans):
         b[c] = pd.to_numeric(b[c], errors='coerce').fillna(0)
 
     sample = len(b)
-    alt_sinir = max(25, int(onerilen_min_mac * 0.60))
-    sample_factor = min(sample / max(onerilen_min_mac, 1), 1.0)
+    alt_sinir = max(1, onerilen_min_mac)
+    sample_factor = sample_factor_hesapla(sample, float(tolerans))
 
     toplam_gol = b['FTHG'] + b['FTAG']
     ilk_yari_gol = b['HTHG'] + b['HTAG']
@@ -694,11 +699,9 @@ def hesapla(b_df, m_row, tolerans):
     gc, gb_cls, gb_lbl = guven_renk(ana_p)
     ornek_durum, ornek_renk = guven_metni(sample, onerilen_min_mac)
 
-    if sample < alt_sinir:
-        tavsiye = 'Toleransı artır'
-    elif sample < onerilen_min_mac:
+    if sample < onerilen_min_mac:
         tavsiye = 'Biraz artırılabilir'
-    elif sample > onerilen_min_mac * 2 and tolerans > 0.10:
+    elif sample > max(8, onerilen_min_mac * 3) and tolerans > 0.10:
         tavsiye = 'Biraz düşürülebilir'
     else:
         tavsiye = 'Uygun'
@@ -737,7 +740,7 @@ def hesapla(b_df, m_row, tolerans):
         'guven_carpani': round(guven_carpani, 3),
     }, b.sort_values('Date', ascending=False)
 
-APP_SCHEMA_VERSION = 4
+APP_SCHEMA_VERSION = 5
 if st.session_state.get('app_schema_version') != APP_SCHEMA_VERSION:
     st.session_state.final_list = []
     st.session_state.detay_idx = None
@@ -825,7 +828,7 @@ with st.sidebar:
         options=['2122','2223','2324','2425','2526'],
         default=['2324','2425','2526']
     )
-    min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=60)
+    min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=1)
     TOLERANS = st.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
 
     rehber = tolerans_rehberi(TOLERANS)
