@@ -354,9 +354,15 @@ def bulten_cek(api_key, kodlar, target_date):
                 "markets": "h2h",
                 "oddsFormat": "decimal"
             }
-            r = requests.get(url, params=params, timeout=15)
-            if r.status_code != 200:
-                continue
+           r = requests.get(url, params=params, timeout=15)
+
+if r.status_code != 200:
+    st.error(f"{sport_key} için API hata kodu: {r.status_code}")
+    try:
+        st.write(r.json())
+    except:
+        st.write(r.text)
+    continue
 
             data = r.json()
             if not isinstance(data, list):
