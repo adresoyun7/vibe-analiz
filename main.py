@@ -1479,7 +1479,6 @@ else:
                 <div class="mk-dep">🟦 {m['dep']}</div>
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
                 {f'<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''}
-                <div class="mk-mini">Senaryo: {t.get('scenario_label', '')}</div>
               </div>
 
               <div>
