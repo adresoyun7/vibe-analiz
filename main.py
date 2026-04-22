@@ -714,6 +714,24 @@ def hesapla(b_df, m_row, tolerans):
     alt_label = alt["label"]
     alt_p = int(round(alt_conf * 100))
 
+    def alt_destekli_mi(ana, alt_lbl):
+        if not alt_lbl:
+            return False
+        destek = {
+            "2.5 Üst": {"KG Var"},
+            "2.5 Alt": {"KG Yok"},
+            "KG Var": {"2.5 Üst"},
+            "KG Yok": {"2.5 Alt"},
+            "MS 1": {"2.5 Üst", "KG Var", "2.5 Alt", "KG Yok"},
+            "MS 2": {"2.5 Üst", "KG Var", "2.5 Alt", "KG Yok"},
+            "Beraberlik": {"KG Var", "2.5 Alt"},
+        }
+        return alt_lbl in destek.get(ana, set())
+
+    if not alt_destekli_mi(ana_label, alt_label):
+        alt_label = ""
+        alt_p = 0
+
     cond_ms1 = (b["FTR"] == "H")
     cond_msx = (b["FTR"] == "D")
     cond_ms2 = (b["FTR"] == "A")
@@ -911,11 +929,28 @@ def hesapla(b_df, m_row, tolerans):
     if flip_p >= 0.12:
         nedenler.append(f"HT/FT sürpriz riski %{int(round(flip_p * 100))}.")
 
+    playable_score = ana_p
+    if combo_var:
+        playable_score += min(combo_p, 20) * 0.35
+    playable_score += min(sample, 40) * 0.25
+    if match_type == "Favori":
+        playable_score += 4
+    elif match_type == "Dengeli":
+        playable_score += 2
+    if belirsiz:
+        playable_score -= 12
+    if fake_drop:
+        playable_score -= 6
+    if flip_p >= 0.12:
+        playable_score -= 4
+    playable_score = round(playable_score, 1)
+
     oynanabilir = (ana_p >= 58 and sample >= onerilen_min_mac and not belirsiz)
 
     return {
         "ana_label": ana_label,
         "ana_p": ana_p,
+        "playable_score": playable_score,
         "ana_raw_p": ana_raw_p,
         "alt_label": alt_label,
         "alt_p": alt_p,
@@ -1381,7 +1416,7 @@ if st.session_state.detay_idx is not None:
 
     st.stop()
 
-fl = st.session_state.final_list
+fl = sorted(st.session_state.final_list, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
 
 hc1, hc2 = st.columns([6, 1])
 with hc1:
@@ -1439,11 +1474,11 @@ else:
 
     filtre = st.session_state.filtre
     if filtre == "yuksek":
-        goster = yuksek
+        goster = sorted(yuksek, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
     elif filtre == "orta":
-        goster = orta
+        goster = sorted(orta, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
     elif filtre == "kombo":
-        goster = kombolu
+        goster = sorted(kombolu, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
     else:
         goster = fl
 
@@ -1506,7 +1541,7 @@ else:
                   <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#666">📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
               </div>
             </div>
             """, unsafe_allow_html=True)
