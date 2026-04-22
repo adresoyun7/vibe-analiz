@@ -632,6 +632,22 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
     picks = candidates[:3]
     return [f"{c['m']['ev']} vs {c['m']['dep']} — {c['t']['ana_label']} ({fmt_odd(c['ana_odd'])})" for c in picks]
 
+
+
+def market_label_to_odd(m_row, label):
+    if not isinstance(m_row, dict):
+        try:
+            m_row = m_row.to_dict()
+        except Exception:
+            pass
+    if label == "MS 1":
+        return m_row.get("h")
+    if label == "MS 2":
+        return m_row.get("a")
+    if label == "Beraberlik":
+        return m_row.get("b")
+    return None
+
 def hesapla(b_df, m_row, tolerans):
     rehber = tolerans_rehberi(float(tolerans))
     onerilen_min_mac = dinamik_min_mac(float(tolerans))
@@ -760,6 +776,8 @@ def hesapla(b_df, m_row, tolerans):
     if not alt_destekli_mi(ana_label, alt_label):
         alt_label = ""
         alt_p = 0
+
+    ana_odd = market_label_to_odd(m_row, ana_label)
 
     cond_ms1 = (b["FTR"] == "H")
     cond_msx = (b["FTR"] == "D")
@@ -999,6 +1017,7 @@ def hesapla(b_df, m_row, tolerans):
         "ana_p": ana_p,
         "playable_score": playable_score,
         "ana_raw_p": ana_raw_p,
+        "ana_odd": ana_odd,
         "alt_label": alt_label,
         "alt_p": alt_p,
         "kg_label": kg_label,
