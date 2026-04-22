@@ -290,6 +290,7 @@ section[data-testid="stSidebar"] label {
 }
 .tk-row:last-child { border-bottom:none; }
 .tk-key { font-size:0.84rem; color:#9098aa; }
+
 .risk-row {
     background:#1a1d26;
     border-radius:10px;
@@ -334,6 +335,11 @@ section[data-testid="stSidebar"] label {
     display:flex;
     align-items:center;
     gap:10px;
+}
+.diger-icon {
+    font-size: 1.05rem;
+    width: 20px;
+    text-align: center;
 }
 .diger-name {
     font-size:0.86rem;
@@ -473,7 +479,6 @@ def bulten_cek(key, kodlar, t):
                 except:
                     continue
 
-                # 1 günlük tolerans
                 if abs((tm.date() - t).days) > 1:
                     continue
 
@@ -746,7 +751,7 @@ if st.session_state.detay_idx is not None:
     with c3:
         st.markdown(
             f"""<div style="text-align:right;padding-top:10px">
-            <span style="font-size:0.76rem;color:#666">📊 {t['ornek']} örnek</span></div>""",
+            <span style="font-size:0.76rem;color:#666">📊 {int(t['ornek'])} örnek</span></div>""",
             unsafe_allow_html=True
         )
 
@@ -763,7 +768,7 @@ if st.session_state.detay_idx is not None:
       </div>
       <div class="hbox blue">
         <div class="hb-label">GÜVEN SKORU</div>
-        <div class="hb-val">{t['ana_p']}%</div>
+        <div class="hb-val">{int(t['ana_p'])}%</div>
         <div><span class="hb-badge {t['guven_badge_cls']}">{t['guven_badge_lbl']}</span></div>
       </div>
       <div class="hbox dark">
@@ -785,48 +790,83 @@ if st.session_state.detay_idx is not None:
     with left:
         st.markdown(f"""
         <div class="tahmin-kart">
-          <div class="tk-title">Maç Tahminleri</div>
+          <div class="tk-title">MAÇ TAHMİNLERİ</div>
 
           <div class="tk-row">
-            <span class="tk-key">🏆 Maç Sonucu &nbsp;<small style="color:#555">MS 1/X/2</small></span>
-            <div style="display:flex;gap:14px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{t['ms1_p']}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{t['msx_p']}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#e74c3c">%{t['ms2_p']}</div></div>
+            <span class="tk-key">🏆 Maç Sonucu <small style="color:#555">MS 1/X/2</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">1</div>
+                <div style="font-weight:700;color:#27ae60">%{int(t['ms1_p'])}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">X</div>
+                <div style="font-weight:700;color:#f1c40f">%{int(t['msx_p'])}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">2</div>
+                <div style="font-weight:700;color:#e74c3c">%{int(t['ms2_p'])}</div>
+              </div>
             </div>
           </div>
 
           <div class="tk-row">
-            <span class="tk-key">⚽ 2.5 Üst/Alt &nbsp;<small style="color:#555">Toplam Gol</small></span>
-            <div style="display:flex;gap:14px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Üst</div><div style="font-weight:700;color:#27ae60">%{t['ms25_p']}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Alt</div><div style="font-weight:700;color:#e74c3c">%{t['ms25a_p']}</div></div>
+            <span class="tk-key">⚽ 2.5 Üst/Alt <small style="color:#555">Toplam Gol</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">Üst</div>
+                <div style="font-weight:700;color:#27ae60">%{int(t['ms25_p'])}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">Alt</div>
+                <div style="font-weight:700;color:#e74c3c">%{int(t['ms25a_p'])}</div>
+              </div>
             </div>
           </div>
 
           <div class="tk-row">
-            <span class="tk-key">🤝 Karşılıklı Gol &nbsp;<small style="color:#555">KG Var/Yok</small></span>
-            <div style="display:flex;gap:14px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#
-              666">Var</div><div style="font-weight:700;color:#27ae60">%{t['kg_var_p']}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Yok</div><div style="font-weight:700;color:#e74c3c">%{t['kg_yok_p']}</div></div>
+            <span class="tk-key">🤝 Karşılıklı Gol <small style="color:#555">KG Var / Yok</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">Var</div>
+                <div style="font-weight:700;color:#27ae60">%{int(t['kg_var_p'])}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">Yok</div>
+                <div style="font-weight:700;color:#e74c3c">%{int(t['kg_yok_p'])}</div>
+              </div>
             </div>
           </div>
 
           <div class="tk-row">
-            <span class="tk-key">⏱ İlk Yarı Sonucu &nbsp;<small style="color:#555">İY 1/X/2</small></span>
-            <div style="display:flex;gap:14px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{t['iy1_p']}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{t['iyx_p']}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#e74c3c">%{t['iy2_p']}</div></div>
+            <span class="tk-key">⏱ İlk Yarı Sonucu <small style="color:#555">İY 1/X/2</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">1</div>
+                <div style="font-weight:700;color:#27ae60">%{int(t['iy1_p'])}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">X</div>
+                <div style="font-weight:700;color:#f1c40f">%{int(t['iyx_p'])}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">2</div>
+                <div style="font-weight:700;color:#e74c3c">%{int(t['iy2_p'])}</div>
+              </div>
             </div>
           </div>
 
           <div class="tk-row">
             <span class="tk-key">⏱ İlk Yarı 0.5 Üst/Alt</span>
-            <div style="display:flex;gap:14px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Üst</div><div style="font-weight:700;color:#27ae60">%{t['iy05_p']}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Alt</div><div style="font-weight:700;color:#e74c3c">%{t['iy05a_p']}</div></div>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">Üst</div>
+                <div style="font-weight:700;color:#27ae60">%{int(t['iy05_p'])}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">Alt</div>
+                <div style="font-weight:700;color:#e74c3c">%{int(t['iy05a_p'])}</div>
+              </div>
             </div>
           </div>
 
@@ -838,32 +878,36 @@ if st.session_state.detay_idx is not None:
         """, unsafe_allow_html=True)
 
     with right:
-        ms35a = 100 - t['ms35_p']
+        ms35a = 100 - int(t['ms35_p'])
         ms35_cls = "db-green" if t['ms35_p'] >= 50 else "db-gold"
-        ms35_lbl = f"Üst %{t['ms35_p']}" if t['ms35_p'] >= 50 else f"Alt %{ms35a}"
-        kg_cls   = "db-green" if t['kg_var_p'] >= 50 else "db-red"
-        kg_lbl   = f"Var %{t['kg_var_p']}" if t['kg_var_p'] >= 50 else f"Yok %{t['kg_yok_p']}"
-        iy_cls   = "db-green" if t['iy05_p'] >= 50 else "db-red"
-        iy_lbl   = f"Üst %{t['iy05_p']}" if t['iy05_p'] >= 50 else f"Alt %{t['iy05a_p']}"
+        ms35_lbl = f"Üst %{int(t['ms35_p'])}" if t['ms35_p'] >= 50 else f"Alt %{ms35a}"
+
+        kg_cls = "db-green" if t['kg_var_p'] >= 50 else "db-red"
+        kg_lbl = f"Var %{int(t['kg_var_p'])}" if t['kg_var_p'] >= 50 else f"Yok %{int(t['kg_yok_p'])}"
+
+        iy_cls = "db-green" if t['iy05_p'] >= 50 else "db-red"
+        iy_lbl = f"Üst %{int(t['iy05_p'])}" if t['iy05_p'] >= 50 else f"Alt %{int(t['iy05a_p'])}"
+
+        htft_cls = "db-green" if t['htft_p'] >= 40 else "db-gold"
 
         st.markdown(f"""
         <div class="diger-kart">
-          <div class="tk-title">Diğer Öneriler</div>
+          <div class="tk-title">DİĞER ÖNERİLER</div>
 
           <div class="diger-row">
             <div class="diger-left">
-              <span>🔄</span>
+              <span class="diger-icon">🔁</span>
               <div>
                 <div class="diger-name">HT/FT</div>
                 <div class="diger-sub">1. Yarı / Maç Sonu</div>
               </div>
             </div>
-            <span class="diger-badge db-green">{t['htft_mod']} %{t['htft_p']}</span>
+            <span class="diger-badge {htft_cls}">{t['htft_mod']} %{int(t['htft_p'])}</span>
           </div>
 
           <div class="diger-row">
             <div class="diger-left">
-              <span>⚽</span>
+              <span class="diger-icon">⚽</span>
               <div>
                 <div class="diger-name">Toplam Gol 3.5</div>
                 <div class="diger-sub">Tahmini Gol Sayısı</div>
@@ -874,7 +918,7 @@ if st.session_state.detay_idx is not None:
 
           <div class="diger-row">
             <div class="diger-left">
-              <span>⏱</span>
+              <span class="diger-icon">⏱</span>
               <div>
                 <div class="diger-name">İlk Yarı / 0.5 Üst</div>
                 <div class="diger-sub">İlk Yarı Toplam Gol</div>
@@ -885,7 +929,7 @@ if st.session_state.detay_idx is not None:
 
           <div class="diger-row">
             <div class="diger-left">
-              <span>🤝</span>
+              <span class="diger-icon">🤝</span>
               <div>
                 <div class="diger-name">Karşılıklı Gol</div>
                 <div class="diger-sub">KG Var / Yok</div>
@@ -896,21 +940,30 @@ if st.session_state.detay_idx is not None:
 
           <div class="diger-row">
             <div class="diger-left">
-              <span>📍</span>
+              <span class="diger-icon">📍</span>
               <div>
                 <div class="diger-name">Canlı Tercih</div>
                 <div class="diger-sub">{t['canli_label']}</div>
               </div>
             </div>
-            <span class="diger-badge db-green">%{t['canli_p']}</span>
+            <span class="diger-badge db-green">%{int(t['canli_p'])}</span>
           </div>
 
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
             <div style="display:flex;gap:16px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div></div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">1</div>
+                <div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">X</div>
+                <div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-size:0.62rem;color:#666">2</div>
+                <div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div>
+              </div>
             </div>
           </div>
         </div>
@@ -952,162 +1005,164 @@ if st.session_state.detay_idx is not None:
         hide_index=True
     )
 
+    st.stop()
+
 # ═══════════════════════════════════════════
 # ANA MAÇ EKRANI
 # ═══════════════════════════════════════════
+
+fl = st.session_state.final_list
+
+hc1, hc2 = st.columns([6,1])
+with hc1:
+    st.markdown(f"""
+    <div class="top-header">
+      <div>
+        <h2>ANA MAÇ EKRANI</h2>
+        <div class="sub">{format_tr_date(secili_tarih)}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="top-filters">
+      <div class="tf-chip">📅 Kartlı görünüm</div>
+      <div class="tf-chip">🎯 Detaylı tahmin ekranı</div>
+      <div class="tf-chip">📊 Güven odaklı analiz</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with hc2:
+    if fl:
+        st.markdown(f"""<div class="mac-badge" style="margin-top:8px">{len(fl)}<span>MAÇ BULUNDU</span></div>""", unsafe_allow_html=True)
+
+if not fl:
+    st.markdown("""
+    <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
+      <div style="font-size:2rem;margin-bottom:12px">⚡</div>
+      <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
+      <div style="font-size:0.9rem;color:#666;margin-top:6px">Sol menüden API Key ve lig seçin, ardından ANALİZİ BAŞLAT butonuna basın.</div>
+    </div>
+    """, unsafe_allow_html=True)
 else:
-    fl = st.session_state.final_list
+    yuksek = [x for x in fl if x['t']['ana_p'] >= 70]
+    orta   = [x for x in fl if 55 <= x['t']['ana_p'] < 70]
+    surp   = [x for x in fl if x['t']['flip_p'] >= 0.15]
 
-    hc1, hc2 = st.columns([6,1])
-    with hc1:
-        st.markdown(f"""
-        <div class="top-header">
-          <div>
-            <h2>ANA MAÇ EKRANI</h2>
-            <div class="sub">{format_tr_date(secili_tarih)}</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    with fc1:
+        if st.button(f"Tümü {len(fl)}", use_container_width=True, key="f1"):
+            st.session_state.filtre = 'tumu'
+            st.rerun()
+    with fc2:
+        if st.button(f"🔥 Yüksek Güven {len(yuksek)}", use_container_width=True, key="f2"):
+            st.session_state.filtre = 'yuksek'
+            st.rerun()
+    with fc3:
+        if st.button(f"🟡 Orta Güven {len(orta)}", use_container_width=True, key="f3"):
+            st.session_state.filtre = 'orta'
+            st.rerun()
+    with fc4:
+        if st.button(f"⭐ Sürpriz {len(surp)}", use_container_width=True, key="f4"):
+            st.session_state.filtre = 'surp'
+            st.rerun()
 
-        st.markdown("""
-        <div class="top-filters">
-          <div class="tf-chip">📅 Kartlı görünüm</div>
-          <div class="tf-chip">🎯 Detaylı tahmin ekranı</div>
-          <div class="tf-chip">📊 Güven odaklı analiz</div>
-        </div>
-        """, unsafe_allow_html=True)
+    filtre = st.session_state.filtre
+    goster = (
+        fl if filtre == 'tumu'
+        else yuksek if filtre == 'yuksek'
+        else orta if filtre == 'orta'
+        else surp
+    )
 
-    with hc2:
-        if fl:
-            st.markdown(f"""<div class="mac-badge" style="margin-top:8px">{len(fl)}<span>MAÇ BULUNDU</span></div>""", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    if not fl:
-        st.markdown("""
-        <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
-          <div style="font-size:2rem;margin-bottom:12px">⚡</div>
-          <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
-          <div style="font-size:0.9rem;color:#666;margin-top:6px">Sol menüden API Key ve lig seçin, ardından ANALİZİ BAŞLAT butonuna basın.</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        yuksek = [x for x in fl if x['t']['ana_p'] >= 70]
-        orta   = [x for x in fl if 55 <= x['t']['ana_p'] < 70]
-        surp   = [x for x in fl if x['t']['flip_p'] >= 0.15]
+    for i, item in enumerate(goster):
+        m, t = item['m'], item['t']
+        real_i = fl.index(item)
+        gc, _, _ = guven_renk(t['ana_p'])
 
-        fc1, fc2, fc3, fc4 = st.columns(4)
-        with fc1:
-            if st.button(f"Tümü {len(fl)}", use_container_width=True, key="f1"):
-                st.session_state.filtre = 'tumu'
-                st.rerun()
-        with fc2:
-            if st.button(f"🔥 Yüksek Güven {len(yuksek)}", use_container_width=True, key="f2"):
-                st.session_state.filtre = 'yuksek'
-                st.rerun()
-        with fc3:
-            if st.button(f"🟡 Orta Güven {len(orta)}", use_container_width=True, key="f3"):
-                st.session_state.filtre = 'orta'
-                st.rerun()
-        with fc4:
-            if st.button(f"⭐ Sürpriz {len(surp)}", use_container_width=True, key="f4"):
-                st.session_state.filtre = 'surp'
-                st.rerun()
+        pill_cls = ""
+        if "MS 2" in t['ana_label']:
+            pill_cls = "kirmizi"
+        elif "Beraberlik" in t['ana_label'] or "2.5" in t['ana_label']:
+            pill_cls = "sari"
 
-        filtre = st.session_state.filtre
-        goster = (
-            fl if filtre == 'tumu'
-            else yuksek if filtre == 'yuksek'
-            else orta if filtre == 'orta'
-            else surp
-        )
+        surp_cls = "" if "Var" in t['kg_label'] else "yok"
 
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        for i, item in enumerate(goster):
-            m, t = item['m'], item['t']
-            real_i = fl.index(item)
-            gc, _, _ = guven_renk(t['ana_p'])
-
-            pill_cls = ""
-            if "MS 2" in t['ana_label']:
-                pill_cls = "kirmizi"
-            elif "Beraberlik" in t['ana_label'] or "2.5" in t['ana_label']:
-                pill_cls = "sari"
-
-            surp_cls = "" if "Var" in t['kg_label'] else "yok"
-
-            kc, bc = st.columns([9, 1.4])
-            with kc:
-                st.markdown(f"""
-                <div class="mac-kart">
-                  <div class="mk-zaman">
-                    <span class="mk-star">☆</span>
-                    <div class="mk-saat">{m['zaman'].strftime('%H:%M')}</div>
-                    <div class="mk-lig">{m['lig'][:14]}</div>
-                  </div>
-
-                  <div class="mk-takimlar">
-                    <div class="mk-ev">⬜ {m['ev']}</div>
-                    <div class="mk-dep">🟦 {m['dep']}</div>
-                  </div>
-
-                  <div>
-                    <div class="mk-label">ANA TAHMİN</div>
-                    <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
-                    <div style="margin-top:10px">
-                      <div class="mk-label">GÜVEN</div>
-                      <div class="guven-pct">{t['ana_p']}%</div>
-                      <div class="guven-bar"><div class="guven-fill" style="width:{t['ana_p']}%;background:{gc}"></div></div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div class="mk-label">ALTERNATİF</div>
-                    <span class="alt-pill">{t['alt_label']}</span>
-                    <div style="margin-top:8px">
-                      <div class="mk-label">SÜRPRİZ</div>
-                      <span class="surp-pill {surp_cls}">{t['kg_label']}</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div class="mk-label">ORANLAR</div>
-                    <div class="oran-row">
-                      <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
-                      <div style="color:#2a2a2a">/</div>
-                      <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
-                      <div style="color:#2a2a2a">/</div>
-                      <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
-                    </div>
-                    <div style="margin-top:8px;font-size:0.72rem;color:#666">📊 {t['ornek']} örnek</div>
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with bc:
-                st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-                if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
-                    st.session_state.detay_idx = real_i
-                    st.rerun()
-                if st.button("+ Kupona", key=f"k_{real_i}_{i}", use_container_width=True):
-                    lbl = f"{m['ev']} vs {m['dep']} — {t['ana_label']}"
-                    if lbl not in st.session_state.kupona:
-                        st.session_state.kupona.append(lbl)
-                    st.rerun()
-
-        if st.session_state.kupona:
-            st.markdown("---")
-            rows_html = "".join(
-                f'<div class="tk-row"><span class="tk-key">✅ {k}</span></div>'
-                for k in st.session_state.kupona
-            )
-
+        kc, bc = st.columns([9, 1.4])
+        with kc:
             st.markdown(f"""
-            <div class="kupon-kart">
-              <div class="tk-title">🎫 Kuponum ({len(st.session_state.kupona)} seçim)</div>
-              {rows_html}
+            <div class="mac-kart">
+              <div class="mk-zaman">
+                <span class="mk-star">☆</span>
+                <div class="mk-saat">{m['zaman'].strftime('%H:%M')}</div>
+                <div class="mk-lig">{m['lig'][:14]}</div>
+              </div>
+
+              <div class="mk-takimlar">
+                <div class="mk-ev">⬜ {m['ev']}</div>
+                <div class="mk-dep">🟦 {m['dep']}</div>
+              </div>
+
+              <div>
+                <div class="mk-label">ANA TAHMİN</div>
+                <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
+                <div style="margin-top:10px">
+                  <div class="mk-label">GÜVEN</div>
+                  <div class="guven-pct">{int(t['ana_p'])}%</div>
+                  <div class="guven-bar"><div class="guven-fill" style="width:{int(t['ana_p'])}%;background:{gc}"></div></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="mk-label">ALTERNATİF</div>
+                <span class="alt-pill">{t['alt_label']}</span>
+                <div style="margin-top:8px">
+                  <div class="mk-label">SÜRPRİZ</div>
+                  <span class="surp-pill {surp_cls}">{t['kg_label']}</span>
+                </div>
+              </div>
+
+              <div>
+                <div class="mk-label">ORANLAR</div>
+                <div class="oran-row">
+                  <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
+                  <div style="color:#2a2a2a">/</div>
+                  <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
+                  <div style="color:#2a2a2a">/</div>
+                  <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
+                </div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">📊 {int(t['ornek'])} örnek</div>
+              </div>
             </div>
             """, unsafe_allow_html=True)
 
-            if st.button("🗑️ Kuponu Temizle"):
-                st.session_state.kupona = []
+        with bc:
+            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+            if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
+                st.session_state.detay_idx = real_i
                 st.rerun()
+            if st.button("+ Kupona", key=f"k_{real_i}_{i}", use_container_width=True):
+                lbl = f"{m['ev']} vs {m['dep']} — {t['ana_label']}"
+                if lbl not in st.session_state.kupona:
+                    st.session_state.kupona.append(lbl)
+                st.rerun()
+
+    if st.session_state.kupona:
+        st.markdown("---")
+        rows_html = "".join(
+            f'<div class="tk-row"><span class="tk-key">✅ {k}</span></div>'
+            for k in st.session_state.kupona
+        )
+
+        st.markdown(f"""
+        <div class="kupon-kart">
+          <div class="tk-title">🎫 Kuponum ({len(st.session_state.kupona)} seçim)</div>
+          {rows_html}
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("🗑️ Kuponu Temizle"):
+            st.session_state.kupona = []
+            st.rerun()
