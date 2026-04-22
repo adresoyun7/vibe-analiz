@@ -947,6 +947,25 @@ def hesapla(b_df, m_row, tolerans):
 
     oynanabilir = (ana_p >= 58 and sample >= onerilen_min_mac and not belirsiz)
 
+    score = ana_p * 0.65
+    if sample < onerilen_min_mac:
+        score -= 18
+    elif sample < max(onerilen_min_mac * 2, 10):
+        score += 4
+    elif sample < max(onerilen_min_mac * 3, 18):
+        score += 8
+    else:
+        score += 10
+    if combo_var:
+        score += min(8, combo_p * 0.12)
+    if belirsiz:
+        score -= 20
+    if fake_drop:
+        score -= 6
+    if oynanabilir:
+        score += 6
+    score = round(score, 1)
+
     return {
         "ana_label": ana_label,
         "ana_p": ana_p,
@@ -1009,6 +1028,10 @@ def hesapla(b_df, m_row, tolerans):
         "nedenler": nedenler,
         "oynanabilir": oynanabilir,
         "fake_drop": fake_drop,
+        "score": score,
+        "stability_tols": [],
+        "stability_count": 0,
+        "stability_text": "",
     }, b.sort_values("Date", ascending=False)
 
 
@@ -1146,6 +1169,7 @@ if analiz_btn:
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
         final = []
+        stability_tols = [0.03, 0.05, 0.08, 0.10]
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
                 t, b_det = hesapla(gecmis, m, TOLERANS)
@@ -1153,10 +1177,35 @@ if analiz_btn:
                     continue
                 if len(b_det) < min_ornek:
                     continue
+
+                stable_hits = []
+                for stab_tol in stability_tols:
+                    stab_t, stab_b = hesapla(gecmis, m, stab_tol)
+                    if stab_t is None:
+                        continue
+                    if (
+                        stab_t["ana_label"] == t["ana_label"]
+                        and stab_t["ana_label"] not in ["Belirsiz Maç", "Tahmin Zayıf"]
+                        and stab_t["ornek"] >= max(min_ornek, stab_t["onerilen_min_mac"])
+                    ):
+                        stable_hits.append(f"{stab_tol:.2f}")
+
+                t["stability_tols"] = stable_hits
+                t["stability_count"] = len(stable_hits)
+                t["stability_text"] = " · ".join(stable_hits)
+
+                t["score"] = round(
+                    t["score"]
+                    + min(6, t["stability_count"] * 1.5)
+                    + (2 if TOLERANS in [0.08, 0.10] and f"{TOLERANS:.2f}" in stable_hits else 0),
+                    1
+                )
+
                 if sadece_oynanabilir and not t["oynanabilir"]:
                     continue
                 final.append({"m": m.to_dict(), "t": t, "b": b_det})
 
+        final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0), x["t"].get("ornek", 0)), reverse=True)
         st.session_state.final_list = final
         st.session_state.detay_idx = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -1542,6 +1591,8 @@ else:
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
+                <div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get('stability_text', '-')}</div>
               </div>
             </div>
             """, unsafe_allow_html=True)
