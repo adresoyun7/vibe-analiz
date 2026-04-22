@@ -528,7 +528,7 @@ def bulten_cek(key, kodlar, t):
                 params={
                     "apiKey": key,
                     "regions": "eu",
-                    "markets": "h2h,totals,btts",
+                    "markets": "h2h",
                     "oddsFormat": "decimal",
                 },
                 timeout=12,
@@ -554,24 +554,19 @@ def bulten_cek(key, kodlar, t):
                 if not bookies:
                     continue
 
-                h2h_market = None
-                totals_market = None
-                btts_market = None
+                market = None
                 for bk in bookies:
                     for mk in bk.get("markets", []):
-                        if mk.get("key") == "h2h" and h2h_market is None:
-                            h2h_market = mk
-                        elif mk.get("key") == "totals" and totals_market is None and float(mk.get("point", 0) or 0) == 2.5:
-                            totals_market = mk
-                        elif mk.get("key") == "btts" and btts_market is None:
-                            btts_market = mk
-                    if h2h_market and totals_market and btts_market:
+                        if mk.get("key") == "h2h":
+                            market = mk
+                            break
+                    if market:
                         break
 
-                if not h2h_market:
+                if not market:
                     continue
 
-                outcomes = h2h_market.get("outcomes", [])
+                outcomes = market.get("outcomes", [])
                 home = m.get("home_team", "")
                 away = m.get("away_team", "")
 
@@ -589,16 +584,6 @@ def bulten_cek(key, kodlar, t):
                 if h is None or a is None or b is None:
                     continue
 
-                over25 = under25 = btts_yes = btts_no = None
-                if totals_market:
-                    tout = totals_market.get("outcomes", [])
-                    over25 = next((x["price"] for x in tout if str(x["name"]).lower() in ["over", "üst", "ust"]), None)
-                    under25 = next((x["price"] for x in tout if str(x["name"]).lower() in ["under", "alt"]), None)
-                if btts_market:
-                    bout = btts_market.get("outcomes", [])
-                    btts_yes = next((x["price"] for x in bout if str(x["name"]).lower() in ["yes", "var"]), None)
-                    btts_no = next((x["price"] for x in bout if str(x["name"]).lower() in ["no", "yok"]), None)
-
                 res.append({
                     "lig": m.get("sport_title", k),
                     "zaman": tm,
@@ -607,10 +592,6 @@ def bulten_cek(key, kodlar, t):
                     "h": float(h),
                     "b": float(b),
                     "a": float(a),
-                    "odd_25_over": float(over25) if over25 is not None else None,
-                    "odd_25_under": float(under25) if under25 is not None else None,
-                    "odd_btts_yes": float(btts_yes) if btts_yes is not None else None,
-                    "odd_btts_no": float(btts_no) if btts_no is not None else None,
                 })
         except Exception:
             continue
@@ -620,61 +601,6 @@ def bulten_cek(key, kodlar, t):
 
     df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
     return df.sort_values("zaman").reset_index(drop=True)
-
-
-def market_label_to_odd(m_row, label):
-    if not isinstance(m_row, dict):
-        try:
-            m_row = m_row.to_dict()
-        except Exception:
-            pass
-    if label == "MS 1":
-        return m_row.get("h")
-    if label == "MS 2":
-        return m_row.get("a")
-    if label == "Beraberlik":
-        return m_row.get("b")
-    if label == "2.5 Üst":
-        return m_row.get("odd_25_over")
-    if label == "2.5 Alt":
-        return m_row.get("odd_25_under")
-    if label == "KG Var":
-        return m_row.get("odd_btts_yes")
-    if label == "KG Yok":
-        return m_row.get("odd_btts_no")
-    return None
-
-
-def fmt_odd(odd):
-    if odd is None:
-        return ""
-    try:
-        return f"{float(odd):.2f}"
-    except Exception:
-        return ""
-
-
-def build_coupon_from_items(indexed_items, style="favorite", max_picks=3):
-    candidates = []
-    for idx, item in indexed_items:
-        m, t = item["m"], item["t"]
-        if t.get("belirsiz") or not t.get("oynanabilir"):
-            continue
-        ana_odd = t.get("ana_odd")
-        if ana_odd is None:
-            continue
-        rec = {"idx": idx, "m": m, "t": t, "ana_odd": ana_odd}
-        candidates.append(rec)
-
-    if style == "favorite":
-        candidates = [c for c in candidates if c["ana_odd"] <= 2.30]
-        candidates.sort(key=lambda c: (c["t"].get("playable_score", 0), -c["ana_odd"]), reverse=True)
-    else:
-        candidates = [c for c in candidates if c["ana_odd"] >= 1.70]
-        candidates.sort(key=lambda c: (c["ana_odd"], c["t"].get("playable_score", 0)), reverse=True)
-
-    picks = candidates[:max_picks]
-    return [f"{c['m']['ev']} vs {c['m']['dep']} — {c['t']['ana_label']} ({fmt_odd(c['ana_odd'])})" for c in picks]
 
 
 def hesapla(b_df, m_row, tolerans):
@@ -806,9 +732,6 @@ def hesapla(b_df, m_row, tolerans):
         alt_label = ""
         alt_p = 0
 
-    ana_odd = market_label_to_odd(m_row, ana_label)
-    alt_odd = market_label_to_odd(m_row, alt_label) if alt_label else None
-
     cond_ms1 = (b["FTR"] == "H")
     cond_msx = (b["FTR"] == "D")
     cond_ms2 = (b["FTR"] == "A")
@@ -909,8 +832,6 @@ def hesapla(b_df, m_row, tolerans):
         combo_raw_p = 0
         combo_hit = 0
         combo_var = False
-
-    combo_odd = None
 
     # kombo seviye
     combo_level = ""
@@ -1049,14 +970,11 @@ def hesapla(b_df, m_row, tolerans):
         "ana_p": ana_p,
         "playable_score": playable_score,
         "ana_raw_p": ana_raw_p,
-        "ana_odd": ana_odd,
         "alt_label": alt_label,
-        "alt_odd": alt_odd,
         "alt_p": alt_p,
         "kg_label": kg_label,
         "kg_p": int(round(kg_raw * guven_carpani * 100)),
         "combo_label": combo_label,
-        "combo_odd": combo_odd,
         "combo_p": combo_p,
         "combo_raw_p": combo_raw_p,
         "combo_hit": combo_hit,
@@ -1371,9 +1289,6 @@ if st.session_state.detay_idx is not None:
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
         <span style="background:{t.get('ornek_renk', '#44506b')};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t.get('ornek_durum', 'Standart')}</span>
-        <span style="font-size:0.78rem;color:#c7cfdd">Ana oran: <b>{ana_odd_text if ana_odd_text else '-'}</b></span>
-        <span style="font-size:0.78rem;color:#c7cfdd">Alternatif oran: <b>{alt_odd_text if alt_odd_text else '-'}</b></span>
-        <span style="font-size:0.78rem;color:#c7cfdd">Kombo oran: <b>{combo_odd_text if combo_odd_text else '-'}</b></span>
         <span style="font-size:0.78rem;color:#8f98ab">{t['tolerans_yorumu']}</span>
         <span style="font-size:0.78rem;color:#77b4ff">Tavsiye: {t['tolerans_tavsiyesi']}</span>
         <span style="font-size:0.78rem;color:#8f98ab">Güven çarpanı: {t['guven_carpani']}</span>
@@ -1459,9 +1374,6 @@ if st.session_state.detay_idx is not None:
         htft_cls = "db-green" if t["htft_p"] >= 40 else "db-gold"
         combo_cls = "db-gold" if t.get("combo_var", False) else "db-red"
         combo_text = t.get("combo_label", "")
-        ana_odd_text = fmt_odd(t.get("ana_odd"))
-        alt_odd_text = fmt_odd(t.get("alt_odd"))
-        combo_odd_text = fmt_odd(t.get("combo_odd"))
 
         st.markdown(f"""
         <div class="diger-kart">
@@ -1627,16 +1539,6 @@ else:
             st.session_state.filtre = "kombo"
             st.rerun()
 
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        if st.button("⭐ Favori Kupon Yap", use_container_width=True, key="fav_coupon_btn"):
-            st.session_state.kupona = build_coupon_from_items(indexed_fl, style="favorite")
-            st.rerun()
-    with cc2:
-        if st.button("🔥 Yüksek Oranlı Kupon Oluştur", use_container_width=True, key="high_coupon_btn"):
-            st.session_state.kupona = build_coupon_from_items(indexed_fl, style="high")
-            st.rerun()
-
     filtre = st.session_state.filtre
     if filtre == "yuksek":
         goster = sorted(yuksek, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
@@ -1667,17 +1569,12 @@ else:
         if combo_text:
             combo_level = t.get("combo_level", "")
             level_text = f' · {combo_level}' if combo_level else ''
-            combo_odd_text = fmt_odd(t.get("combo_odd"))
-            combo_odd_html = f'<span style="margin-left:8px;font-size:0.75rem;color:#aeb5c3">{combo_odd_text}</span>' if combo_odd_text else ''
-            combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span>{combo_odd_html}</div>'
+            combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
         stability_early_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>' if t.get('stability_early_text') else ''
         stability_late_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>' if t.get('stability_late_text') else ''
         stability_fallback_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>' if (not t.get('stability_early_text') and not t.get('stability_late_text')) else ''
 
-        ana_odd_text = fmt_odd(t.get("ana_odd"))
-        alt_odd_text = fmt_odd(t.get("alt_odd"))
-        ana_odd_html = f'<span style="margin-left:8px;font-size:0.80rem;color:#aeb5c3">{ana_odd_text}</span>' if ana_odd_text else ''
-        alt_html = (f'<span class="alt-pill">{t["alt_label"]}</span><span style="margin-left:8px;font-size:0.80rem;color:#aeb5c3">{alt_odd_text}</span>' if (t.get("alt_label") and alt_odd_text) else f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>')
+        alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -1698,7 +1595,7 @@ else:
 
               <div>
                 <div class="mk-label">ANA TAHMİN</div>
-                <span class="ana-pill {pill_cls}">{t['ana_label']}</span>{ana_odd_html}
+                <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
                 <div style="margin-top:10px">
                   <div class="mk-label">GÜVEN</div>
                   <div class="guven-pct">{int(t['ana_p'])}%</div>
