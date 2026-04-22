@@ -277,7 +277,7 @@ FUTBOL_LIGLERI = {
     },
     "🇹🇷 TÜRKİYE": {
         "Süper Lig": "soccer_turkey_super_league",
-        "1. Lig": "soccer_turkey_1_lig"
+       "1. Lig": "soccer_turkey_pTT_1_lig"
     },
     "🇪🇺 AVRUPA MAJÖR": {
         "Premier League": "soccer_epl",
@@ -345,6 +345,7 @@ def futbol_veri_motoru(sezonlar):
 
 def bulten_cek(api_key, kodlar, target_date):
     rows = []
+
     for sport_key in kodlar:
         try:
             url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
@@ -354,19 +355,26 @@ def bulten_cek(api_key, kodlar, target_date):
                 "markets": "h2h",
                 "oddsFormat": "decimal"
             }
-           r = requests.get(url, params=params, timeout=15)
 
-if r.status_code != 200:
-    st.error(f"{sport_key} için API hata kodu: {r.status_code}")
-    try:
-        st.write(r.json())
-    except:
-        st.write(r.text)
-    continue
+            r = requests.get(url, params=params, timeout=15)
+
+            if r.status_code != 200:
+                st.error(f"{sport_key} için API hata kodu: {r.status_code}")
+                try:
+                    st.write(r.json())
+                except:
+                    st.write(r.text)
+                continue
 
             data = r.json()
+
             if not isinstance(data, list):
+                st.warning(f"{sport_key} için beklenmeyen veri geldi.")
+                st.write(data)
                 continue
+
+            # test amaçlı kaç maç dönmüş görelim
+            st.write(f"{sport_key}: API toplam {len(data)} maç döndürdü")
 
             for m in data:
                 try:
@@ -374,8 +382,9 @@ if r.status_code != 200:
                 except:
                     continue
 
-              if abs((tm.date() - target_date).days) > 1:
-    continue
+                # eski birebir tarih filtresi yerine daha esnek filtre
+                if abs((tm.date() - target_date).days) > 1:
+                    continue
 
                 bookmakers = m.get("bookmakers", [])
                 if not bookmakers:
@@ -394,19 +403,20 @@ if r.status_code != 200:
                     continue
 
                 outcomes = market.get("outcomes", [])
-          home = m.get("home_team", "")
-away = m.get("away_team", "")
 
-if not away:
-    teams = m.get("teams", [])
-    for t in teams:
-        if t != home:
-            away = t
-            break
+                home = m.get("home_team", "")
+                away = m.get("away_team", "")
+
+                if not away:
+                    teams = m.get("teams", [])
+                    for t in teams:
+                        if t != home:
+                            away = t
+                            break
 
                 h_odd = next((x["price"] for x in outcomes if x["name"] == home), None)
                 a_odd = next((x["price"] for x in outcomes if x["name"] == away), None)
-                d_odd = next((x["price"] for x in outcomes if str(x["name"]).lower() in ["draw", "tie"]), None)
+                d_odd = next((x["price"] for x in outcomes if str(x["name"]).lower() in ["draw", "tie", "beraberlik"]), None)
 
                 if h_odd is None or a_odd is None or d_odd is None:
                     continue
@@ -420,8 +430,9 @@ if not away:
                     "b": float(d_odd),
                     "a": float(a_odd)
                 })
-        except:
-            continue
+
+        except Exception as e:
+            st.error(f"{sport_key} okunurken hata oluştu: {e}")
 
     if not rows:
         return pd.DataFrame()
