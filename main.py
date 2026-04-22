@@ -636,24 +636,47 @@ def hesapla(b_df, m_row, tolerans):
     guven_carpani = sample_factor * oran_factor
 
     ms_prob = ms_raw * guven_carpani
-    ou25_prob = max(ms25_raw, 1 - ms25_raw) * guven_carpani
-    kg_prob = max(kg_raw, 1 - kg_raw) * guven_carpani
+    ou25_raw_best = max(ms25_raw, 1 - ms25_raw)
+    ou25_prob = ou25_raw_best * guven_carpani
+    kg_raw_best = max(kg_raw, 1 - kg_raw)
+    kg_prob = kg_raw_best * guven_carpani
 
     ms_label = ms_side
     ou_label = '2.5 Üst' if ms25_raw >= 0.5 else '2.5 Alt'
     kg_label = 'KG Var' if kg_raw >= 0.5 else 'KG Yok'
 
     cands = [
-        (ms_prob, ms_label, int(round(ms_prob * 100)), m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']),
-        (ou25_prob, ou_label, int(round(ou25_prob * 100)), '-'),
-        (kg_prob, kg_label, int(round(kg_prob * 100)), '-'),
+        {
+            'label': ms_label,
+            'raw_prob': ms_raw,
+            'conf_prob': ms_prob,
+            'oran': m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']
+        },
+        {
+            'label': ou_label,
+            'raw_prob': ou25_raw_best,
+            'conf_prob': ou25_prob,
+            'oran': '-'
+        },
+        {
+            'label': kg_label,
+            'raw_prob': kg_raw_best,
+            'conf_prob': kg_prob,
+            'oran': '-'
+        },
     ]
 
-    best = max(cands, key=lambda x: x[0])
-    ana_label, ana_p, ana_oran = best[1], best[2], best[3]
-    others = [c for c in cands if c[1] != ana_label]
-    alt = max(others, key=lambda x: x[0]) if others else cands[1]
-    alt_label, alt_p = alt[1], alt[2]
+    best = max(cands, key=lambda x: x['raw_prob'])
+    ana_label = best['label']
+    ana_p = int(round(best['conf_prob'] * 100))
+    ana_oran = best['oran']
+    others = [c for c in cands if c['label'] != ana_label]
+    alt = max(others, key=lambda x: x['raw_prob']) if others else cands[1]
+    alt_label = alt['label']
+    alt_p = int(round(alt['conf_prob'] * 100))
+
+    if ana_p < 35:
+        ana_label = 'Tahmin Zayıf'
 
     if iy05_raw * guven_carpani >= 0.68:
         canli_label = 'İY 0.5 Üst' + (' · 3.5 Üst' if ms35_raw * guven_carpani >= 0.60 else ' · 2.5 Üst' if ms25_raw * guven_carpani >= 0.60 else '')
@@ -714,7 +737,7 @@ def hesapla(b_df, m_row, tolerans):
         'guven_carpani': round(guven_carpani, 3),
     }, b.sort_values('Date', ascending=False)
 
-APP_SCHEMA_VERSION = 3
+APP_SCHEMA_VERSION = 4
 if st.session_state.get('app_schema_version') != APP_SCHEMA_VERSION:
     st.session_state.final_list = []
     st.session_state.detay_idx = None
@@ -808,18 +831,10 @@ with st.sidebar:
     rehber = tolerans_rehberi(TOLERANS)
     st.markdown(f"""
     <div style="margin-top:10px;background:#151a23;border:1px solid #253046;border-radius:12px;padding:10px 12px">
-      <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">
-        Tolerans Rehberi
-      </div>
-      <div style="font-size:0.82rem;color:#fff">
-        Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b>
-      </div>
-      <div style="font-size:0.8rem;color:#c7cfdd;margin-top:4px">
-        Önerilen min maç: <b>{rehber['onerilen_min_mac']}</b>
-      </div>
-      <div style="font-size:0.76rem;color:#7f8a9e;margin-top:6px">
-        {rehber['yorum']}
-      </div>
+      <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Tolerans Rehberi</div>
+      <div style="font-size:0.82rem;color:#fff">Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b></div>
+      <div style="font-size:0.8rem;color:#c7cfdd;margin-top:4px">Önerilen min maç: <b>{rehber['onerilen_min_mac']}</b></div>
+      <div style="font-size:0.76rem;color:#7f8a9e;margin-top:6px">{rehber['yorum']}</div>
     </div>
     """, unsafe_allow_html=True)
 
