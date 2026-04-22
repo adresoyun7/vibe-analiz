@@ -8,7 +8,7 @@ import streamlit as st
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 8
+APP_SCHEMA_VERSION = 9
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -624,7 +624,6 @@ def hesapla(b_df, m_row, tolerans):
         return None, b
 
     sample = len(b)
-
     toplam_gol = b["FTHG"] + b["FTAG"]
     ilk_yari_gol = b["HTHG"] + b["HTAG"]
 
@@ -639,18 +638,19 @@ def hesapla(b_df, m_row, tolerans):
     msx_raw = float(ms_vc.get("D", 0))
     ms2_raw = float(ms_vc.get("A", 0))
 
-    ms25_raw = (toplam_gol >= 3).mean()
-    ms35_raw = (toplam_gol >= 4).mean()
-    ms15_raw = (toplam_gol >= 2).mean()
-    kg_raw = ((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean()
-    iy05_raw = (ilk_yari_gol >= 1).mean()
-    iy15_raw = (ilk_yari_gol >= 2).mean()
+    ms25_raw = float((toplam_gol >= 3).mean())
+    ms35_raw = float((toplam_gol >= 4).mean())
+    ms15_raw = float((toplam_gol >= 2).mean())
+    kg_raw = float(((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
+    iy05_raw = float((ilk_yari_gol >= 1).mean())
+    iy15_raw = float((ilk_yari_gol >= 2).mean())
 
     htft_s = b["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + b["FTR"].replace({"H": "1", "A": "2", "D": "X"})
     htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
     htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
 
     oran_ev = float(m_row["h"])
+    oran_ber = float(m_row["b"])
     oran_dep = float(m_row["a"])
 
     sample_factor = sample_factor_hesapla(sample, float(tolerans))
@@ -662,36 +662,43 @@ def hesapla(b_df, m_row, tolerans):
         oran_factor = 1.0
 
     guven_carpani = sample_factor * oran_factor
+    match_type = mac_tipi(oran_ev, oran_dep)
 
-    ms_prob = ms_raw * guven_carpani
+    # maç tipine göre model davranışı
+    ms_bias = 1.0
+    goal_bias = 1.0
+    combo_bias = 1.0
+    if match_type == "Favori":
+        ms_bias = 1.06
+        goal_bias = 0.96
+        combo_bias = 0.97
+    elif match_type == "Dengeli":
+        ms_bias = 0.95
+        goal_bias = 1.05
+        combo_bias = 1.02
+    elif match_type == "Sürpriz Açık":
+        ms_bias = 0.92
+        goal_bias = 1.03
+        combo_bias = 1.08
+
+    ms_prob = min(ms_raw * guven_carpani * ms_bias, 0.99)
     ou25_best_raw = max(ms25_raw, 1 - ms25_raw)
-    ou25_prob = ou25_best_raw * guven_carpani
+    ou25_prob = min(ou25_best_raw * guven_carpani * goal_bias, 0.99)
     kg_best_raw = max(kg_raw, 1 - kg_raw)
-    kg_prob = kg_best_raw * guven_carpani
+    kg_prob = min(kg_best_raw * guven_carpani * goal_bias, 0.99)
 
     ms_label = ms_side
     ou_label = "2.5 Üst" if ms25_raw >= 0.5 else "2.5 Alt"
     kg_label = "KG Var" if kg_raw >= 0.5 else "KG Yok"
 
+    # belirsiz maç tespiti
+    ms_sorted = sorted([ms1_raw, msx_raw, ms2_raw], reverse=True)
+    belirsiz = (max(ms1_raw, msx_raw, ms2_raw) < 0.42 and (ms_sorted[0] - ms_sorted[1]) < 0.06) or (abs(ms1_raw - ms2_raw) < 0.05 and abs(ms1_raw - msx_raw) < 0.05)
+
     cands = [
-        {
-            "label": ms_label,
-            "raw_prob": ms_raw,
-            "conf_prob": ms_prob,
-            "market": "ms",
-        },
-        {
-            "label": ou_label,
-            "raw_prob": ou25_best_raw,
-            "conf_prob": ou25_prob,
-            "market": "ou25",
-        },
-        {
-            "label": kg_label,
-            "raw_prob": kg_best_raw,
-            "conf_prob": kg_prob,
-            "market": "kg",
-        },
+        {"label": ms_label, "raw_prob": ms_raw, "conf_prob": ms_prob, "market": "ms"},
+        {"label": ou_label, "raw_prob": ou25_best_raw, "conf_prob": ou25_prob, "market": "ou25"},
+        {"label": kg_label, "raw_prob": kg_best_raw, "conf_prob": kg_prob, "market": "kg"},
     ]
 
     best = max(cands, key=lambda x: x["raw_prob"])
@@ -734,18 +741,17 @@ def hesapla(b_df, m_row, tolerans):
     ]
 
     raw_combo_list = []
-
     for combo_label, combo_cond, combo_type in combo_defs:
         combo_hit = int(combo_cond.sum())
         combo_raw = float(combo_cond.mean())
-        combo_conf = combo_raw * guven_carpani
+        combo_conf = min(combo_raw * guven_carpani * combo_bias, 0.99)
         combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, sample, float(tolerans))
 
         if combo_type == "oukg":
-            gerekli_raw = 0.30
+            gerekli_raw = 0.30 if match_type != "Sürpriz Açık" else 0.27
             gerekli_hit = max(4, onerilen_min_mac)
         else:
-            gerekli_raw = 0.26
+            gerekli_raw = 0.26 if match_type != "Sürpriz Açık" else 0.23
             gerekli_hit = max(3, onerilen_min_mac)
 
         if combo_hit >= gerekli_hit and combo_raw >= gerekli_raw:
@@ -761,11 +767,10 @@ def hesapla(b_df, m_row, tolerans):
     htft_counts = htft_series.value_counts(normalize=True)
     for htft_label, htft_raw_prob in htft_counts.items():
         htft_hit = int((htft_series == htft_label).sum())
-        htft_conf = float(htft_raw_prob) * guven_carpani
+        htft_conf = min(float(htft_raw_prob) * guven_carpani * combo_bias, 0.99)
         htft_conf, htft_fake_drop = fake_confidence_duzelt(htft_conf, sample, float(tolerans))
-        gerekli_raw = 0.22
+        gerekli_raw = 0.22 if match_type != "Sürpriz Açık" else 0.20
         gerekli_hit = max(3, onerilen_min_mac)
-
         if htft_hit >= gerekli_hit and float(htft_raw_prob) >= gerekli_raw:
             raw_combo_list.append({
                 "label": f"HT/FT {htft_label}",
@@ -776,32 +781,27 @@ def hesapla(b_df, m_row, tolerans):
                 "type": "htft",
             })
 
-    combo_list = raw_combo_list
+    def uyum_kontrol(label, ana):
+        if ana == "2.5 Alt":
+            return ("2.5 Alt" in label) or ("KG Yok" in label) or ("HT/FT X/X" in label) or ("HT/FT 1/X" in label) or ("HT/FT X/1" in label) or ("HT/FT 2/X" in label) or ("HT/FT X/2" in label)
+        if ana == "2.5 Üst":
+            return ("2.5 Üst" in label) or ("KG Var" in label) or ("HT/FT 1/1" in label) or ("HT/FT 2/2" in label) or ("HT/FT 1/2" in label) or ("HT/FT 2/1" in label)
+        if ana == "KG Var":
+            return ("KG Var" in label) or ("2.5 Üst + KG Var" in label) or ("HT/FT 1/1" in label) or ("HT/FT 2/2" in label)
+        if ana == "KG Yok":
+            return ("KG Yok" in label) or ("2.5 Alt + KG Yok" in label)
+        if ana == "MS 1":
+            return ("MS1" in label) or ("HT/FT 1/" in label) or ("HT/FT X/1" in label)
+        if ana == "MS 2":
+            return ("MS2" in label) or ("HT/FT 2/" in label) or ("HT/FT X/2" in label)
+        if ana == "Beraberlik":
+            return ("MSX" in label) or ("HT/FT X/X" in label)
+        return True
 
-    if best["label"] == "2.5 Üst":
-        combo_list = [
-            c for c in combo_list
-            if ("2.5 Üst" in c["label"]) or ("KG Var" in c["label"]) or ("HT/FT 1/1" in c["label"]) or ("HT/FT 2/2" in c["label"])
-        ]
-    elif best["label"] == "2.5 Alt":
-        combo_list = [
-            c for c in combo_list
-            if ("2.5 Alt" in c["label"]) or ("KG Yok" in c["label"]) or ("HT/FT X/X" in c["label"]) or ("HT/FT 1/X" in c["label"]) or ("HT/FT X/1" in c["label"]) or ("HT/FT 2/X" in c["label"]) or ("HT/FT X/2" in c["label"])
-        ]
-    elif best["label"] == "KG Var":
-        combo_list = [c for c in combo_list if ("KG Var" in c["label"]) or ("2.5 Üst + KG Var" in c["label"])]
-    elif best["label"] == "KG Yok":
-        combo_list = [c for c in combo_list if ("KG Yok" in c["label"]) or ("2.5 Alt + KG Yok" in c["label"])]
-    elif best["label"] == "MS 1":
-        combo_list = [c for c in combo_list if ("MS1" in c["label"]) or ("HT/FT 1/" in c["label"]) or ("HT/FT X/1" in c["label"])]
-    elif best["label"] == "MS 2":
-        combo_list = [c for c in combo_list if ("MS2" in c["label"]) or ("HT/FT 2/" in c["label"]) or ("HT/FT X/2" in c["label"])]
-    elif best["label"] == "Beraberlik":
-        combo_list = [c for c in combo_list if ("MSX" in c["label"]) or ("HT/FT X/X" in c["label"])]
-
+    combo_list = [c for c in raw_combo_list if uyum_kontrol(c["label"], ana_label)]
     combo_list = sorted(combo_list, key=lambda x: (x["conf_prob"], x["raw_prob"], x["hit"]), reverse=True)
 
-    if combo_list and combo_list[0]["conf_prob"] >= 0.33:
+    if combo_list and combo_list[0]["conf_prob"] >= 0.33 and not belirsiz:
         best_combo = combo_list[0]
         combo_label = best_combo["label"]
         combo_p = int(round(best_combo["conf_prob"] * 100))
@@ -815,23 +815,69 @@ def hesapla(b_df, m_row, tolerans):
         combo_hit = 0
         combo_var = False
 
-    if ana_p < 35:
+    # kombo seviye
+    combo_level = ""
+    if combo_var:
+        if combo_p >= 60:
+            combo_level = "Premium"
+        elif combo_p >= 45:
+            combo_level = "Güçlü"
+        else:
+            combo_level = "Deneysel"
+
+    if belirsiz:
+        ana_label = "Belirsiz Maç"
+        ana_p = min(ana_p, 50)
+        combo_label = ""
+        combo_var = False
+        combo_level = ""
+
+    if ana_p < 35 and not belirsiz:
         ana_label = "Tahmin Zayıf"
 
-    if iy05_raw * guven_carpani >= 0.68:
+    # en uyumlu senaryo
+    if belirsiz:
+        scenario_label = "Net senaryo oluşmadı"
+    else:
+        senaryo_parts = []
+        if ana_label not in ["Belirsiz Maç", "Tahmin Zayıf"]:
+            senaryo_parts.append(ana_label)
+        if combo_var and combo_label and combo_label != ana_label:
+            combo_core = combo_label.replace("MS1 + ", "").replace("MS2 + ", "").replace("MSX + ", "")
+            if combo_core not in senaryo_parts and combo_label not in senaryo_parts:
+                if combo_label.startswith("HT/FT"):
+                    senaryo_parts.append(combo_label)
+                else:
+                    senaryo_parts.append(combo_core)
+        scenario_label = " + ".join(senaryo_parts[:3]) if senaryo_parts else ana_label
+
+    # canlı strateji
+    if belirsiz:
+        canli_label, canli_p = "İlk 15 dk izle", 48
+        canli_strateji = "İlk 15 dakikada yön netleşmezse bu maçı pas geç. Erken baskı oluşursa ancak o zaman markete gir."
+    elif iy05_raw * guven_carpani >= 0.68:
         canli_label = "İY 0.5 Üst" + (
             " · 3.5 Üst" if ms35_raw * guven_carpani >= 0.60 else
             " · 2.5 Üst" if ms25_raw * guven_carpani >= 0.60 else
             ""
         )
         canli_p = int(round(iy05_raw * guven_carpani * 100))
+        canli_strateji = "İlk 15 dakikada yüksek tempo ve şut hacmi varsa canlı üst tarafı güçlenir. Erken gol gelirse üst senaryosu desteklenir."
     elif iy15_raw * guven_carpani >= 0.55:
         canli_label = "İY 1.5 Üst"
         canli_p = int(round(iy15_raw * guven_carpani * 100))
+        canli_strateji = "Maç hızlı başlarsa ilk yarı golleri değerlendir. 20. dakikaya kadar tempo yoksa bu senaryoyu zayıflat."
+    elif ana_label == "2.5 Alt" or combo_label == "2.5 Alt + KG Yok":
+        canli_label, canli_p = "Alt Senaryosu", max(50, int(round((1 - ms25_raw) * guven_carpani * 100)))
+        canli_strateji = "İlk 15-20 dakikada tempo düşük ve ceza sahası aksiyonu azsa alt taraf güçlenir. Erken gol gelirse yeniden değerlendir."
+    elif ana_label == "KG Yok":
+        canli_label, canli_p = "Tek Taraf Gol", max(50, int(round((1 - kg_raw) * guven_carpani * 100)))
+        canli_strateji = "Zayıf taraf üretim yapmıyorsa KG Yok korunur. İki takım da net pozisyona girerse bu görüşü düşür."
     else:
         canli_label, canli_p = "Canlı İzle", 50
+        canli_strateji = "İlk 10-15 dakikada baskı, şut ve korner üstünlüğü hangi taraftaysa sadece o yönde canlı giriş düşün."
 
-    flip_p = (((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H"))).mean()
+    flip_p = float((((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H"))).mean())
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
@@ -849,7 +895,6 @@ def hesapla(b_df, m_row, tolerans):
 
     avg_goal = float(toplam_gol.mean())
     goal_profile = gol_profili(avg_goal)
-    match_type = mac_tipi(oran_ev, oran_dep)
 
     nedenler = [
         f"Bu oran aralığında {sample} benzer maç bulundu.",
@@ -857,6 +902,8 @@ def hesapla(b_df, m_row, tolerans):
         f"Ortalama toplam gol {avg_goal:.2f} ({goal_profile}).",
         f"Maç tipi: {match_type}.",
     ]
+    if belirsiz:
+        nedenler.append("1/X/2 dağılımı birbirine çok yakın olduğu için maç belirsiz işaretlendi.")
     if combo_var:
         nedenler.append(f"Güçlü kombo bulundu: {combo_label} (%{combo_raw_p}, {combo_hit} maç).")
     if fake_drop:
@@ -864,7 +911,7 @@ def hesapla(b_df, m_row, tolerans):
     if flip_p >= 0.12:
         nedenler.append(f"HT/FT sürpriz riski %{int(round(flip_p * 100))}.")
 
-    oynanabilir = (ana_p >= 58 and sample >= onerilen_min_mac)
+    oynanabilir = (ana_p >= 58 and sample >= onerilen_min_mac and not belirsiz)
 
     return {
         "ana_label": ana_label,
@@ -879,28 +926,32 @@ def hesapla(b_df, m_row, tolerans):
         "combo_raw_p": combo_raw_p,
         "combo_hit": combo_hit,
         "combo_var": combo_var,
+        "combo_level": combo_level,
+        "scenario_label": scenario_label,
         "canli_label": canli_label,
         "canli_p": canli_p,
+        "canli_strateji": canli_strateji,
+        "belirsiz": belirsiz,
         "ms_side": ms_side,
-        "ms_p": int(round(ms_raw * guven_carpani * 100)),
+        "ms_p": int(round(ms_raw * guven_carpani * ms_bias * 100)),
         "ms_mod": ms_mod,
-        "ms1_p": int(round(ms1_raw * guven_carpani * 100)),
-        "msx_p": int(round(msx_raw * guven_carpani * 100)),
-        "ms2_p": int(round(ms2_raw * guven_carpani * 100)),
-        "ms25_p": int(round(ms25_raw * guven_carpani * 100)),
-        "ms25a_p": int(round((1 - ms25_raw) * guven_carpani * 100)),
-        "ms15_p": int(round(ms15_raw * guven_carpani * 100)),
-        "ms35_p": int(round(ms35_raw * guven_carpani * 100)),
-        "kg_var_p": int(round(kg_raw * guven_carpani * 100)),
-        "kg_yok_p": int(round((1 - kg_raw) * guven_carpani * 100)),
-        "iy05_p": int(round(iy05_raw * guven_carpani * 100)),
-        "iy05a_p": int(round((1 - iy05_raw) * guven_carpani * 100)),
-        "iy15_p": int(round(iy15_raw * guven_carpani * 100)),
+        "ms1_p": int(round(ms1_raw * guven_carpani * ms_bias * 100)),
+        "msx_p": int(round(msx_raw * guven_carpani * ms_bias * 100)),
+        "ms2_p": int(round(ms2_raw * guven_carpani * ms_bias * 100)),
+        "ms25_p": int(round(ms25_raw * guven_carpani * goal_bias * 100)),
+        "ms25a_p": int(round((1 - ms25_raw) * guven_carpani * goal_bias * 100)),
+        "ms15_p": int(round(ms15_raw * guven_carpani * goal_bias * 100)),
+        "ms35_p": int(round(ms35_raw * guven_carpani * goal_bias * 100)),
+        "kg_var_p": int(round(kg_raw * guven_carpani * goal_bias * 100)),
+        "kg_yok_p": int(round((1 - kg_raw) * guven_carpani * goal_bias * 100)),
+        "iy05_p": int(round(iy05_raw * guven_carpani * goal_bias * 100)),
+        "iy05a_p": int(round((1 - iy05_raw) * guven_carpani * goal_bias * 100)),
+        "iy15_p": int(round(iy15_raw * guven_carpani * goal_bias * 100)),
         "iy1_p": int(round(float(iy_vc.get("H", 0)) * guven_carpani * 100)),
         "iyx_p": int(round(float(iy_vc.get("D", 0)) * guven_carpani * 100)),
         "iy2_p": int(round(float(iy_vc.get("A", 0)) * guven_carpani * 100)),
         "htft_mod": htft_mod,
-        "htft_p": int(round(htft_raw * guven_carpani * 100)),
+        "htft_p": int(round(htft_raw * guven_carpani * combo_bias * 100)),
         "flip_p": flip_p,
         "risk_label": risk_l,
         "risk_cls": risk_cls,
@@ -924,6 +975,7 @@ def hesapla(b_df, m_row, tolerans):
         "oynanabilir": oynanabilir,
         "fake_drop": fake_drop,
     }, b.sort_values("Date", ascending=False)
+
 
 
 for key, default in [
@@ -1113,6 +1165,7 @@ if st.session_state.detay_idx is not None:
         <div class="hb-label">ANA TAHMİN</div>
         <div class="hb-val">{t['ana_label']}</div>
         <div class="hb-sub">Maç Sonucu: {ms_label_long}</div>
+        {"<div style='margin-top:8px;font-size:0.76rem;color:#ff8b8b'>⚠️ Model bu maçı net ayıramadı</div>" if t.get("belirsiz") else ""}
       </div>
       <div class="hbox blue">
         <div class="hb-label">GÜVEN SKORU</div>
@@ -1249,16 +1302,27 @@ if st.session_state.detay_idx is not None:
         if combo_text:
             st.markdown(f"""
             <div class="diger-row">
-              <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">Ana tahminle aynı yön</div></div></div>
+              <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">{t.get('combo_level', 'Destekli')}</div></div></div>
               <span class="diger-badge {combo_cls}">{combo_text} %{int(t.get('combo_p', 0))}</span>
             </div>
             """, unsafe_allow_html=True)
 
         st.markdown(f"""
           <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🧩</span><div><div class="diger-name">En Uyumlu Senaryo</div><div class="diger-sub">Model özeti</div></div></div>
+            <span class="diger-badge db-blue">{t.get('scenario_label', '')}</span>
+          </div>
+
+          <div class="diger-row">
             <div class="diger-left"><span class="diger-icon">📍</span><div><div class="diger-name">Canlı Tercih</div><div class="diger-sub">{t['canli_label']}</div></div></div>
             <span class="diger-badge db-green">%{int(t['canli_p'])}</span>
           </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">⚡</span><div><div class="diger-name">Canlı Strateji</div><div class="diger-sub">İlk 10-20 dakika</div></div></div>
+            <span class="diger-badge db-blue">İzle</span>
+          </div>
+          <div style="font-size:0.78rem;color:#aeb5c3;line-height:1.5;padding:10px 0 4px 0;border-bottom:1px solid #1a1d26">{t.get('canli_strateji', '')}</div>
 
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
@@ -1414,6 +1478,8 @@ else:
                 <div class="mk-ev">⬜ {m['ev']}</div>
                 <div class="mk-dep">🟦 {m['dep']}</div>
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
+                {f'<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''}
+                <div class="mk-mini">Senaryo: {t.get('scenario_label', '')}</div>
               </div>
 
               <div>
@@ -1429,7 +1495,7 @@ else:
               <div>
                 <div class="mk-label">ALTERNATİF</div>
                 <span class="alt-pill">{t['alt_label']}</span>
-                {f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO</div><span class="combo-pill">{combo_text}</span></div>' if combo_text else ''}
+                {f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO · {t.get("combo_level", "")}</div><span class="combo-pill">{combo_text}</span></div>' if combo_text else ''}
               </div>
 
               <div>
