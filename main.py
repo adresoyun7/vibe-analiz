@@ -368,8 +368,8 @@ def bulten_cek(api_key, kodlar, target_date):
                 except:
                     continue
 
-                if tm.date() != target_date:
-                    continue
+              if abs((tm.date() - target_date).days) > 1:
+    continue
 
                 bookmakers = m.get("bookmakers", [])
                 if not bookmakers:
