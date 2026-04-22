@@ -7,7 +7,7 @@ import streamlit as st
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 6
+APP_SCHEMA_VERSION = 7
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -197,17 +197,6 @@ section[data-testid="stSidebar"] label {
     display:inline-block;
 }
 .surp-pill.yok { color:#e74c3c; }
-
-.value-pill {
-    display:inline-block;
-    border-radius:999px;
-    padding:4px 10px;
-    font-size:0.74rem;
-    font-weight:700;
-}
-.value-good { background:#183925; color:#3ddb7c; }
-.value-neutral { background:#2d3444; color:#c7cfdd; }
-.value-bad { background:#391212; color:#ff6b6b; }
 
 .oran-row {
     display:flex;
@@ -478,26 +467,6 @@ def tahmini_skor(b: pd.DataFrame, ms_mod: str):
     return eg, dg
 
 
-def value_hesapla(model_prob: float, odds):
-    if odds in (None, "-", 0):
-        return None
-    try:
-        implied = 1 / float(odds)
-        return model_prob - implied
-    except Exception:
-        return None
-
-
-def value_sinifi(value):
-    if value is None:
-        return "N/A", "value-neutral"
-    if value >= 0.03:
-        return f"+EV %{round(value * 100, 1)}", "value-good"
-    if value >= -0.02:
-        return f"Nötr %{round(value * 100, 1)}", "value-neutral"
-    return f"-EV %{round(abs(value) * 100, 1)}", "value-bad"
-
-
 def mac_tipi(h: float, a: float):
     if abs(h - a) <= 0.50:
         return "Dengeli"
@@ -651,7 +620,7 @@ def hesapla(b_df, m_row, tolerans):
     for c in ["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A"]:
         b[c] = pd.to_numeric(b[c], errors="coerce")
 
-    b = b.dropna(subset=["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A"])
+    b = b.dropna(subset=["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A", "FTR", "HTR"])
     if b.empty:
         return None, b
 
@@ -706,52 +675,88 @@ def hesapla(b_df, m_row, tolerans):
     ou_label = "2.5 Üst" if ms25_raw >= 0.5 else "2.5 Alt"
     kg_label = "KG Var" if kg_raw >= 0.5 else "KG Yok"
 
-    # --- KOMBO / ORTAK EŞLEŞME MOTORU ---
+    # --- GÜÇLÜ KOMBO MOTORU ---
     cond_ms1 = (b["FTR"] == "H")
     cond_msx = (b["FTR"] == "D")
     cond_ms2 = (b["FTR"] == "A")
+
     cond_ust25 = (toplam_gol >= 3)
     cond_alt25 = (toplam_gol <= 2)
+
     cond_kg_var = ((b["FTHG"] > 0) & (b["FTAG"] > 0))
     cond_kg_yok = ~cond_kg_var
 
+    htft_series = b["HTR"].replace({"H": "1", "D": "X", "A": "2"}) + "/" + b["FTR"].replace({"H": "1", "D": "X", "A": "2"})
+
     combo_defs = [
-        ("MS1 + 2.5 Üst", cond_ms1 & cond_ust25),
-        ("MS1 + 2.5 Alt", cond_ms1 & cond_alt25),
-        ("MS1 + KG Var", cond_ms1 & cond_kg_var),
-        ("MS1 + KG Yok", cond_ms1 & cond_kg_yok),
+        ("MS1 + KG Var", cond_ms1 & cond_kg_var, "mskg"),
+        ("MS1 + KG Yok", cond_ms1 & cond_kg_yok, "mskg"),
+        ("MS1 + 2.5 Üst", cond_ms1 & cond_ust25, "msou"),
+        ("MS1 + 2.5 Alt", cond_ms1 & cond_alt25, "msou"),
 
-        ("MSX + 2.5 Üst", cond_msx & cond_ust25),
-        ("MSX + 2.5 Alt", cond_msx & cond_alt25),
-        ("MSX + KG Var", cond_msx & cond_kg_var),
-        ("MSX + KG Yok", cond_msx & cond_kg_yok),
+        ("MSX + KG Var", cond_msx & cond_kg_var, "mskg"),
+        ("MSX + KG Yok", cond_msx & cond_kg_yok, "mskg"),
+        ("MSX + 2.5 Üst", cond_msx & cond_ust25, "msou"),
+        ("MSX + 2.5 Alt", cond_msx & cond_alt25, "msou"),
 
-        ("MS2 + 2.5 Üst", cond_ms2 & cond_ust25),
-        ("MS2 + 2.5 Alt", cond_ms2 & cond_alt25),
-        ("MS2 + KG Var", cond_ms2 & cond_kg_var),
-        ("MS2 + KG Yok", cond_ms2 & cond_kg_yok),
+        ("MS2 + KG Var", cond_ms2 & cond_kg_var, "mskg"),
+        ("MS2 + KG Yok", cond_ms2 & cond_kg_yok, "mskg"),
+        ("MS2 + 2.5 Üst", cond_ms2 & cond_ust25, "msou"),
+        ("MS2 + 2.5 Alt", cond_ms2 & cond_alt25, "msou"),
+
+        ("2.5 Üst + KG Var", cond_ust25 & cond_kg_var, "oukg"),
+        ("2.5 Alt + KG Yok", cond_alt25 & cond_kg_yok, "oukg"),
     ]
 
     combo_list = []
-    min_combo_hits = max(2, min(5, onerilen_min_mac))
-    for combo_label, combo_cond in combo_defs:
+
+    for combo_label, combo_cond, combo_type in combo_defs:
         combo_hit = int(combo_cond.sum())
         combo_raw = float(combo_cond.mean())
         combo_conf = combo_raw * guven_carpani
         combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, sample, float(tolerans))
 
-        if combo_hit >= min_combo_hits and combo_raw >= 0.18:
+        if combo_type == "htft":
+            gerekli_raw = 0.22
+            gerekli_hit = max(3, onerilen_min_mac)
+        elif combo_type == "oukg":
+            gerekli_raw = 0.30
+            gerekli_hit = max(4, onerilen_min_mac)
+        else:
+            gerekli_raw = 0.26
+            gerekli_hit = max(3, onerilen_min_mac)
+
+        if combo_hit >= gerekli_hit and combo_raw >= gerekli_raw:
             combo_list.append({
                 "label": combo_label,
                 "raw_prob": combo_raw,
                 "conf_prob": combo_conf,
                 "hit": combo_hit,
                 "fake_drop": combo_fake_drop,
+                "type": combo_type,
             })
 
-    combo_list = sorted(combo_list, key=lambda x: (x["raw_prob"], x["hit"]), reverse=True)
+    htft_counts = htft_series.value_counts(normalize=True)
+    for htft_label, htft_raw_prob in htft_counts.items():
+        htft_hit = int((htft_series == htft_label).sum())
+        htft_conf = float(htft_raw_prob) * guven_carpani
+        htft_conf, htft_fake_drop = fake_confidence_duzelt(htft_conf, sample, float(tolerans))
+        gerekli_raw = 0.22
+        gerekli_hit = max(3, onerilen_min_mac)
 
-    if combo_list:
+        if htft_hit >= gerekli_hit and float(htft_raw_prob) >= gerekli_raw:
+            combo_list.append({
+                "label": f"HT/FT {htft_label}",
+                "raw_prob": float(htft_raw_prob),
+                "conf_prob": htft_conf,
+                "hit": htft_hit,
+                "fake_drop": htft_fake_drop,
+                "type": "htft",
+            })
+
+    combo_list = sorted(combo_list, key=lambda x: (x["conf_prob"], x["raw_prob"], x["hit"]), reverse=True)
+
+    if combo_list and combo_list[0]["conf_prob"] >= 0.33:
         best_combo = combo_list[0]
         combo_label = best_combo["label"]
         combo_p = int(round(best_combo["conf_prob"] * 100))
@@ -759,12 +764,12 @@ def hesapla(b_df, m_row, tolerans):
         combo_hit = int(best_combo["hit"])
         combo_var = True
     else:
-        combo_label = kg_label
-        kg_conf, _ = fake_confidence_duzelt(kg_best_raw * guven_carpani, sample, float(tolerans))
-        combo_p = int(round(kg_conf * 100))
-        combo_raw_p = int(round(kg_best_raw * 100))
+        combo_label = ""
+        combo_p = 0
+        combo_raw_p = 0
         combo_hit = 0
         combo_var = False
+        combo_list = []
 
     cands = [
         {
@@ -796,7 +801,6 @@ def hesapla(b_df, m_row, tolerans):
     ana_label = best["label"]
     ana_p = int(round(best_conf * 100))
     ana_raw_p = int(round(best["raw_prob"] * 100))
-    ana_oran = best["oran"]
 
     others = [c for c in cands if c["label"] != ana_label]
     alt = max(others, key=lambda x: x["raw_prob"]) if others else cands[1]
@@ -840,11 +844,6 @@ def hesapla(b_df, m_row, tolerans):
     goal_profile = gol_profili(avg_goal)
     match_type = mac_tipi(oran_ev, oran_dep)
 
-    ana_value = value_hesapla(best["raw_prob"], best["oran"])
-    ana_value_text, ana_value_cls = value_sinifi(ana_value)
-    ana_value_text = ana_value_text or "N/A"
-    ana_value_cls = ana_value_cls or "value-neutral"
-
     nedenler = [
         f"Bu oran aralığında {sample} benzer maç bulundu.",
         f"Ham ana olasılık %{ana_raw_p} seviyesinde.",
@@ -852,11 +851,9 @@ def hesapla(b_df, m_row, tolerans):
         f"Maç tipi: {match_type}.",
     ]
     if combo_var:
-        nedenler.append(f"Ortak eşleşme bulundu: {combo_label} (%{combo_raw_p}, {combo_hit} maç).")
+        nedenler.append(f"Güçlü kombo bulundu: {combo_label} (%{combo_raw_p}, {combo_hit} maç).")
     if fake_drop:
         nedenler.append("Düşük örnek + yüksek güven görüldüğü için fake confidence freni uygulandı.")
-    if ana_value is not None:
-        nedenler.append(f"Value hesabı: {ana_value_text}.")
     if flip_p >= 0.12:
         nedenler.append(f"HT/FT sürpriz riski %{int(round(flip_p * 100))}.")
 
@@ -866,10 +863,6 @@ def hesapla(b_df, m_row, tolerans):
         "ana_label": ana_label,
         "ana_p": ana_p,
         "ana_raw_p": ana_raw_p,
-        "ana_oran": ana_oran,
-        "ana_value": ana_value,
-        "ana_value_text": ana_value_text,
-        "ana_value_cls": ana_value_cls,
         "alt_label": alt_label,
         "alt_p": alt_p,
         "kg_label": kg_label,
@@ -1136,7 +1129,6 @@ if st.session_state.detay_idx is not None:
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
         <span style="background:{t.get('ornek_renk', '#44506b')};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t.get('ornek_durum', 'Standart')}</span>
-        <span class="value-pill {t.get('ana_value_cls', 'value-neutral')}">{t.get('ana_value_text', 'N/A')}</span>
         <span style="font-size:0.78rem;color:#8f98ab">{t['tolerans_yorumu']}</span>
         <span style="font-size:0.78rem;color:#77b4ff">Tavsiye: {t['tolerans_tavsiyesi']}</span>
         <span style="font-size:0.78rem;color:#8f98ab">Güven çarpanı: {t['guven_carpani']}</span>
@@ -1221,6 +1213,7 @@ if st.session_state.detay_idx is not None:
 
         htft_cls = "db-green" if t["htft_p"] >= 40 else "db-gold"
         combo_cls = "db-gold" if t.get("combo_var", False) else "db-red"
+        combo_text = t.get("combo_label", "")
 
         st.markdown(f"""
         <div class="diger-kart">
@@ -1245,20 +1238,20 @@ if st.session_state.detay_idx is not None:
             <div class="diger-left"><span class="diger-icon">🤝</span><div><div class="diger-name">Karşılıklı Gol</div><div class="diger-sub">KG Var / Yok</div></div></div>
             <span class="diger-badge {kg_cls}">{kg_lbl}</span>
           </div>
+        """, unsafe_allow_html=True)
 
-          <div class="diger-row">
-            <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Sürpriz / Kombo</div><div class="diger-sub">Ortak eşleşme</div></div></div>
-            <span class="diger-badge {combo_cls}">{t.get('combo_label', 'N/A')} %{int(t.get('combo_p', 0))}</span>
-          </div>
+        if combo_text:
+            st.markdown(f"""
+            <div class="diger-row">
+              <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">Ortak eşleşme</div></div></div>
+              <span class="diger-badge {combo_cls}">{combo_text} %{int(t.get('combo_p', 0))}</span>
+            </div>
+            """, unsafe_allow_html=True)
 
+        st.markdown(f"""
           <div class="diger-row">
             <div class="diger-left"><span class="diger-icon">📍</span><div><div class="diger-name">Canlı Tercih</div><div class="diger-sub">{t['canli_label']}</div></div></div>
             <span class="diger-badge db-green">%{int(t['canli_p'])}</span>
-          </div>
-
-          <div class="diger-row">
-            <div class="diger-left"><span class="diger-icon">💹</span><div><div class="diger-name">Value</div><div class="diger-sub">Model vs oran</div></div></div>
-            <span class="diger-badge db-blue">{t.get('ana_value_text', 'N/A')}</span>
           </div>
 
           <div class="risk-row" style="margin-top:14px">
@@ -1330,7 +1323,7 @@ if st.session_state.detay_idx is not None:
             return "background-color:#183925;color:#3ddb7c;font-weight:700"
         if v in ["Alt", "Yok"]:
             return "background-color:#391212;color:#ff6b6b;font-weight:700"
-        if "1/2" in v or "2/1" in v:
+        if "1/2" in v or "2/1" in v or "X/1" in v or "1/X" in v or "X/2" in v or "2/X" in v:
             return "background-color:#37290f;color:#f1c40f;font-weight:700"
         return ""
 
@@ -1359,7 +1352,6 @@ with hc1:
     <div class="top-filters">
       <div class="tf-chip">📅 Kartlı görünüm</div>
       <div class="tf-chip">🎯 Detaylı tahmin ekranı</div>
-      <div class="tf-chip">💹 Value odaklı analiz</div>
       <div class="tf-chip">🔥 Smart filter</div>
     </div>
     """, unsafe_allow_html=True)
@@ -1379,7 +1371,7 @@ if not fl:
 else:
     yuksek = [x for x in fl if x["t"]["ana_p"] >= 70]
     orta = [x for x in fl if 55 <= x["t"]["ana_p"] < 70]
-    value_good = [x for x in fl if x["t"]["ana_value"] is not None and x["t"]["ana_value"] >= 0.03]
+    kombolu = [x for x in fl if x["t"].get("combo_var", False)]
 
     fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
@@ -1395,8 +1387,8 @@ else:
             st.session_state.filtre = "orta"
             st.rerun()
     with fc4:
-        if st.button(f"💹 +EV {len(value_good)}", use_container_width=True, key="f4"):
-            st.session_state.filtre = "value"
+        if st.button(f"🎯 Güçlü Kombo {len(kombolu)}", use_container_width=True, key="f4"):
+            st.session_state.filtre = "kombo"
             st.rerun()
 
     filtre = st.session_state.filtre
@@ -1404,8 +1396,8 @@ else:
         goster = yuksek
     elif filtre == "orta":
         goster = orta
-    elif filtre == "value":
-        goster = value_good
+    elif filtre == "kombo":
+        goster = kombolu
     else:
         goster = fl
 
@@ -1424,8 +1416,8 @@ else:
         elif "Zayıf" in t["ana_label"]:
             pill_cls = "gri"
 
-        surp_text = t.get("combo_label", t.get("kg_label", "N/A"))
-        surp_cls = "" if "Var" in surp_text or "+" in surp_text else "yok"
+        surp_text = t.get("combo_label", "")
+        surp_cls = "" if surp_text else "yok"
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -1456,13 +1448,17 @@ else:
               <div>
                 <div class="mk-label">ALTERNATİF</div>
                 <span class="alt-pill">{t['alt_label']}</span>
+            """, unsafe_allow_html=True)
+
+            if surp_text:
+                st.markdown(f"""
                 <div style="margin-top:8px">
-                  <div class="mk-label">SÜRPRİZ / KOMBO</div>
+                  <div class="mk-label">GÜÇLÜ KOMBO</div>
                   <span class="surp-pill {surp_cls}">{surp_text}</span>
                 </div>
-                <div style="margin-top:8px">
-                  <span class="value-pill {t.get('ana_value_cls', 'value-neutral')}">{t.get('ana_value_text', 'N/A')}</span>
-                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown(f"""
               </div>
 
               <div>
