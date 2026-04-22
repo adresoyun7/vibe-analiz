@@ -337,9 +337,9 @@ section[data-testid="stSidebar"] label {
     gap:10px;
 }
 .diger-icon {
-    font-size: 1.05rem;
-    width: 20px;
-    text-align: center;
+    font-size:1.05rem;
+    width:20px;
+    text-align:center;
 }
 .diger-name {
     font-size:0.86rem;
@@ -382,10 +382,7 @@ section[data-testid="stSidebar"] label {
 </style>
 """, unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════
-
+# helpers
 def format_tr_date(d):
     aylar = {
         1: "Ocak", 2: "Şubat", 3: "Mart", 4: "Nisan", 5: "Mayıs", 6: "Haziran",
@@ -420,10 +417,7 @@ def tahmini_skor(b, ms_mod):
         dg = eg + 1
     return eg, dg
 
-# ═══════════════════════════════════════════
-# DATA
-# ═══════════════════════════════════════════
-
+# data
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(sezonlar):
     if not sezonlar:
@@ -614,42 +608,12 @@ def hesapla(b_df, m_row, tolerans):
         'ornek': len(b),
     }, b.sort_values('Date', ascending=False)
 
-# ═══════════════════════════════════════════
-# SIDEBAR
-# ═══════════════════════════════════════════
+# session defaults
+for key, default in [('final_list',[]),('detay_idx',None),('filtre','tumu'),('kupona',[])]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-with st.sidebar:
-    st.markdown("""
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 0 18px 0">
-      <div style="background:#27ae60;border-radius:8px;padding:6px 10px;font-family:Rajdhani,sans-serif;font-size:1.1rem;font-weight:700;color:#fff">V</div>
-      <div>
-        <div style="font-family:Rajdhani,sans-serif;font-size:1.12rem;font-weight:700;color:#fff;line-height:1.1">VIBE PRO</div>
-        <div style="font-family:Rajdhani,sans-serif;font-size:0.72rem;color:#27ae60;letter-spacing:2px">EXPERT v6.3</div>
-      </div>
-    </div>
-    <div style="font-size:0.72rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">KONTROL MERKEZİ</div>
-    """, unsafe_allow_html=True)
-
-    API_KEY = st.text_input("The Odds API Key", type="password")
-    bugun = datetime.now().date()
-    secili_tarih = st.date_input("Analiz Tarihi", value=bugun)
-
-    st.markdown("---")
-
-    yillar = st.multiselect(
-        "Sezonlar",
-        options=['2122','2223','2324','2425','2526'],
-        default=['2324','2425','2526']
-    )
-    min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=1)
-    TOLERANS = st.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
-
-    st.markdown("---")
-
-# ═══════════════════════════════════════════
-# LIG SECIMI - CALISAN TUMUNU SEC
-# ═══════════════════════════════════════════
-
+# league controls
 FUTBOL_LIGLERI = {
     "AVRUPA KUPALARI": {
         'Şampiyonlar Ligi':'soccer_uefa_champs_league',
@@ -680,7 +644,6 @@ def init_league_states():
         group_key = f"group_{kat}"
         if group_key not in st.session_state:
             st.session_state[group_key] = False
-
         for _, kod in ligler.items():
             item_key = f"cb_{kod}"
             if item_key not in st.session_state:
@@ -694,7 +657,35 @@ def toggle_group(kat, ligler):
 init_league_states()
 secili_kodlar = []
 
+# sidebar
 with st.sidebar:
+    st.markdown("""
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 0 18px 0">
+      <div style="background:#27ae60;border-radius:8px;padding:6px 10px;font-family:Rajdhani,sans-serif;font-size:1.1rem;font-weight:700;color:#fff">V</div>
+      <div>
+        <div style="font-family:Rajdhani,sans-serif;font-size:1.12rem;font-weight:700;color:#fff;line-height:1.1">VIBE PRO</div>
+        <div style="font-family:Rajdhani,sans-serif;font-size:0.72rem;color:#27ae60;letter-spacing:2px">EXPERT v6.3</div>
+      </div>
+    </div>
+    <div style="font-size:0.72rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">KONTROL MERKEZİ</div>
+    """, unsafe_allow_html=True)
+
+    API_KEY = st.text_input("The Odds API Key", type="password")
+    bugun = datetime.now().date()
+    secili_tarih = st.date_input("Analiz Tarihi", value=bugun)
+
+    st.markdown("---")
+
+    yillar = st.multiselect(
+        "Sezonlar",
+        options=['2122','2223','2324','2425','2526'],
+        default=['2324','2425','2526']
+    )
+    min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=1)
+    TOLERANS = st.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
+
+    st.markdown("---")
+
     for kat, ligler in FUTBOL_LIGLERI.items():
         with st.expander(kat, expanded=(kat == "TÜRKİYE")):
             st.checkbox(
@@ -703,7 +694,6 @@ with st.sidebar:
                 on_change=toggle_group,
                 args=(kat, ligler)
             )
-
             for isim, kod in ligler.items():
                 st.checkbox(isim, key=f"cb_{kod}")
                 if st.session_state.get(f"cb_{kod}", False):
@@ -725,34 +715,7 @@ with st.sidebar:
             unsafe_allow_html=True
         )
 
-if 'son_analiz' in st.session_state:
-    st.markdown(
-        f"""<div style="font-size:0.74rem;color:#666;margin-top:10px">
-        Son analiz: {st.session_state.son_analiz}<br>
-        Toplam maç: {st.session_state.get('toplam_mac',0)}</div>""",
-        unsafe_allow_html=True
-    )
-
-    if 'son_analiz' in st.session_state:
-        st.markdown(
-            f"""<div style="font-size:0.74rem;color:#666;margin-top:10px">
-            Son analiz: {st.session_state.son_analiz}<br>
-            Toplam maç: {st.session_state.get('toplam_mac',0)}</div>""",
-            unsafe_allow_html=True
-        )
-
-# ═══════════════════════════════════════════
-# SESSION
-# ═══════════════════════════════════════════
-
-for key, default in [('final_list',[]),('detay_idx',None),('filtre','tumu'),('kupona',[])]:
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-# ═══════════════════════════════════════════
-# ANALIZ
-# ═══════════════════════════════════════════
-
+# analyze
 if analiz_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
@@ -775,10 +738,7 @@ if analiz_btn:
         st.session_state.toplam_mac = len(final)
         st.rerun()
 
-# ═══════════════════════════════════════════
-# DETAIL PAGE
-# ═══════════════════════════════════════════
-
+# detail page
 if st.session_state.detay_idx is not None:
     idx = st.session_state.detay_idx
     item = st.session_state.final_list[idx]
@@ -786,8 +746,8 @@ if st.session_state.detay_idx is not None:
 
     c1, c2, c3 = st.columns([1,6,1])
     with c1:
-if st.button("← Geri", key="geri_btn"):
-    st.session_state.detay_idx = None
+        if st.button("← Geri", key="geri_btn"):
+            st.session_state.detay_idx = None
             st.rerun()
     with c2:
         st.markdown(f"""
@@ -846,78 +806,42 @@ if st.button("← Geri", key="geri_btn"):
           <div class="tk-row">
             <span class="tk-key">🏆 Maç Sonucu <small style="color:#555">MS 1/X/2</small></span>
             <div style="display:flex;gap:18px">
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">1</div>
-                <div style="font-weight:700;color:#27ae60">%{int(t['ms1_p'])}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">X</div>
-                <div style="font-weight:700;color:#f1c40f">%{int(t['msx_p'])}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">2</div>
-                <div style="font-weight:700;color:#e74c3c">%{int(t['ms2_p'])}</div>
-              </div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{int(t['ms1_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{int(t['msx_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#e74c3c">%{int(t['ms2_p'])}</div></div>
             </div>
           </div>
 
           <div class="tk-row">
             <span class="tk-key">⚽ 2.5 Üst/Alt <small style="color:#555">Toplam Gol</small></span>
             <div style="display:flex;gap:18px">
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">Üst</div>
-                <div style="font-weight:700;color:#27ae60">%{int(t['ms25_p'])}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">Alt</div>
-                <div style="font-weight:700;color:#e74c3c">%{int(t['ms25a_p'])}</div>
-              </div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Üst</div><div style="font-weight:700;color:#27ae60">%{int(t['ms25_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Alt</div><div style="font-weight:700;color:#e74c3c">%{int(t['ms25a_p'])}</div></div>
             </div>
           </div>
 
           <div class="tk-row">
             <span class="tk-key">🤝 Karşılıklı Gol <small style="color:#555">KG Var / Yok</small></span>
             <div style="display:flex;gap:18px">
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">Var</div>
-                <div style="font-weight:700;color:#27ae60">%{int(t['kg_var_p'])}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">Yok</div>
-                <div style="font-weight:700;color:#e74c3c">%{int(t['kg_yok_p'])}</div>
-              </div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Var</div><div style="font-weight:700;color:#27ae60">%{int(t['kg_var_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Yok</div><div style="font-weight:700;color:#e74c3c">%{int(t['kg_yok_p'])}</div></div>
             </div>
           </div>
 
           <div class="tk-row">
             <span class="tk-key">⏱ İlk Yarı Sonucu <small style="color:#555">İY 1/X/2</small></span>
             <div style="display:flex;gap:18px">
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">1</div>
-                <div style="font-weight:700;color:#27ae60">%{int(t['iy1_p'])}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">X</div>
-                <div style="font-weight:700;color:#f1c40f">%{int(t['iyx_p'])}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">2</div>
-                <div style="font-weight:700;color:#e74c3c">%{int(t['iy2_p'])}</div>
-              </div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{int(t['iy1_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{int(t['iyx_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#e74c3c">%{int(t['iy2_p'])}</div></div>
             </div>
           </div>
 
           <div class="tk-row">
             <span class="tk-key">⏱ İlk Yarı 0.5 Üst/Alt</span>
             <div style="display:flex;gap:18px">
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">Üst</div>
-                <div style="font-weight:700;color:#27ae60">%{int(t['iy05_p'])}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">Alt</div>
-                <div style="font-weight:700;color:#e74c3c">%{int(t['iy05a_p'])}</div>
-              </div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Üst</div><div style="font-weight:700;color:#27ae60">%{int(t['iy05_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Alt</div><div style="font-weight:700;color:#e74c3c">%{int(t['iy05a_p'])}</div></div>
             </div>
           </div>
 
@@ -946,75 +870,36 @@ if st.button("← Geri", key="geri_btn"):
           <div class="tk-title">DİĞER ÖNERİLER</div>
 
           <div class="diger-row">
-            <div class="diger-left">
-              <span class="diger-icon">🔁</span>
-              <div>
-                <div class="diger-name">HT/FT</div>
-                <div class="diger-sub">1. Yarı / Maç Sonu</div>
-              </div>
-            </div>
+            <div class="diger-left"><span class="diger-icon">🔁</span><div><div class="diger-name">HT/FT</div><div class="diger-sub">1. Yarı / Maç Sonu</div></div></div>
             <span class="diger-badge {htft_cls}">{t['htft_mod']} %{int(t['htft_p'])}</span>
           </div>
 
           <div class="diger-row">
-            <div class="diger-left">
-              <span class="diger-icon">⚽</span>
-              <div>
-                <div class="diger-name">Toplam Gol 3.5</div>
-                <div class="diger-sub">Tahmini Gol Sayısı</div>
-              </div>
-            </div>
+            <div class="diger-left"><span class="diger-icon">⚽</span><div><div class="diger-name">Toplam Gol 3.5</div><div class="diger-sub">Tahmini Gol Sayısı</div></div></div>
             <span class="diger-badge {ms35_cls}">{ms35_lbl}</span>
           </div>
 
           <div class="diger-row">
-            <div class="diger-left">
-              <span class="diger-icon">⏱</span>
-              <div>
-                <div class="diger-name">İlk Yarı / 0.5 Üst</div>
-                <div class="diger-sub">İlk Yarı Toplam Gol</div>
-              </div>
-            </div>
+            <div class="diger-left"><span class="diger-icon">⏱</span><div><div class="diger-name">İlk Yarı / 0.5 Üst</div><div class="diger-sub">İlk Yarı Toplam Gol</div></div></div>
             <span class="diger-badge {iy_cls}">{iy_lbl}</span>
           </div>
 
           <div class="diger-row">
-            <div class="diger-left">
-              <span class="diger-icon">🤝</span>
-              <div>
-                <div class="diger-name">Karşılıklı Gol</div>
-                <div class="diger-sub">KG Var / Yok</div>
-              </div>
-            </div>
+            <div class="diger-left"><span class="diger-icon">🤝</span><div><div class="diger-name">Karşılıklı Gol</div><div class="diger-sub">KG Var / Yok</div></div></div>
             <span class="diger-badge {kg_cls}">{kg_lbl}</span>
           </div>
 
           <div class="diger-row">
-            <div class="diger-left">
-              <span class="diger-icon">📍</span>
-              <div>
-                <div class="diger-name">Canlı Tercih</div>
-                <div class="diger-sub">{t['canli_label']}</div>
-              </div>
-            </div>
+            <div class="diger-left"><span class="diger-icon">📍</span><div><div class="diger-name">Canlı Tercih</div><div class="diger-sub">{t['canli_label']}</div></div></div>
             <span class="diger-badge db-green">%{int(t['canli_p'])}</span>
           </div>
 
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
             <div style="display:flex;gap:16px">
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">1</div>
-                <div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">X</div>
-                <div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div>
-              </div>
-              <div style="text-align:center">
-                <div style="font-size:0.62rem;color:#666">2</div>
-                <div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div>
-              </div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div></div>
             </div>
           </div>
         </div>
@@ -1058,10 +943,7 @@ if st.button("← Geri", key="geri_btn"):
 
     st.stop()
 
-# ═══════════════════════════════════════════
-# ANA MAÇ EKRANI
-# ═══════════════════════════════════════════
-
+# main page
 fl = st.session_state.final_list
 
 hc1, hc2 = st.columns([6,1])
@@ -1214,6 +1096,6 @@ else:
         </div>
         """, unsafe_allow_html=True)
 
-if st.button("🗑️ Kuponu Temizle", key="kupon_temizle_btn"):
-    st.session_state.kupona = []
+        if st.button("🗑️ Kuponu Temizle", key="kupon_temizle_btn"):
+            st.session_state.kupona = []
             st.rerun()
