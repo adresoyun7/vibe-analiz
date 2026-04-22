@@ -559,20 +559,27 @@ def hesapla(b_df, m_row, tolerans):
     htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
     htft_p   = int(htft_s.value_counts(normalize=True).get(htft_mod, 0) * 100)
 
-ms_label = "MS 1" if ms_mod == 'H' else "MS 2" if ms_mod == 'A' else "Beraberlik"
-ms_prob = ms_p
+    ms_label = "MS 1" if ms_mod == 'H' else "MS 2" if ms_mod == 'A' else "Beraberlik"
+    ms_prob = ms_p
 
-ou_label = "2.5 Üst" if ms25_p >= 0.5 else "2.5 Alt"
-ou_prob = max(ms25_p, 1 - ms25_p)
+    ou_label = "2.5 Üst" if ms25_p >= 0.5 else "2.5 Alt"
+    ou_prob = max(ms25_p, 1 - ms25_p)
 
-kg_prob = max(kg_p, 1 - kg_p)
+    kg_label = "KG Var" if kg_p >= 0.5 else "KG Yok"
+    kg_prob = max(kg_p, 1 - kg_p)
 
-cands = [
-    (ms_prob, ms_label, int(ms_prob * 100), m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']),
-    (ou_prob, ou_label, int(ou_prob * 100), "-"),
-    (kg_prob, kg_label, int(kg_prob * 100), "-"),
-]
+    cands = [
+        (ms_prob, ms_label, int(ms_prob * 100), m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']),
+        (ou_prob, ou_label, int(ou_prob * 100), "-"),
+        (kg_prob, kg_label, int(kg_prob * 100), "-"),
+    ]
 
+    best = max(cands, key=lambda x: x[0])
+    ana_label, ana_p, ana_oran = best[1], best[2], best[3]
+
+    others = [c for c in cands if c[1] != ana_label]
+    alt = max(others, key=lambda x: x[0]) if others else cands[1]
+    alt_label, alt_p = alt[1], alt[2]
 best = max(cands, key=lambda x: x[0])
 ana_label, ana_p, ana_oran = best[1], best[2], best[3]
 
@@ -623,29 +630,39 @@ for key, default in [('final_list',[]),('detay_idx',None),('filtre','tumu'),('ku
 # league controls
 FUTBOL_LIGLERI = {
     "AVRUPA KUPALARI": {
-        'Şampiyonlar Ligi':'soccer_uefa_champs_league',
-        'Avrupa Ligi':'soccer_uefa_europa_league',
-        'Konferans Ligi':'soccer_uefa_europa_conference_league'
+        'Şampiyonlar Ligi': 'soccer_uefa_champs_league',
+        'Avrupa Ligi': 'soccer_uefa_europa_league',
+        'Konferans Ligi': 'soccer_uefa_europa_conference_league'
     },
     "TÜRKİYE": {
-        'Süper Lig':'soccer_turkey_super_league',
-        '1. Lig':'soccer_turkey_pTT_1_lig'
+        'Süper Lig': 'soccer_turkey_super_league',
+        '1. Lig': 'soccer_turkey_pTT_1_lig',
+        'Türkiye Kupası': 'soccer_turkey_cup'
     },
-    "AVRUPA MAJÖR": {
-        'İngiltere Premier':'soccer_epl',
-        'İspanya La Liga':'soccer_spain_la_liga',
-        'Almanya Bundesliga':'soccer_germany_bundesliga',
-        'İtalya Serie A':'soccer_italy_serie_a',
-        'Fransa Ligue 1':'soccer_france_ligue_one'
+    "İNGİLTERE": {
+        'Premier League': 'soccer_epl',
+        'FA Cup': 'soccer_fa_cup',
+        'EFL Cup': 'soccer_england_efl_cup'
+    },
+    "İSPANYA": {
+        'La Liga': 'soccer_spain_la_liga',
+        'Copa del Rey': 'soccer_spain_copa_del_rey'
+    },
+    "ALMANYA": {
+        'Bundesliga': 'soccer_germany_bundesliga',
+        'DFB-Pokal': 'soccer_germany_dfb_pokal'
+    },
+    "İTALYA": {
+        'Serie A': 'soccer_italy_serie_a',
+        'Coppa Italia': 'soccer_italy_coppa_italia'
     },
     "AVRUPA DİĞER": {
-        'Hollanda':'soccer_netherlands_eredivisie',
-        'Belçika':'soccer_belgium_first_division',
-        'Portekiz':'soccer_portugal_primeira_liga',
-        'İskoçya':'soccer_scotland_premiership'
+        'Hollanda': 'soccer_netherlands_eredivisie',
+        'Belçika': 'soccer_belgium_first_division',
+        'Portekiz': 'soccer_portugal_primeira_liga',
+        'İskoçya': 'soccer_spl'
     }
 }
-
 def init_league_states():
     for kat, ligler in FUTBOL_LIGLERI.items():
         group_key = f"group_{kat}"
