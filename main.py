@@ -1669,7 +1669,7 @@ else:
             level_text = f' · {combo_level}' if combo_level else ''
             combo_odd_text = fmt_odd(t.get("combo_odd"))
             combo_odd_html = f'<span style="margin-left:8px;font-size:0.75rem;color:#aeb5c3">{combo_odd_text}</span>' if combo_odd_text else ''
-            combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span>{combo_odd_html}</div></div>'
+            combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span>{combo_odd_html}</div>'
         stability_early_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>' if t.get('stability_early_text') else ''
         stability_late_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>' if t.get('stability_late_text') else ''
         stability_fallback_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>' if (not t.get('stability_early_text') and not t.get('stability_late_text')) else ''
