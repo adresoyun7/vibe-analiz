@@ -714,7 +714,7 @@ def hesapla(b_df, m_row, tolerans):
         'guven_carpani': round(guven_carpani, 3),
     }, b.sort_values('Date', ascending=False)
 
-APP_SCHEMA_VERSION = 2
+APP_SCHEMA_VERSION = 3
 if st.session_state.get('app_schema_version') != APP_SCHEMA_VERSION:
     st.session_state.final_list = []
     st.session_state.detay_idx = None
@@ -806,20 +806,22 @@ with st.sidebar:
     TOLERANS = st.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
 
     rehber = tolerans_rehberi(TOLERANS)
-    st.markdown(
-        f"""<div style="margin-top:10px;background:#151a23;border:1px solid #253046;border-radius:12px;padding:10px 12px">
-"
-        f"<div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Tolerans Rehberi</div>
-"
-        f"<div style="font-size:0.82rem;color:#fff">Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b></div>
-"
-        f"<div style="font-size:0.8rem;color:#c7cfdd;margin-top:4px">Önerilen min maç: <b>{rehber['onerilen_min_mac']}</b></div>
-"
-        f"<div style="font-size:0.76rem;color:#7f8a9e;margin-top:6px">{rehber['yorum']}</div>
-"
-        f"</div>""",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"""
+    <div style="margin-top:10px;background:#151a23;border:1px solid #253046;border-radius:12px;padding:10px 12px">
+      <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">
+        Tolerans Rehberi
+      </div>
+      <div style="font-size:0.82rem;color:#fff">
+        Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b>
+      </div>
+      <div style="font-size:0.8rem;color:#c7cfdd;margin-top:4px">
+        Önerilen min maç: <b>{rehber['onerilen_min_mac']}</b>
+      </div>
+      <div style="font-size:0.76rem;color:#7f8a9e;margin-top:6px">
+        {rehber['yorum']}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
 
