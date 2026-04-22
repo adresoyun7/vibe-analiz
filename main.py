@@ -1,10 +1,16 @@
-import streamlit as st
+import math
+from datetime import datetime, timedelta
+
 import pandas as pd
 import requests
-from datetime import datetime, timedelta
-import math
+import streamlit as st
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
+
+APP_SCHEMA_VERSION = 5
+if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
+    st.session_state.clear()
+    st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
 
 st.markdown("""
 <style>
@@ -28,8 +34,6 @@ section[data-testid="stSidebar"] label {
     padding-top: 1.2rem;
     max-width: 1500px;
 }
-
-/* TOP */
 .top-header {
     display:flex;
     align-items:flex-start;
@@ -82,8 +86,6 @@ section[data-testid="stSidebar"] label {
     display:block;
     letter-spacing:1px;
 }
-
-/* MAIN MATCH CARD */
 .mac-kart {
     background:#13151e;
     border:1px solid #1e2130;
@@ -91,7 +93,7 @@ section[data-testid="stSidebar"] label {
     padding:16px 18px;
     margin-bottom:12px;
     display:grid;
-    grid-template-columns:90px 1.4fr 180px 160px 160px;
+    grid-template-columns:90px 1.6fr 190px 180px 180px;
     gap:14px;
     align-items:center;
     transition:.2s ease;
@@ -134,6 +136,11 @@ section[data-testid="stSidebar"] label {
     font-weight:600;
     color:#c6cfdd;
 }
+.mk-mini {
+    font-size:0.75rem;
+    color:#8f98ab;
+    margin-top:8px;
+}
 .mk-label {
     font-size:0.66rem;
     color:#858ca0;
@@ -153,6 +160,7 @@ section[data-testid="stSidebar"] label {
 }
 .ana-pill.kirmizi { background:#c0392b; }
 .ana-pill.sari { background:#c9a227; color:#111; }
+.ana-pill.gri { background:#5d6779; color:#fff; }
 
 .guven-pct {
     font-family:'Rajdhani',sans-serif;
@@ -189,6 +197,18 @@ section[data-testid="stSidebar"] label {
     display:inline-block;
 }
 .surp-pill.yok { color:#e74c3c; }
+
+.value-pill {
+    display:inline-block;
+    border-radius:999px;
+    padding:4px 10px;
+    font-size:0.74rem;
+    font-weight:700;
+}
+.value-good { background:#183925; color:#3ddb7c; }
+.value-neutral { background:#2d3444; color:#c7cfdd; }
+.value-bad { background:#391212; color:#ff6b6b; }
+
 .oran-row {
     display:flex;
     gap:12px;
@@ -205,7 +225,6 @@ section[data-testid="stSidebar"] label {
     color:#fff;
 }
 
-/* DETAIL */
 .hero-boxes {
     display:grid;
     grid-template-columns:1fr 1fr 1fr;
@@ -260,12 +279,11 @@ section[data-testid="stSidebar"] label {
 .badge-orta   { background:#e67e22; color:#fff; }
 .badge-dusuk  { background:#c0392b; color:#fff; }
 
-.tahmin-kart {
+.tahmin-kart, .diger-kart, .neden-kart, .kupon-kart {
     background:#13151e;
     border:1px solid #1e2130;
     border-radius:16px;
     padding:18px 22px;
-    height:100%;
 }
 .tk-title {
     font-family:'Rajdhani',sans-serif;
@@ -276,14 +294,14 @@ section[data-testid="stSidebar"] label {
     margin-bottom:14px;
     text-transform:uppercase;
 }
-.tk-row {
+.tk-row, .diger-row {
     display:flex;
     justify-content:space-between;
     align-items:center;
     padding:10px 0;
     border-bottom:1px solid #1a1d26;
 }
-.tk-row:last-child { border-bottom:none; }
+.tk-row:last-child, .diger-row:last-child { border-bottom:none; }
 .tk-key { font-size:0.84rem; color:#9098aa; }
 
 .risk-row {
@@ -312,20 +330,6 @@ section[data-testid="stSidebar"] label {
 .risk-orta   { background:#e67e22; color:#fff; }
 .risk-yuksek { background:#c0392b; color:#fff; }
 
-.diger-kart {
-    background:#13151e;
-    border:1px solid #1e2130;
-    border-radius:16px;
-    padding:18px 22px;
-}
-.diger-row {
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    padding:10px 0;
-    border-bottom:1px solid #1a1d26;
-}
-.diger-row:last-child { border-bottom:none; }
 .diger-left {
     display:flex;
     align-items:center;
@@ -355,6 +359,7 @@ section[data-testid="stSidebar"] label {
 .db-green { background:#183925; color:#3ddb7c; }
 .db-gold  { background:#37290f; color:#f1c40f; }
 .db-red   { background:#391212; color:#ff6b6b; }
+.db-blue  { background:#17304d; color:#6ec1ff; }
 
 .surpriz-radar {
     background:#2d0a0a;
@@ -366,16 +371,18 @@ section[data-testid="stSidebar"] label {
     font-size:0.9rem;
     margin-bottom:12px;
 }
-
-.kupon-kart {
-    background:#13151e;
-    border:1px solid #27ae60;
-    border-radius:16px;
-    padding:18px 22px;
-    margin-top:16px;
+.neden-item {
+    padding:8px 0;
+    border-bottom:1px solid #1a1d26;
+    color:#c7cfdd;
+    font-size:0.88rem;
+}
+.neden-item:last-child {
+    border-bottom:none;
 }
 </style>
 """, unsafe_allow_html=True)
+
 
 def format_tr_date(d):
     aylar = {
@@ -389,22 +396,19 @@ def format_tr_date(d):
     return f"{d.day} {aylar[d.month]} {d.year} {gunler[d.weekday()]}"
 
 
-
-
-
-def dinamik_min_mac(tolerans: float):
+def dinamik_min_mac(tolerans: float) -> int:
     if tolerans <= 0.02:
-        return 2
+        return 1
     elif tolerans <= 0.05:
-        return 4
+        return 3
     elif tolerans <= 0.08:
-        return 6
+        return 5
     elif tolerans <= 0.12:
         return 10
     return 20
 
 
-def sample_factor_hesapla(sample, tolerans):
+def sample_factor_hesapla(sample: int, tolerans: float) -> float:
     if tolerans <= 0.02:
         hedef = 5
     elif tolerans <= 0.05:
@@ -417,73 +421,114 @@ def sample_factor_hesapla(sample, tolerans):
         hedef = 40
     return min(0.75 + 0.25 * (sample / max(hedef, 1)), 1.0)
 
+
 def tolerans_rehberi(tolerans: float):
-    onerilen_tolerans = '0.08 - 0.10'
-    onerilen_min_mac = dinamik_min_mac(tolerans)
-
+    min_mac = dinamik_min_mac(tolerans)
     if tolerans <= 0.02:
-        yorum = 'Aşırı dar filtre. Az sayıda ama çok yakın oranlı maçlar gelir.'
-        durum = 'riskli'
+        yorum = "Çok dar filtre. Az ama çok yakın oranlı örnekler gelir."
     elif tolerans <= 0.05:
-        yorum = 'Dar filtre. Az maçla da güçlü benzerlik yakalanabilir.'
-        durum = 'dikkat'
+        yorum = "Dar filtre. Örnek az olabilir ama eşleşme kalitesi yüksektir."
     elif tolerans <= 0.08:
-        yorum = 'Dengeli filtre. Veri ve benzerlik birlikte korunur.'
-        durum = 'iyi'
+        yorum = "Dengeli filtre. Hem kalite hem örnek sayısı dengeli."
     elif tolerans <= 0.12:
-        yorum = 'Biraz geniş filtre. Veri artar ama benzerlik biraz düşer.'
-        durum = 'iyi'
+        yorum = "Biraz geniş filtre. Veri artar, benzerlik biraz düşer."
     else:
-        yorum = 'Geniş filtre. Sonuçlar daha genel olabilir.'
-        durum = 'dikkat'
-
+        yorum = "Geniş filtre. Sonuçlar daha genel davranabilir."
     return {
-        'onerilen_tolerans': onerilen_tolerans,
-        'onerilen_min_mac': onerilen_min_mac,
-        'yorum': yorum,
-        'durum': durum,
+        "onerilen_tolerans": "0.08 - 0.10",
+        "onerilen_min_mac": min_mac,
+        "yorum": yorum,
     }
 
 
-def guven_metni(sample, onerilen_min_mac):
-    if sample >= max(20, onerilen_min_mac * 2):
-        return 'Çok Sağlam', '#27ae60'
-    if sample >= max(10, onerilen_min_mac):
-        return 'Sağlıklı', '#2ecc71'
-    if sample >= max(3, onerilen_min_mac):
-        return 'Yeterli', '#f39c12'
-    return 'Riskli', '#e74c3c'
+def guven_metni(sample: int, tolerans: float):
+    min_mac = dinamik_min_mac(tolerans)
+    if sample >= max(20, min_mac * 3):
+        return "Çok Sağlam", "#27ae60"
+    if sample >= max(10, min_mac * 2):
+        return "Sağlıklı", "#2ecc71"
+    if sample >= min_mac:
+        return "Kullanılabilir", "#f39c12"
+    return "Riskli", "#e74c3c"
 
 
-def guven_renk(pct):
+def guven_renk(pct: int):
     if pct >= 70:
         return "#27ae60", "badge-yuksek", "Yüksek Güven"
     if pct >= 55:
         return "#e67e22", "badge-orta", "Orta Güven"
     return "#e74c3c", "badge-dusuk", "Düşük Güven"
 
-def risk_seviyesi(pct, flip_p):
+
+def risk_seviyesi(pct: int, flip_p: float):
     if pct >= 70 and flip_p < 0.15:
         return "DÜŞÜK", "risk-dusuk"
     if pct >= 55:
         return "ORTA", "risk-orta"
     return "YÜKSEK", "risk-yuksek"
 
-def tahmini_skor(b, ms_mod):
-    eg = math.floor(b['FTHG'].mean() + 0.5) if not b.empty else 1
-    dg = math.floor(b['FTAG'].mean() + 0.5) if not b.empty else 1
-    if ms_mod == 'H' and eg <= dg:
+
+def tahmini_skor(b: pd.DataFrame, ms_mod: str):
+    eg = math.floor(b["FTHG"].mean() + 0.5) if not b.empty else 1
+    dg = math.floor(b["FTAG"].mean() + 0.5) if not b.empty else 1
+    if ms_mod == "H" and eg <= dg:
         eg = dg + 1
-    if ms_mod == 'A' and dg <= eg:
+    if ms_mod == "A" and dg <= eg:
         dg = eg + 1
     return eg, dg
+
+
+def value_hesapla(model_prob: float, odds):
+    if odds in (None, "-", 0):
+        return None
+    try:
+        implied = 1 / float(odds)
+        return model_prob - implied
+    except Exception:
+        return None
+
+
+def value_sinifi(value):
+    if value is None:
+        return "N/A", "value-neutral"
+    if value >= 0.03:
+        return f"+EV %{round(value * 100, 1)}", "value-good"
+    if value >= -0.02:
+        return f"Nötr %{round(value * 100, 1)}", "value-neutral"
+    return f"-EV %{round(abs(value) * 100, 1)}", "value-bad"
+
+
+def mac_tipi(h: float, a: float):
+    if abs(h - a) <= 0.50:
+        return "Dengeli"
+    if h < 2.0 or a < 2.0:
+        return "Favori"
+    return "Sürpriz Açık"
+
+
+def gol_profili(avg_goal: float):
+    if avg_goal < 2.2:
+        return "Düşük Gollü"
+    if avg_goal < 3.0:
+        return "Dengeli"
+    return "Yüksek Gollü"
+
+
+def fake_confidence_duzelt(conf_prob: float, sample: int, tolerans: float):
+    carpan = 1.0
+    if tolerans <= 0.05 and sample < 10 and conf_prob > 0.80:
+        carpan *= 0.75
+    elif tolerans <= 0.08 and sample < 8 and conf_prob > 0.75:
+        carpan *= 0.82
+    return conf_prob * carpan, carpan < 1.0
+
 
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(sezonlar):
     if not sezonlar:
         return pd.DataFrame()
 
-    lig_map = ['T1','E0','SP1','D1','I1','F1','N1','B1','P1','SC0']
+    lig_map = ["T1", "E0", "SP1", "D1", "I1", "F1", "N1", "B1", "P1", "SC0"]
     liste = []
 
     for k in lig_map:
@@ -492,17 +537,18 @@ def futbol_veri_motoru(sezonlar):
                 url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
                 df = pd.read_csv(url)
                 cols = [
-                    'Date','HomeTeam','AwayTeam','FTHG','FTAG','HTHG','HTAG',
-                    'FTR','HTR','B365H','B365D','B365A','HC','AC','HY','AY'
+                    "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG",
+                    "FTR", "HTR", "B365H", "B365D", "B365A", "HC", "AC", "HY", "AY"
                 ]
                 df = df[df.columns.intersection(cols)]
-                temp = df.dropna(subset=['B365H','B365D','B365A']).copy()
-                temp['Date'] = pd.to_datetime(temp['Date'], dayfirst=True, errors='coerce')
+                temp = df.dropna(subset=["B365H", "B365D", "B365A"]).copy()
+                temp["Date"] = pd.to_datetime(temp["Date"], dayfirst=True, errors="coerce")
                 liste.append(temp)
-            except:
+            except Exception:
                 continue
 
     return pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
+
 
 def bulten_cek(key, kodlar, t):
     res = []
@@ -510,14 +556,14 @@ def bulten_cek(key, kodlar, t):
     for k in kodlar:
         try:
             r = requests.get(
-                f'https://api.the-odds-api.com/v4/sports/{k}/odds/',
+                f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
                 params={
                     "apiKey": key,
                     "regions": "eu",
                     "markets": "h2h",
-                    "oddsFormat": "decimal"
+                    "oddsFormat": "decimal",
                 },
-                timeout=12
+                timeout=12,
             )
 
             if r.status_code != 200:
@@ -529,21 +575,21 @@ def bulten_cek(key, kodlar, t):
 
             for m in data:
                 try:
-                    tm = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
-                except:
+                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                except Exception:
                     continue
 
                 if tm.date() != t:
                     continue
 
-                bookies = m.get('bookmakers', [])
+                bookies = m.get("bookmakers", [])
                 if not bookies:
                     continue
 
                 market = None
                 for bk in bookies:
-                    for mk in bk.get('markets', []):
-                        if mk.get('key') == 'h2h':
+                    for mk in bk.get("markets", []):
+                        if mk.get("key") == "h2h":
                             market = mk
                             break
                     if market:
@@ -552,85 +598,95 @@ def bulten_cek(key, kodlar, t):
                 if not market:
                     continue
 
-                outcomes = market.get('outcomes', [])
-                home = m.get('home_team', '')
-                away = m.get('away_team', '')
+                outcomes = market.get("outcomes", [])
+                home = m.get("home_team", "")
+                away = m.get("away_team", "")
 
                 if not away:
-                    teams = m.get('teams', [])
+                    teams = m.get("teams", [])
                     for team in teams:
                         if team != home:
                             away = team
                             break
 
-                h = next((x['price'] for x in outcomes if x['name'] == home), None)
-                a = next((x['price'] for x in outcomes if x['name'] == away), None)
-                b = next((x['price'] for x in outcomes if str(x['name']).lower() in ['draw', 'tie', 'beraberlik']), None)
+                h = next((x["price"] for x in outcomes if x["name"] == home), None)
+                a = next((x["price"] for x in outcomes if x["name"] == away), None)
+                b = next((x["price"] for x in outcomes if str(x["name"]).lower() in ["draw", "tie", "beraberlik"]), None)
 
                 if h is None or a is None or b is None:
                     continue
 
                 res.append({
-                    'lig': m.get('sport_title', k),
-                    'zaman': tm,
-                    'ev': home,
-                    'dep': away,
-                    'h': float(h),
-                    'b': float(b),
-                    'a': float(a)
+                    "lig": m.get("sport_title", k),
+                    "zaman": tm,
+                    "ev": home,
+                    "dep": away,
+                    "h": float(h),
+                    "b": float(b),
+                    "a": float(a),
                 })
-        except:
+        except Exception:
             continue
 
     if not res:
         return pd.DataFrame()
 
-    df = pd.DataFrame(res).drop_duplicates(subset=['ev', 'dep', 'zaman'])
-    return df.sort_values('zaman').reset_index(drop=True)
+    df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
+    return df.sort_values("zaman").reset_index(drop=True)
+
 
 def hesapla(b_df, m_row, tolerans):
     rehber = tolerans_rehberi(float(tolerans))
     onerilen_min_mac = dinamik_min_mac(float(tolerans))
 
     b = b_df[
-        (b_df['B365H'].between(m_row['h'] - tolerans, m_row['h'] + tolerans)) &
-        (b_df['B365D'].between(m_row['b'] - tolerans, m_row['b'] + tolerans)) &
-        (b_df['B365A'].between(m_row['a'] - tolerans, m_row['a'] + tolerans))
+        (b_df["B365H"].between(m_row["h"] - tolerans, m_row["h"] + tolerans)) &
+        (b_df["B365D"].between(m_row["b"] - tolerans, m_row["b"] + tolerans)) &
+        (b_df["B365A"].between(m_row["a"] - tolerans, m_row["a"] + tolerans))
     ].copy()
 
     if b.empty:
         return None, b
 
-    for c in ['FTHG', 'FTAG', 'HTHG', 'HTAG']:
-        b[c] = pd.to_numeric(b[c], errors='coerce').fillna(0)
+    for c in ["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A"]:
+        b[c] = pd.to_numeric(b[c], errors="coerce")
+
+    b = b.dropna(subset=["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A"])
+    if b.empty:
+        return None, b
 
     sample = len(b)
-    alt_sinir = max(1, onerilen_min_mac)
-    sample_factor = sample_factor_hesapla(sample, float(tolerans))
 
-    toplam_gol = b['FTHG'] + b['FTAG']
-    ilk_yari_gol = b['HTHG'] + b['HTAG']
+    toplam_gol = b["FTHG"] + b["FTAG"]
+    ilk_yari_gol = b["HTHG"] + b["HTAG"]
+
+    ms_vc = b["FTR"].value_counts(normalize=True)
+    iy_vc = b["HTR"].value_counts(normalize=True)
+
+    ms_mod = ms_vc.idxmax() if not ms_vc.empty else "D"
+    ms_raw = float(ms_vc.get(ms_mod, 0))
+    ms_side = "MS 1" if ms_mod == "H" else "MS 2" if ms_mod == "A" else "Beraberlik"
+
+    ms1_raw = float(ms_vc.get("H", 0))
+    msx_raw = float(ms_vc.get("D", 0))
+    ms2_raw = float(ms_vc.get("A", 0))
 
     ms25_raw = (toplam_gol >= 3).mean()
     ms35_raw = (toplam_gol >= 4).mean()
     ms15_raw = (toplam_gol >= 2).mean()
-    kg_raw   = ((b['FTHG'] > 0) & (b['FTAG'] > 0)).mean()
+    kg_raw = ((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean()
     iy05_raw = (ilk_yari_gol >= 1).mean()
     iy15_raw = (ilk_yari_gol >= 2).mean()
 
-    ms_vc = b['FTR'].value_counts(normalize=True)
-    iy_vc = b['HTR'].value_counts(normalize=True)
-
-    ms_mod = ms_vc.idxmax() if not ms_vc.empty else 'D'
-    ms_raw = float(ms_vc.get(ms_mod, 0))
-    ms_side = 'MS 1' if ms_mod == 'H' else 'MS 2' if ms_mod == 'A' else 'Beraberlik'
-
-    htft_s = b['HTR'].replace({'H': '1', 'A': '2', 'D': 'X'}) + '/' + b['FTR'].replace({'H': '1', 'A': '2', 'D': 'X'})
-    htft_mod = htft_s.mode()[0] if not htft_s.empty else '-'
+    htft_s = b["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + b["FTR"].replace({"H": "1", "A": "2", "D": "X"})
+    htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
     htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
 
-    oran_ev = float(m_row['h'])
-    oran_dep = float(m_row['a'])
+    oran_ev = float(m_row["h"])
+    oran_ber = float(m_row["b"])
+    oran_dep = float(m_row["a"])
+
+    sample_factor = sample_factor_hesapla(sample, float(tolerans))
     if oran_ev < 1.40 or oran_dep < 1.40:
         oran_factor = 0.93
     elif oran_ev > 6.50 or oran_dep > 6.50:
@@ -641,151 +697,211 @@ def hesapla(b_df, m_row, tolerans):
     guven_carpani = sample_factor * oran_factor
 
     ms_prob = ms_raw * guven_carpani
-    ou25_raw_best = max(ms25_raw, 1 - ms25_raw)
-    ou25_prob = ou25_raw_best * guven_carpani
-    kg_raw_best = max(kg_raw, 1 - kg_raw)
-    kg_prob = kg_raw_best * guven_carpani
+    ou25_best_raw = max(ms25_raw, 1 - ms25_raw)
+    ou25_prob = ou25_best_raw * guven_carpani
+    kg_best_raw = max(kg_raw, 1 - kg_raw)
+    kg_prob = kg_best_raw * guven_carpani
 
     ms_label = ms_side
-    ou_label = '2.5 Üst' if ms25_raw >= 0.5 else '2.5 Alt'
-    kg_label = 'KG Var' if kg_raw >= 0.5 else 'KG Yok'
+    ou_label = "2.5 Üst" if ms25_raw >= 0.5 else "2.5 Alt"
+    kg_label = "KG Var" if kg_raw >= 0.5 else "KG Yok"
 
     cands = [
         {
-            'label': ms_label,
-            'raw_prob': ms_raw,
-            'conf_prob': ms_prob,
-            'oran': m_row['h'] if ms_mod == 'H' else m_row['a'] if ms_mod == 'A' else m_row['b']
+            "label": ms_label,
+            "raw_prob": ms_raw,
+            "conf_prob": ms_prob,
+            "oran": oran_ev if ms_mod == "H" else oran_dep if ms_mod == "A" else oran_ber,
+            "market": "ms",
         },
         {
-            'label': ou_label,
-            'raw_prob': ou25_raw_best,
-            'conf_prob': ou25_prob,
-            'oran': '-'
+            "label": ou_label,
+            "raw_prob": ou25_best_raw,
+            "conf_prob": ou25_prob,
+            "oran": "-",
+            "market": "ou25",
         },
         {
-            'label': kg_label,
-            'raw_prob': kg_raw_best,
-            'conf_prob': kg_prob,
-            'oran': '-'
+            "label": kg_label,
+            "raw_prob": kg_best_raw,
+            "conf_prob": kg_prob,
+            "oran": "-",
+            "market": "kg",
         },
     ]
 
-    best = max(cands, key=lambda x: x['raw_prob'])
-    ana_label = best['label']
-    ana_p = int(round(best['conf_prob'] * 100))
-    ana_oran = best['oran']
-    others = [c for c in cands if c['label'] != ana_label]
-    alt = max(others, key=lambda x: x['raw_prob']) if others else cands[1]
-    alt_label = alt['label']
-    alt_p = int(round(alt['conf_prob'] * 100))
+    best = max(cands, key=lambda x: x["raw_prob"])
+    best_conf, fake_drop = fake_confidence_duzelt(best["conf_prob"], sample, float(tolerans))
+
+    ana_label = best["label"]
+    ana_p = int(round(best_conf * 100))
+    ana_raw_p = int(round(best["raw_prob"] * 100))
+    ana_oran = best["oran"]
+
+    others = [c for c in cands if c["label"] != ana_label]
+    alt = max(others, key=lambda x: x["raw_prob"]) if others else cands[1]
+    alt_conf, _ = fake_confidence_duzelt(alt["conf_prob"], sample, float(tolerans))
+    alt_label = alt["label"]
+    alt_p = int(round(alt_conf * 100))
 
     if ana_p < 35:
-        ana_label = 'Tahmin Zayıf'
+        ana_label = "Tahmin Zayıf"
 
     if iy05_raw * guven_carpani >= 0.68:
-        canli_label = 'İY 0.5 Üst' + (' · 3.5 Üst' if ms35_raw * guven_carpani >= 0.60 else ' · 2.5 Üst' if ms25_raw * guven_carpani >= 0.60 else '')
+        canli_label = "İY 0.5 Üst" + (
+            " · 3.5 Üst" if ms35_raw * guven_carpani >= 0.60 else
+            " · 2.5 Üst" if ms25_raw * guven_carpani >= 0.60 else
+            ""
+        )
         canli_p = int(round(iy05_raw * guven_carpani * 100))
     elif iy15_raw * guven_carpani >= 0.55:
-        canli_label = 'İY 1.5 Üst'
+        canli_label = "İY 1.5 Üst"
         canli_p = int(round(iy15_raw * guven_carpani * 100))
     else:
-        canli_label, canli_p = 'Canlı İzle', 50
+        canli_label, canli_p = "Canlı İzle", 50
 
-    flip_p = (((b['HTR'] == 'H') & (b['FTR'] == 'A')) | ((b['HTR'] == 'A') & (b['FTR'] == 'H'))).mean()
+    flip_p = (((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H"))).mean()
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
     gc, gb_cls, gb_lbl = guven_renk(ana_p)
-    ornek_durum, ornek_renk = guven_metni(sample, onerilen_min_mac)
+    ornek_durum, ornek_renk = guven_metni(sample, float(tolerans))
 
     if sample < onerilen_min_mac:
-        tavsiye = 'Biraz artırılabilir'
-    elif sample > max(8, onerilen_min_mac * 3) and tolerans > 0.10:
-        tavsiye = 'Biraz düşürülebilir'
+        tavsiye = "Örnek az ama kullanılabilir"
+    elif sample < max(10, onerilen_min_mac * 2):
+        tavsiye = "Dengeli"
+    elif sample > max(25, onerilen_min_mac * 3) and tolerans > 0.10:
+        tavsiye = "Biraz düşürülebilir"
     else:
-        tavsiye = 'Uygun'
+        tavsiye = "Uygun"
+
+    avg_goal = float(toplam_gol.mean())
+    goal_profile = gol_profili(avg_goal)
+    match_type = mac_tipi(oran_ev, oran_dep)
+
+    ana_value = value_hesapla(best["raw_prob"], best["oran"])
+    ana_value_text, ana_value_cls = value_sinifi(ana_value)
+
+    nedenler = [
+        f"Bu oran aralığında {sample} benzer maç bulundu.",
+        f"Ham ana olasılık %{ana_raw_p} seviyesinde.",
+        f"Ortalama toplam gol {avg_goal:.2f} ({goal_profile}).",
+        f"Maç tipi: {match_type}.",
+    ]
+    if fake_drop:
+        nedenler.append("Düşük örnek + yüksek güven görüldüğü için fake confidence freni uygulandı.")
+    if ana_value is not None:
+        nedenler.append(f"Value hesabı: {ana_value_text}.")
+    if flip_p >= 0.12:
+        nedenler.append(f"HT/FT sürpriz riski %{int(round(flip_p * 100))}.")
+
+    oynanabilir = (ana_p >= 58 and sample >= onerilen_min_mac)
 
     return {
-        'ana_label': ana_label, 'ana_p': ana_p, 'ana_oran': ana_oran,
-        'alt_label': alt_label, 'alt_p': alt_p,
-        'kg_label': kg_label, 'kg_p': int(round(kg_raw * guven_carpani * 100)),
-        'canli_label': canli_label, 'canli_p': canli_p,
-        'ms_side': ms_side, 'ms_p': int(round(ms_raw * guven_carpani * 100)), 'ms_mod': ms_mod,
-        'ms1_p': int(round(float(ms_vc.get('H', 0)) * guven_carpani * 100)),
-        'msx_p': int(round(float(ms_vc.get('D', 0)) * guven_carpani * 100)),
-        'ms2_p': int(round(float(ms_vc.get('A', 0)) * guven_carpani * 100)),
-        'ms25_p': int(round(ms25_raw * guven_carpani * 100)), 'ms25a_p': int(round((1 - ms25_raw) * guven_carpani * 100)),
-        'ms15_p': int(round(ms15_raw * guven_carpani * 100)), 'ms35_p': int(round(ms35_raw * guven_carpani * 100)),
-        'kg_var_p': int(round(kg_raw * guven_carpani * 100)), 'kg_yok_p': int(round((1 - kg_raw) * guven_carpani * 100)),
-        'iy05_p': int(round(iy05_raw * guven_carpani * 100)), 'iy05a_p': int(round((1 - iy05_raw) * guven_carpani * 100)),
-        'iy15_p': int(round(iy15_raw * guven_carpani * 100)),
-        'iy1_p': int(round(float(iy_vc.get('H', 0)) * guven_carpani * 100)),
-        'iyx_p': int(round(float(iy_vc.get('D', 0)) * guven_carpani * 100)),
-        'iy2_p': int(round(float(iy_vc.get('A', 0)) * guven_carpani * 100)),
-        'htft_mod': htft_mod, 'htft_p': int(round(htft_raw * guven_carpani * 100)),
-        'flip_p': flip_p,
-        'risk_label': risk_l, 'risk_cls': risk_cls,
-        'eg': eg, 'dg': dg,
-        'guven_renk': gc, 'guven_badge_cls': gb_cls, 'guven_badge_lbl': gb_lbl,
-        'ornek': sample,
-        'ornek_durum': ornek_durum,
-        'ornek_renk': ornek_renk,
-        'onerilen_tolerans': rehber['onerilen_tolerans'],
-        'onerilen_min_mac': onerilen_min_mac,
-        'tolerans_yorumu': rehber['yorum'],
-        'tolerans_tavsiyesi': tavsiye,
-        'min_mac_alt_sinir': alt_sinir,
-        'kullanilan_tolerans': round(float(tolerans), 2),
-        'guven_carpani': round(guven_carpani, 3),
-    }, b.sort_values('Date', ascending=False)
+        "ana_label": ana_label,
+        "ana_p": ana_p,
+        "ana_raw_p": ana_raw_p,
+        "ana_oran": ana_oran,
+        "ana_value": ana_value,
+        "ana_value_text": ana_value_text,
+        "ana_value_cls": ana_value_cls,
+        "alt_label": alt_label,
+        "alt_p": alt_p,
+        "kg_label": kg_label,
+        "kg_p": int(round(kg_raw * guven_carpani * 100)),
+        "canli_label": canli_label,
+        "canli_p": canli_p,
+        "ms_side": ms_side,
+        "ms_p": int(round(ms_raw * guven_carpani * 100)),
+        "ms_mod": ms_mod,
+        "ms1_p": int(round(ms1_raw * guven_carpani * 100)),
+        "msx_p": int(round(msx_raw * guven_carpani * 100)),
+        "ms2_p": int(round(ms2_raw * guven_carpani * 100)),
+        "ms25_p": int(round(ms25_raw * guven_carpani * 100)),
+        "ms25a_p": int(round((1 - ms25_raw) * guven_carpani * 100)),
+        "ms15_p": int(round(ms15_raw * guven_carpani * 100)),
+        "ms35_p": int(round(ms35_raw * guven_carpani * 100)),
+        "kg_var_p": int(round(kg_raw * guven_carpani * 100)),
+        "kg_yok_p": int(round((1 - kg_raw) * guven_carpani * 100)),
+        "iy05_p": int(round(iy05_raw * guven_carpani * 100)),
+        "iy05a_p": int(round((1 - iy05_raw) * guven_carpani * 100)),
+        "iy15_p": int(round(iy15_raw * guven_carpani * 100)),
+        "iy1_p": int(round(float(iy_vc.get("H", 0)) * guven_carpani * 100)),
+        "iyx_p": int(round(float(iy_vc.get("D", 0)) * guven_carpani * 100)),
+        "iy2_p": int(round(float(iy_vc.get("A", 0)) * guven_carpani * 100)),
+        "htft_mod": htft_mod,
+        "htft_p": int(round(htft_raw * guven_carpani * 100)),
+        "flip_p": flip_p,
+        "risk_label": risk_l,
+        "risk_cls": risk_cls,
+        "eg": eg,
+        "dg": dg,
+        "guven_renk": gc,
+        "guven_badge_cls": gb_cls,
+        "guven_badge_lbl": gb_lbl,
+        "ornek": sample,
+        "ornek_durum": ornek_durum,
+        "ornek_renk": ornek_renk,
+        "onerilen_tolerans": rehber["onerilen_tolerans"],
+        "onerilen_min_mac": onerilen_min_mac,
+        "tolerans_yorumu": rehber["yorum"],
+        "tolerans_tavsiyesi": tavsiye,
+        "kullanilan_tolerans": round(float(tolerans), 2),
+        "guven_carpani": round(guven_carpani, 3),
+        "goal_profile": goal_profile,
+        "match_type": match_type,
+        "nedenler": nedenler,
+        "oynanabilir": oynanabilir,
+        "fake_drop": fake_drop,
+    }, b.sort_values("Date", ascending=False)
 
-APP_SCHEMA_VERSION = 5
-if st.session_state.get('app_schema_version') != APP_SCHEMA_VERSION:
-    st.session_state.final_list = []
-    st.session_state.detay_idx = None
-    st.session_state.kupona = []
-    st.session_state.app_schema_version = APP_SCHEMA_VERSION
 
-for key, default in [('final_list',[]),('detay_idx',None),('filtre','tumu'),('kupona',[])]:
+for key, default in [
+    ("final_list", []),
+    ("detay_idx", None),
+    ("filtre", "tumu"),
+    ("kupona", []),
+]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 FUTBOL_LIGLERI = {
     "AVRUPA KUPALARI": {
-        'Şampiyonlar Ligi': 'soccer_uefa_champs_league',
-        'Avrupa Ligi': 'soccer_uefa_europa_league',
-        'Konferans Ligi': 'soccer_uefa_europa_conference_league'
+        "Şampiyonlar Ligi": "soccer_uefa_champs_league",
+        "Avrupa Ligi": "soccer_uefa_europa_league",
+        "Konferans Ligi": "soccer_uefa_europa_conference_league",
     },
     "TÜRKİYE": {
-        'Süper Lig': 'soccer_turkey_super_league',
-        '1. Lig': 'soccer_turkey_pTT_1_lig',
-        'Türkiye Kupası': 'soccer_turkey_cup'
+        "Süper Lig": "soccer_turkey_super_league",
+        "1. Lig": "soccer_turkey_pTT_1_lig",
+        "Türkiye Kupası": "soccer_turkey_cup",
     },
     "İNGİLTERE": {
-        'Premier League': 'soccer_epl',
-        'FA Cup': 'soccer_fa_cup',
-        'EFL Cup': 'soccer_england_efl_cup'
+        "Premier League": "soccer_epl",
+        "FA Cup": "soccer_fa_cup",
+        "EFL Cup": "soccer_england_efl_cup",
     },
     "İSPANYA": {
-        'La Liga': 'soccer_spain_la_liga',
-        'Copa del Rey': 'soccer_spain_copa_del_rey'
+        "La Liga": "soccer_spain_la_liga",
+        "Copa del Rey": "soccer_spain_copa_del_rey",
     },
     "ALMANYA": {
-        'Bundesliga': 'soccer_germany_bundesliga',
-        'DFB-Pokal': 'soccer_germany_dfb_pokal'
+        "Bundesliga": "soccer_germany_bundesliga",
+        "DFB-Pokal": "soccer_germany_dfb_pokal",
     },
     "İTALYA": {
-        'Serie A': 'soccer_italy_serie_a',
-        'Coppa Italia': 'soccer_italy_coppa_italia'
+        "Serie A": "soccer_italy_serie_a",
+        "Coppa Italia": "soccer_italy_coppa_italia",
     },
     "AVRUPA DİĞER": {
-        'Hollanda': 'soccer_netherlands_eredivisie',
-        'Belçika': 'soccer_belgium_first_division',
-        'Portekiz': 'soccer_portugal_primeira_liga',
-        'İskoçya': 'soccer_spl'
-    }
+        "Hollanda": "soccer_netherlands_eredivisie",
+        "Belçika": "soccer_belgium_first_division",
+        "Portekiz": "soccer_portugal_primeira_liga",
+        "İskoçya": "soccer_spl",
+    },
 }
+
 
 def init_league_states():
     for kat, ligler in FUTBOL_LIGLERI.items():
@@ -797,10 +913,12 @@ def init_league_states():
             if item_key not in st.session_state:
                 st.session_state[item_key] = False
 
+
 def toggle_group(kat, ligler):
     group_value = st.session_state[f"group_{kat}"]
     for _, kod in ligler.items():
         st.session_state[f"cb_{kod}"] = group_value
+
 
 init_league_states()
 secili_kodlar = []
@@ -811,7 +929,7 @@ with st.sidebar:
       <div style="background:#27ae60;border-radius:8px;padding:6px 10px;font-family:Rajdhani,sans-serif;font-size:1.1rem;font-weight:700;color:#fff">V</div>
       <div>
         <div style="font-family:Rajdhani,sans-serif;font-size:1.12rem;font-weight:700;color:#fff;line-height:1.1">VIBE PRO</div>
-        <div style="font-family:Rajdhani,sans-serif;font-size:0.72rem;color:#27ae60;letter-spacing:2px">EXPERT v6.3</div>
+        <div style="font-family:Rajdhani,sans-serif;font-size:0.72rem;color:#27ae60;letter-spacing:2px">EXPERT v7.0</div>
       </div>
     </div>
     <div style="font-size:0.72rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px">KONTROL MERKEZİ</div>
@@ -825,18 +943,19 @@ with st.sidebar:
 
     yillar = st.multiselect(
         "Sezonlar",
-        options=['2122','2223','2324','2425','2526'],
-        default=['2324','2425','2526']
+        options=["2122", "2223", "2324", "2425", "2526"],
+        default=["2324", "2425", "2526"],
     )
     min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=1)
     TOLERANS = st.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
+    sadece_oynanabilir = st.checkbox("🔥 Sadece oynanabilir maçlar", value=False)
 
     rehber = tolerans_rehberi(TOLERANS)
     st.markdown(f"""
     <div style="margin-top:10px;background:#151a23;border:1px solid #253046;border-radius:12px;padding:10px 12px">
       <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Tolerans Rehberi</div>
       <div style="font-size:0.82rem;color:#fff">Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b></div>
-      <div style="font-size:0.8rem;color:#c7cfdd;margin-top:4px">Önerilen min maç: <b>{rehber['onerilen_min_mac']}</b></div>
+      <div style="font-size:0.8rem;color:#c7cfdd;margin-top:4px">Dinamik min maç: <b>{rehber['onerilen_min_mac']}</b></div>
       <div style="font-size:0.76rem;color:#7f8a9e;margin-top:6px">{rehber['yorum']}</div>
     </div>
     """, unsafe_allow_html=True)
@@ -845,31 +964,21 @@ with st.sidebar:
 
     for kat, ligler in FUTBOL_LIGLERI.items():
         with st.expander(kat, expanded=(kat == "TÜRKİYE")):
-            st.checkbox(
-                "Tümünü Seç",
-                key=f"group_{kat}",
-                on_change=toggle_group,
-                args=(kat, ligler)
-            )
+            st.checkbox("Tümünü Seç", key=f"group_{kat}", on_change=toggle_group, args=(kat, ligler))
             for isim, kod in ligler.items():
                 st.checkbox(isim, key=f"cb_{kod}")
                 if st.session_state.get(f"cb_{kod}", False):
                     secili_kodlar.append(kod)
 
     st.markdown("---")
-    analiz_btn = st.button(
-        "🚀 ANALİZİ BAŞLAT",
-        use_container_width=True,
-        type="primary",
-        key="analiz_baslat_btn"
-    )
+    analiz_btn = st.button("🚀 ANALİZİ BAŞLAT", use_container_width=True, type="primary", key="analiz_baslat_btn")
 
-    if 'son_analiz' in st.session_state:
+    if "son_analiz" in st.session_state:
         st.markdown(
-            f'''<div style="font-size:0.74rem;color:#666;margin-top:10px">
+            f"""<div style="font-size:0.74rem;color:#666;margin-top:10px">
             Son analiz: {st.session_state.son_analiz}<br>
-            Toplam maç: {st.session_state.get('toplam_mac',0)}</div>''',
-            unsafe_allow_html=True
+            Toplam maç: {st.session_state.get('toplam_mac',0)}</div>""",
+            unsafe_allow_html=True,
         )
 
 if analiz_btn:
@@ -884,9 +993,13 @@ if analiz_btn:
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
                 t, b_det = hesapla(gecmis, m, TOLERANS)
-                if t is None or len(b_det) < min_ornek:
+                if t is None:
                     continue
-                final.append({'m': m.to_dict(), 't': t, 'b': b_det})
+                if len(b_det) < min_ornek:
+                    continue
+                if sadece_oynanabilir and not t["oynanabilir"]:
+                    continue
+                final.append({"m": m.to_dict(), "t": t, "b": b_det})
 
         st.session_state.final_list = final
         st.session_state.detay_idx = None
@@ -897,9 +1010,9 @@ if analiz_btn:
 if st.session_state.detay_idx is not None:
     idx = st.session_state.detay_idx
     item = st.session_state.final_list[idx]
-    m, t, b_det = item['m'], item['t'], item['b']
+    m, t, b_det = item["m"], item["t"], item["b"]
 
-    c1, c2, c3 = st.columns([1,6,1])
+    c1, c2, c3 = st.columns([1, 6, 1])
     with c1:
         if st.button("← Geri", key="geri_btn"):
             st.session_state.detay_idx = None
@@ -918,12 +1031,12 @@ if st.session_state.detay_idx is not None:
         st.markdown(
             f"""<div style="text-align:right;padding-top:10px">
             <span style="font-size:0.76rem;color:#666">📊 {int(t['ornek'])} örnek</span></div>""",
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
     st.markdown("---")
 
-    ms_label_long = 'Ev Sahibi' if t['ms_mod'] == 'H' else 'Deplasman' if t['ms_mod'] == 'A' else 'Beraberlik'
+    ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
 
     st.markdown(f"""
     <div class="hero-boxes">
@@ -949,18 +1062,21 @@ if st.session_state.detay_idx is not None:
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:14px 18px;margin-bottom:14px">
       <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between">
         <div style="font-size:0.82rem;color:#c7cfdd">Kullanılan tolerans: <b>{t['kullanilan_tolerans']:.2f}</b> · Önerilen: <b>{t['onerilen_tolerans']}</b></div>
-        <div style="font-size:0.82rem;color:#c7cfdd">Örnek: <b>{int(t['ornek'])}</b> · Önerilen min maç: <b>{t['onerilen_min_mac']}</b></div>
+        <div style="font-size:0.82rem;color:#c7cfdd">Örnek: <b>{int(t['ornek'])}</b> · Dinamik min maç: <b>{t['onerilen_min_mac']}</b></div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
         <span style="background:{t.get('ornek_renk', '#44506b')};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t.get('ornek_durum', 'Standart')}</span>
+        <span class="value-pill {t['ana_value_cls']}">{t['ana_value_text']}</span>
         <span style="font-size:0.78rem;color:#8f98ab">{t['tolerans_yorumu']}</span>
         <span style="font-size:0.78rem;color:#77b4ff">Tavsiye: {t['tolerans_tavsiyesi']}</span>
         <span style="font-size:0.78rem;color:#8f98ab">Güven çarpanı: {t['guven_carpani']}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">Maç tipi: {t['match_type']}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">Gol profili: {t['goal_profile']}</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
-    if t['flip_p'] >= 0.12:
+    if t["flip_p"] >= 0.12:
         st.markdown(f"""
         <div class="surpriz-radar">
         🔥 SÜRPRİZ RADARI — %{int(t['flip_p']*100)} ihtimalle HT/FT sürprizi (1/2 - 2/1) tespit edildi!
@@ -1023,17 +1139,17 @@ if st.session_state.detay_idx is not None:
         """, unsafe_allow_html=True)
 
     with right:
-        ms35a = 100 - int(t['ms35_p'])
-        ms35_cls = "db-green" if t['ms35_p'] >= 50 else "db-gold"
-        ms35_lbl = f"Üst %{int(t['ms35_p'])}" if t['ms35_p'] >= 50 else f"Alt %{ms35a}"
+        ms35a = 100 - int(t["ms35_p"])
+        ms35_cls = "db-green" if t["ms35_p"] >= 50 else "db-gold"
+        ms35_lbl = f"Üst %{int(t['ms35_p'])}" if t["ms35_p"] >= 50 else f"Alt %{ms35a}"
 
-        kg_cls = "db-green" if t['kg_var_p'] >= 50 else "db-red"
-        kg_lbl = f"Var %{int(t['kg_var_p'])}" if t['kg_var_p'] >= 50 else f"Yok %{int(t['kg_yok_p'])}"
+        kg_cls = "db-green" if t["kg_var_p"] >= 50 else "db-red"
+        kg_lbl = f"Var %{int(t['kg_var_p'])}" if t["kg_var_p"] >= 50 else f"Yok %{int(t['kg_yok_p'])}"
 
-        iy_cls = "db-green" if t['iy05_p'] >= 50 else "db-red"
-        iy_lbl = f"Üst %{int(t['iy05_p'])}" if t['iy05_p'] >= 50 else f"Alt %{int(t['iy05a_p'])}"
+        iy_cls = "db-green" if t["iy05_p"] >= 50 else "db-red"
+        iy_lbl = f"Üst %{int(t['iy05_p'])}" if t["iy05_p"] >= 50 else f"Alt %{int(t['iy05a_p'])}"
 
-        htft_cls = "db-green" if t['htft_p'] >= 40 else "db-gold"
+        htft_cls = "db-green" if t["htft_p"] >= 40 else "db-gold"
 
         st.markdown(f"""
         <div class="diger-kart">
@@ -1064,6 +1180,11 @@ if st.session_state.detay_idx is not None:
             <span class="diger-badge db-green">%{int(t['canli_p'])}</span>
           </div>
 
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">💹</span><div><div class="diger-name">Value</div><div class="diger-sub">Model vs oran</div></div></div>
+            <span class="diger-badge db-blue">{t['ana_value_text']}</span>
+          </div>
+
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
             <div style="display:flex;gap:16px">
@@ -1077,6 +1198,14 @@ if st.session_state.detay_idx is not None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    neden_html = "".join([f'<div class="neden-item">• {x}</div>' for x in t["nedenler"]])
+    st.markdown(f"""
+    <div class="neden-kart" style="margin-bottom:14px">
+      <div class="tk-title">NEDEN BU TAHMİN?</div>
+      {neden_html}
+    </div>
+    """, unsafe_allow_html=True)
+
     st.markdown(f"""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:16px 22px;margin-bottom:0">
       <div class="tk-title" style="margin-bottom:4px">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
@@ -1086,36 +1215,36 @@ if st.session_state.detay_idx is not None:
 
     bd = b_det.head(10)
     dt = pd.DataFrame()
-    dt['Tarih']     = bd['Date'].dt.strftime('%d.%m.%Y')
-    dt['Ev Sahibi'] = bd['HomeTeam']
-    dt['Deplasman'] = bd['AwayTeam']
-    dt['İY Sonuç']  = bd['HTHG'].astype(int).astype(str) + "-" + bd['HTAG'].astype(int).astype(str)
-    dt['MS Sonuç']  = bd['FTHG'].astype(int).astype(str) + "-" + bd['FTAG'].astype(int).astype(str)
-    dt['2.5 GOL']   = (bd['FTHG'] + bd['FTAG'] >= 3).map({True:'Üst', False:'Alt'})
-    dt['KG']        = ((bd['FTHG'] > 0) & (bd['FTAG'] > 0)).map({True:'Var', False:'Yok'})
-    dt['HT/FT']     = bd['HTR'].replace({'H':'1','A':'2','D':'X'}) + "/" + bd['FTR'].replace({'H':'1','A':'2','D':'X'})
+    dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
+    dt["Ev Sahibi"] = bd["HomeTeam"]
+    dt["Deplasman"] = bd["AwayTeam"]
+    dt["İY Sonuç"] = bd["HTHG"].astype(int).astype(str) + "-" + bd["HTAG"].astype(int).astype(str)
+    dt["MS Sonuç"] = bd["FTHG"].astype(int).astype(str) + "-" + bd["FTAG"].astype(int).astype(str)
+    dt["2.5 GOL"] = (bd["FTHG"] + bd["FTAG"] >= 3).map({True: "Üst", False: "Alt"})
+    dt["KG"] = ((bd["FTHG"] > 0) & (bd["FTAG"] > 0)).map({True: "Var", False: "Yok"})
+    dt["HT/FT"] = bd["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + bd["FTR"].replace({"H": "1", "A": "2", "D": "X"})
 
     def color_cell(val):
         v = str(val)
-        if v in ['Üst', 'Var', '1/1', '2/2']:
-            return 'background-color:#183925;color:#3ddb7c;font-weight:700'
-        if v in ['Alt', 'Yok']:
-            return 'background-color:#391212;color:#ff6b6b;font-weight:700'
-        if '1/2' in v or '2/1' in v:
-            return 'background-color:#37290f;color:#f1c40f;font-weight:700'
-        return ''
+        if v in ["Üst", "Var", "1/1", "2/2"]:
+            return "background-color:#183925;color:#3ddb7c;font-weight:700"
+        if v in ["Alt", "Yok"]:
+            return "background-color:#391212;color:#ff6b6b;font-weight:700"
+        if "1/2" in v or "2/1" in v:
+            return "background-color:#37290f;color:#f1c40f;font-weight:700"
+        return ""
 
     st.dataframe(
-        dt.style.map(color_cell, subset=['2.5 GOL', 'KG', 'HT/FT']),
+        dt.style.map(color_cell, subset=["2.5 GOL", "KG", "HT/FT"]),
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
     st.stop()
 
 fl = st.session_state.final_list
 
-hc1, hc2 = st.columns([6,1])
+hc1, hc2 = st.columns([6, 1])
 with hc1:
     st.markdown(f"""
     <div class="top-header">
@@ -1130,7 +1259,8 @@ with hc1:
     <div class="top-filters">
       <div class="tf-chip">📅 Kartlı görünüm</div>
       <div class="tf-chip">🎯 Detaylı tahmin ekranı</div>
-      <div class="tf-chip">📊 Güven odaklı analiz</div>
+      <div class="tf-chip">💹 Value odaklı analiz</div>
+      <div class="tf-chip">🔥 Smart filter</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1147,45 +1277,54 @@ if not fl:
     </div>
     """, unsafe_allow_html=True)
 else:
-    yuksek = [x for x in fl if x['t']['ana_p'] >= 70]
-    orta   = [x for x in fl if 55 <= x['t']['ana_p'] < 70]
-    surp   = [x for x in fl if x['t']['flip_p'] >= 0.15]
+    yuksek = [x for x in fl if x["t"]["ana_p"] >= 70]
+    orta = [x for x in fl if 55 <= x["t"]["ana_p"] < 70]
+    value_good = [x for x in fl if x["t"]["ana_value"] is not None and x["t"]["ana_value"] >= 0.03]
 
     fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
         if st.button(f"Tümü {len(fl)}", use_container_width=True, key="f1"):
-            st.session_state.filtre = 'tumu'
+            st.session_state.filtre = "tumu"
             st.rerun()
     with fc2:
         if st.button(f"🔥 Yüksek Güven {len(yuksek)}", use_container_width=True, key="f2"):
-            st.session_state.filtre = 'yuksek'
+            st.session_state.filtre = "yuksek"
             st.rerun()
     with fc3:
         if st.button(f"🟡 Orta Güven {len(orta)}", use_container_width=True, key="f3"):
-            st.session_state.filtre = 'orta'
+            st.session_state.filtre = "orta"
             st.rerun()
     with fc4:
-        if st.button(f"⭐ Sürpriz {len(surp)}", use_container_width=True, key="f4"):
-            st.session_state.filtre = 'surp'
+        if st.button(f"💹 +EV {len(value_good)}", use_container_width=True, key="f4"):
+            st.session_state.filtre = "value"
             st.rerun()
 
     filtre = st.session_state.filtre
-    goster = fl if filtre == 'tumu' else yuksek if filtre == 'yuksek' else orta if filtre == 'orta' else surp
+    if filtre == "yuksek":
+        goster = yuksek
+    elif filtre == "orta":
+        goster = orta
+    elif filtre == "value":
+        goster = value_good
+    else:
+        goster = fl
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     for i, item in enumerate(goster):
-        m, t = item['m'], item['t']
+        m, t = item["m"], item["t"]
         real_i = fl.index(item)
-        gc, _, _ = guven_renk(t['ana_p'])
+        gc, _, _ = guven_renk(t["ana_p"])
 
         pill_cls = ""
-        if "MS 2" in t['ana_label']:
+        if "MS 2" in t["ana_label"]:
             pill_cls = "kirmizi"
-        elif "Beraberlik" in t['ana_label'] or "2.5" in t['ana_label']:
+        elif "Beraberlik" in t["ana_label"] or "2.5" in t["ana_label"]:
             pill_cls = "sari"
+        elif "Zayıf" in t["ana_label"]:
+            pill_cls = "gri"
 
-        surp_cls = "" if "Var" in t['kg_label'] else "yok"
+        surp_cls = "" if "Var" in t["kg_label"] else "yok"
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -1200,6 +1339,7 @@ else:
               <div class="mk-takimlar">
                 <div class="mk-ev">⬜ {m['ev']}</div>
                 <div class="mk-dep">🟦 {m['dep']}</div>
+                <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
               </div>
 
               <div>
@@ -1218,6 +1358,9 @@ else:
                 <div style="margin-top:8px">
                   <div class="mk-label">SÜRPRİZ</div>
                   <span class="surp-pill {surp_cls}">{t['kg_label']}</span>
+                </div>
+                <div style="margin-top:8px">
+                  <span class="value-pill {t['ana_value_cls']}">{t['ana_value_text']}</span>
                 </div>
               </div>
 
@@ -1252,7 +1395,6 @@ else:
             f'<div class="tk-row"><span class="tk-key">✅ {k}</span></div>'
             for k in st.session_state.kupona
         )
-
         st.markdown(f"""
         <div class="kupon-kart">
           <div class="tk-title">🎫 Kuponum ({len(st.session_state.kupona)} seçim)</div>
