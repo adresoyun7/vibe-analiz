@@ -573,7 +573,21 @@ def hesapla(b_df, m_row, tolerans):
         (ou_prob, ou_label, int(ou_prob * 100), "-"),
         (kg_prob, kg_label, int(kg_prob * 100), "-"),
     ]
+    best = max(cands, key=lambda x: x[0])
+    ana_label, ana_p, ana_oran = best[1], best[2], best[3]
 
+    others = [c for c in cands if c[1] != ana_label]
+    alt = max(others, key=lambda x: x[0]) if others else cands[1]
+    alt_label, alt_p = alt[1], alt[2]
+
+    # CANLI
+    if iy05_p >= 0.68:
+        canli_label = "İY 0.5 Üst" + (" · 3.5 Üst" if ms35_p >= 0.6 else " · 2.5 Üst" if ms25_p >= 0.6 else "")
+        canli_p = int(iy05_p * 100)
+    elif iy15_p >= 0.55:
+        canli_label, canli_p = "İY 1.5 Üst", int(iy15_p * 100)
+    else:
+        canli_label, canli_p = "Canlı İzle", 50
     best = max(cands, key=lambda x: x[0])
     ana_label, ana_p, ana_oran = best[1], best[2], best[3]
 
