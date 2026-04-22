@@ -1515,9 +1515,10 @@ if not fl:
     </div>
     """, unsafe_allow_html=True)
 else:
-    yuksek = [x for x in fl if x["t"]["ana_p"] >= 70]
-    orta = [x for x in fl if 55 <= x["t"]["ana_p"] < 70]
-    kombolu = [x for x in fl if x["t"].get("combo_var", False)]
+    indexed_fl = list(enumerate(fl))
+    yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
+    orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
+    kombolu = [(idx, x) for idx, x in indexed_fl if x["t"].get("combo_var", False)]
 
     fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
@@ -1539,19 +1540,18 @@ else:
 
     filtre = st.session_state.filtre
     if filtre == "yuksek":
-        goster = sorted(yuksek, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
+        goster = sorted(yuksek, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
     elif filtre == "orta":
-        goster = sorted(orta, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
+        goster = sorted(orta, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
     elif filtre == "kombo":
-        goster = sorted(kombolu, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
+        goster = sorted(kombolu, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
     else:
-        goster = fl
+        goster = indexed_fl
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    for i, item in enumerate(goster):
+    for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
-        real_i = fl.index(item)
         gc, _, _ = guven_renk(t["ana_p"])
 
         pill_cls = ""
