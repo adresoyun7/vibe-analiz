@@ -394,11 +394,11 @@ def format_tr_date(d):
 
 def dinamik_min_mac(tolerans: float):
     if tolerans <= 0.02:
-        return 1
+        return 2
     elif tolerans <= 0.05:
-        return 3
+        return 4
     elif tolerans <= 0.08:
-        return 5
+        return 6
     elif tolerans <= 0.12:
         return 10
     return 20
