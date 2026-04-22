@@ -786,8 +786,8 @@ if st.session_state.detay_idx is not None:
 
     c1, c2, c3 = st.columns([1,6,1])
     with c1:
-        if st.button("← Geri"):
-            st.session_state.detay_idx = None
+if st.button("← Geri", key="geri_btn"):
+    st.session_state.detay_idx = None
             st.rerun()
     with c2:
         st.markdown(f"""
@@ -1214,6 +1214,6 @@ else:
         </div>
         """, unsafe_allow_html=True)
 
-        if st.button("🗑️ Kuponu Temizle"):
-            st.session_state.kupona = []
+if st.button("🗑️ Kuponu Temizle", key="kupon_temizle_btn"):
+    st.session_state.kupona = []
             st.rerun()
