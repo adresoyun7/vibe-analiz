@@ -1570,9 +1570,13 @@ else:
             combo_level = t.get("combo_level", "")
             level_text = f' · {combo_level}' if combo_level else ''
             combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
-        stability_early_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>' if t.get('stability_early_text') else ''
-        stability_late_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>' if t.get('stability_late_text') else ''
-        stability_fallback_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>' if (not t.get('stability_early_text') and not t.get('stability_late_text')) else ''
+        stability_html = ""
+        if t.get("stability_early_text"):
+            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>'
+        if t.get("stability_late_text"):
+            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>'
+        if not stability_html:
+            stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
 
@@ -1620,9 +1624,7 @@ else:
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
-                {stability_early_html}
-                {stability_late_html}
-                {stability_fallback_html}
+                {stability_html}
               </div>
             </div>
             """
