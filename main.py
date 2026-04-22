@@ -466,8 +466,8 @@ def bulten_cek(key, kodlar, t):
                 except:
                     continue
 
-                if tm.date() != t:
-    continue
+                if abs((tm.date() - t).days) > 1:
+                    continue
 
                 bookies = m.get('bookmakers', [])
                 if not bookies:
