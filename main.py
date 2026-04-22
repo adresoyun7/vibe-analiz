@@ -844,7 +844,6 @@ def hesapla(b_df, m_row, tolerans):
             combo_level = "Deneysel"
 
     if belirsiz:
-        ana_label = "Belirsiz Maç"
         ana_p = min(ana_p, 50)
         combo_label = ""
         combo_var = False
@@ -1032,6 +1031,10 @@ def hesapla(b_df, m_row, tolerans):
         "stability_tols": [],
         "stability_count": 0,
         "stability_text": "",
+        "stability_early_tols": [],
+        "stability_late_tols": [],
+        "stability_early_text": "",
+        "stability_late_text": "",
     }, b.sort_values("Date", ascending=False)
 
 
@@ -1169,7 +1172,7 @@ if analiz_btn:
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
 
         final = []
-        stability_tols = [0.03, 0.05, 0.08, 0.10]
+        stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
                 t, b_det = hesapla(gecmis, m, TOLERANS)
@@ -1193,11 +1196,24 @@ if analiz_btn:
                 t["stability_tols"] = stable_hits
                 t["stability_count"] = len(stable_hits)
                 t["stability_text"] = " · ".join(stable_hits)
+                early_hits = [x for x in stable_hits if float(x) <= 0.05]
+                normal_hits = [x for x in stable_hits if float(x) > 0.05]
+                t["stability_early_tols"] = early_hits
+                t["stability_late_tols"] = normal_hits
+                t["stability_early_text"] = " · ".join(early_hits)
+                t["stability_late_text"] = " · ".join(normal_hits)
 
                 t["score"] = round(
                     t["score"]
-                    + min(6, t["stability_count"] * 1.5)
-                    + (2 if TOLERANS in [0.08, 0.10] and f"{TOLERANS:.2f}" in stable_hits else 0),
+                    + min(7, t["stability_count"] * 1.4)
+                    + min(4, len(early_hits) * 1.4)
+                    + (2 if f"{TOLERANS:.2f}" in stable_hits else 0),
+                    1
+                )
+                t["playable_score"] = round(
+                    t.get("playable_score", t.get("ana_p", 0))
+                    + min(5, t["stability_count"] * 1.0)
+                    + min(4, len(early_hits) * 1.2),
                     1
                 )
 
@@ -1592,7 +1608,9 @@ else:
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
-                <div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get('stability_text', '-')}</div>
+                {f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>' if t.get('stability_early_text') else ''}
+                {f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>' if t.get('stability_late_text') else ''}
+                {f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>' if (not t.get('stability_early_text') and not t.get('stability_late_text')) else ''}
               </div>
             </div>
             """, unsafe_allow_html=True)
