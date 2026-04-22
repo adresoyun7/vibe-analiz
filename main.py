@@ -605,6 +605,16 @@ def bulten_cek(key, kodlar, t):
 
 
 
+
+
+def fmt_odd(odd):
+    if odd is None:
+        return ""
+    try:
+        return f"{float(odd):.2f}"
+    except Exception:
+        return ""
+
 def build_top3_coupon(indexed_items, mode="best_favorites"):
     candidates = []
     for idx, item in indexed_items:
