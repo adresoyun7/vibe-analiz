@@ -1246,6 +1246,57 @@ FUTBOL_LIGLERI = {
 }
 
 
+LEAGUE_EMOJIS = {
+    "Şampiyonlar Ligi": "🏆",
+    "Avrupa Ligi": "🟠",
+    "Konferans Ligi": "🟢",
+    "Süper Lig": "🇹🇷",
+    "Premier League": "🏴",
+    "Championship": "🏴",
+    "League 1": "🏴",
+    "League 2": "🏴",
+    "FA Cup": "🏴",
+    "EFL Cup": "🏴",
+    "La Liga": "🇪🇸",
+    "La Liga 2": "🇪🇸",
+    "Copa del Rey": "🇪🇸",
+    "Bundesliga": "🇩🇪",
+    "Bundesliga 2": "🇩🇪",
+    "DFB-Pokal": "🇩🇪",
+    "Serie A": "🇮🇹",
+    "Serie B": "🇮🇹",
+    "Coppa Italia": "🇮🇹",
+    "Ligue 1": "🇫🇷",
+    "Ligue 2": "🇫🇷",
+    "Coupe de France": "🇫🇷",
+    "Hollanda": "🇳🇱",
+    "Belçika": "🇧🇪",
+    "Portekiz": "🇵🇹",
+    "İskoçya": "🏴",
+    "Danimarka": "🇩🇰",
+    "Avusturya": "🇦🇹",
+    "İsviçre": "🇨🇭",
+    "İsveç": "🇸🇪",
+    "Norveç": "🇳🇴",
+    "Polonya": "🇵🇱",
+    "Finlandiya": "🇫🇮",
+    "İrlanda": "🇮🇪",
+    "Yunanistan": "🇬🇷",
+    "MLS": "🇺🇸",
+    "Brezilya Serie A": "🇧🇷",
+    "Arjantin Primera": "🇦🇷",
+    "Japonya J League": "🇯🇵",
+    "Meksika Liga MX": "🇲🇽",
+    "Güney Kore K League 1": "🇰🇷",
+    "Şili Primera": "🇨🇱",
+}
+
+
+def lig_etiketi(isim: str) -> str:
+    emoji = LEAGUE_EMOJIS.get(isim, "⚽")
+    return f"{emoji} {isim}"
+
+
 def tum_lig_listesi():
     rows = []
     for kat, ligler in FUTBOL_LIGLERI.items():
@@ -1254,7 +1305,7 @@ def tum_lig_listesi():
                 "kategori": kat,
                 "isim": isim,
                 "kod": kod,
-                "label": isim,
+                "label": lig_etiketi(isim),
             })
     return rows
 
@@ -1330,29 +1381,47 @@ def toggle_leagues(selected_codes):
     else:
         set_leagues(selected_codes)
 
+def sonraki_hafta_gunu(baslangic_tarihi, hedef_weekday: int):
+    gun_farki = (hedef_weekday - baslangic_tarihi.weekday()) % 7
+    return baslangic_tarihi + timedelta(days=gun_farki)
+
+
+def tarih_secimine_gore_date(secim: str, bugun_tarih, ozel_tarih):
+    if secim == "Bugün":
+        return bugun_tarih
+    if secim == "Yarın":
+        return bugun_tarih + timedelta(days=1)
+    if secim == "Cumartesi":
+        return sonraki_hafta_gunu(bugun_tarih, 5)
+    if secim == "Pazar":
+        return sonraki_hafta_gunu(bugun_tarih, 6)
+    return ozel_tarih
+
+
 init_league_states()
 secili_kodlar = []
 
 
 # ÜST KONTROL BAR
 bugun = datetime.now().date()
-API_KEY = st.text_input("The Odds API Key", type="password", help="The Odds API anahtarını gir.")
+with st.expander("🔑 API Ayarları", expanded=False):
+    API_KEY = st.text_input("The Odds API Key", type="password", help="The Odds API anahtarını gir.")
 
 st.markdown("""
 <style>
 .top-shell {
-    background: linear-gradient(90deg,#08111f 0%, #091728 50%, #08111f 100%);
-    border:1px solid #1e2b41;
-    border-radius:18px;
-    padding:16px 18px 14px 18px;
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 50%, #07111f 100%);
+    border:1px solid #21334f;
+    border-radius:20px;
+    padding:18px 18px 14px 18px;
     margin-bottom:14px;
-    box-shadow:0 14px 28px rgba(0,0,0,.28);
+    box-shadow:0 16px 32px rgba(0,0,0,.34);
 }
 .brand-row {
     display:flex;
     align-items:center;
     justify-content:space-between;
-    margin-bottom:10px;
+    margin-bottom:12px;
 }
 .brand-title {
     display:flex;
@@ -1360,40 +1429,33 @@ st.markdown("""
     gap:12px;
 }
 .brand-logo {
-    width:40px;
-    height:40px;
+    width:42px;
+    height:42px;
     border-radius:12px;
     display:flex;
     align-items:center;
     justify-content:center;
-    background:linear-gradient(135deg,#ffcc33,#e7a800);
+    background:linear-gradient(135deg,#ffd24a,#f4b400);
     color:#111;
-    font-size:1.25rem;
+    font-size:1.3rem;
     font-weight:900;
+    box-shadow:0 10px 24px rgba(244,180,0,.18);
 }
 .brand-text {
     font-family:'Rajdhani',sans-serif;
     font-size:2rem;
     font-weight:700;
     line-height:1;
-    color:#fff;
+    color:#ecf3ff;
 }
-.brand-text span { color:#ffcc33; }
-.top-summary-badge {
-    background:#132033;
-    border:1px solid #22324d;
-    color:#d7e3f7;
-    padding:10px 14px;
-    border-radius:12px;
-    font-size:0.9rem;
-    font-weight:700;
-}
+.brand-text span { color:#ffd24a; }
 .control-card {
-    background:rgba(255,255,255,.03);
-    border:1px solid #1d2b42;
-    border-radius:14px;
+    background:linear-gradient(180deg,rgba(255,255,255,.04) 0%, rgba(255,255,255,.025) 100%);
+    border:1px solid #233654;
+    border-radius:16px;
     padding:12px 14px;
     height:100%;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
 }
 .control-label {
     font-size:0.68rem;
@@ -1402,23 +1464,63 @@ st.markdown("""
     letter-spacing:1px;
     margin-bottom:6px;
 }
+.league-trigger {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    color:#f6fbff;
+    font-weight:700;
+    font-size:1rem;
+}
+.league-sub {
+    font-size:0.82rem;
+    color:#ffd24a;
+    margin-top:4px;
+    font-weight:700;
+}
 .helper-bar {
-    background:#131a27;
-    border:1px solid #213149;
+    background:linear-gradient(90deg,#0b1b33 0%, #0c213f 50%, #0b1b33 100%);
+    border:1px solid #22416d;
     border-radius:14px;
     padding:12px 16px;
     margin-bottom:16px;
 }
-.preset-btn-note {
+.summary-note {
     font-size:0.76rem;
-    color:#8895ab;
+    color:#90a3c0;
     margin-top:8px;
+}
+.pop-title {
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.05rem;
+    font-weight:700;
+    color:#f4f7fb;
+    margin-bottom:10px;
+}
+.preset-green button {
+    border-color:#1f6f4d !important;
+}
+.preset-blue button {
+    border-color:#1f4f85 !important;
+}
+.preset-red button {
+    border-color:#7b2b34 !important;
+}
+.league-chip-note {
+    font-size:0.78rem;
+    color:#8ea2c7;
 }
 </style>
 """, unsafe_allow_html=True)
 
 def selected_league_codes():
     return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
+
+if 'date_mode' not in st.session_state:
+    st.session_state['date_mode'] = 'Bugün'
+if 'special_date' not in st.session_state:
+    st.session_state['special_date'] = bugun
 
 st.markdown("""
 <div class="top-shell">
@@ -1431,89 +1533,103 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-bar1, bar2, bar3, bar4, bar5, bar6 = st.columns([2.4, 2.1, 1.5, 1.9, 2.2, 2.0])
+bar1, bar2, bar3, bar4, bar5, bar6 = st.columns([2.6, 2.0, 1.4, 1.8, 1.8, 2.1], gap='small')
 
 with bar1:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Tarih ve Lig Seçimi</div>', unsafe_allow_html=True)
-    with st.popover(f"⚽ Tarih ve Lig Seçimi · {len(selected_league_codes())} lig seçili", use_container_width=True):
-        secili_tarih = st.date_input("Analiz Tarihi", value=bugun, key="top_date")
-        st.markdown("### Hızlı Filtreler")
-        p1, p2 = st.columns(2)
-        with p1:
-            if st.button("🎯 Kararlı Çekirdek", use_container_width=True, key="preset_core_top"):
-                toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek"])
+    with st.popover("⚽ Tarih ve Lig Seçimi", use_container_width=True):
+        left_col, right_col = st.columns([1.0, 3.2], gap='medium')
+        with left_col:
+            st.markdown('<div class="pop-title">Tarih Seçimi</div>', unsafe_allow_html=True)
+            date_mode = st.radio(
+                'Tarih modu',
+                options=['Bugün', 'Yarın', 'Cumartesi', 'Pazar', 'Özel Tarih'],
+                index=['Bugün', 'Yarın', 'Cumartesi', 'Pazar', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
+                key='date_mode',
+                label_visibility='collapsed'
+            )
+            if date_mode == 'Özel Tarih':
+                st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date')
+
+            st.markdown('<div class="pop-title" style="margin-top:18px">Hızlı Filtreler</div>', unsafe_allow_html=True)
+            if st.button('⭐ Kararlı Çekirdek', use_container_width=True, key='preset_core_top'):
+                toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek'])
                 st.rerun()
-        with p2:
-            if st.button("💸 Karlı / Value", use_container_width=True, key="preset_val_top"):
-                toggle_leagues(KARLI_LIG_PRESETLERI["value"])
+            if st.button('💎 Karlı / Value', use_container_width=True, key='preset_val_top'):
+                toggle_leagues(KARLI_LIG_PRESETLERI['value'])
                 st.rerun()
-        p3, p4 = st.columns(2)
-        with p3:
-            if st.button("🌍 Hepsini Aç", use_container_width=True, key="preset_all_top"):
+            if st.button('🌍 Hepsini Aç', use_container_width=True, key='preset_all_top'):
                 set_leagues(tum_lig_kodlari())
                 st.rerun()
-        with p4:
-            if st.button("🧹 Temizle", use_container_width=True, key="preset_clear_top"):
+            if st.button('🧹 Temizle', use_container_width=True, key='preset_clear_top'):
                 clear_leagues()
                 st.rerun()
 
-        lig_arama = st.text_input("🔎 Lig ara...", placeholder="örn. Premier, Türkiye, MLS", key="lig_arama_popover")
-        filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
-        st.caption(f"Gösterilen lig: {len(filtreli_ligler)}")
+        with right_col:
+            st.markdown('<div class="pop-title">Lig Seçimi</div>', unsafe_allow_html=True)
+            lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_popover', label_visibility='collapsed')
+            filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
+            st.markdown(f"<div class='league-chip-note'>Gösterilen lig: <b>{len(filtreli_ligler)}</b></div>", unsafe_allow_html=True)
+            lig_box = st.container(height=360, border=True)
+            with lig_box:
+                lcol1, lcol2 = st.columns(2)
+                for i, lig in enumerate(filtreli_ligler):
+                    hedef_col = lcol1 if i % 2 == 0 else lcol2
+                    with hedef_col:
+                        st.checkbox(lig['label'], key=f"cb_{lig['kod']}")
+            st.markdown(f"<div style='font-size:0.9rem;color:#33d17a;font-weight:700;margin-top:8px'>{len(selected_league_codes())} lig seçili</div>", unsafe_allow_html=True)
 
-        lig_box = st.container(height=360, border=True)
-        with lig_box:
-            lcol1, lcol2 = st.columns(2)
-            for i, lig in enumerate(filtreli_ligler):
-                hedef_col = lcol1 if i % 2 == 0 else lcol2
-                with hedef_col:
-                    st.checkbox(lig["isim"], key=f"cb_{lig['kod']}")
-
-        st.markdown(f"<div style='font-size:0.85rem;color:#33d17a;font-weight:700'>{len(selected_league_codes())} lig seçili</div>", unsafe_allow_html=True)
-    secili_tarih = st.session_state.get("top_date", bugun)
-    st.markdown(f"<div style='color:#d8e5f8;font-weight:700'>{len(selected_league_codes())} lig seçili</div>", unsafe_allow_html=True)
+    secili_tarih = tarih_secimine_gore_date(
+        st.session_state.get('date_mode', 'Bugün'),
+        bugun,
+        st.session_state.get('special_date', bugun)
+    )
+    st.markdown(
+        f"<div class='league-trigger'><span>⚽ Tarih ve Lig Seçimi</span><span>▾</span></div><div class='league-sub'>{len(selected_league_codes())} lig seçili · {format_tr_date(secili_tarih)}</div>",
+        unsafe_allow_html=True,
+    )
     st.markdown('</div>', unsafe_allow_html=True)
 
 with bar2:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Sezonlar</div>', unsafe_allow_html=True)
     yillar = st.multiselect(
-        "Sezonlar",
-        options=["2122", "2223", "2324", "2425", "2526"],
-        default=["2324", "2425", "2526"],
-        label_visibility="collapsed",
-        key="top_seasons"
+        'Sezonlar',
+        options=['2122', '2223', '2324', '2425', '2526'],
+        default=['2324', '2425', '2526'],
+        label_visibility='collapsed',
+        key='top_seasons'
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
 with bar3:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Min. Örnek Sayısı</div>', unsafe_allow_html=True)
-    min_ornek = st.number_input("Min. Örnek Sayısı", min_value=1, value=1, label_visibility="collapsed", key="top_min_ornek")
+    min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, label_visibility='collapsed', key='top_min_ornek')
     st.markdown('</div>', unsafe_allow_html=True)
 
 with bar4:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Oran Hassasiyeti</div>', unsafe_allow_html=True)
-    TOLERANS = st.slider("Oran Hassasiyeti", 0.00, 0.30, 0.08, step=0.01, label_visibility="collapsed", key="top_tol")
-    st.markdown(f"<div style='margin-top:-6px;color:#ffcc33;font-weight:700'>{TOLERANS:.2f}</div>", unsafe_allow_html=True)
+    TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, label_visibility='collapsed', key='top_tol')
+    st.markdown(f"<div style='margin-top:-6px;color:#ffd24a;font-weight:700'>{TOLERANS:.2f}</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 with bar5:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Filtre</div>', unsafe_allow_html=True)
-    sadece_oynanabilir = st.checkbox("✅ Sadece oynanabilir maçlar", value=False, key="top_playable")
+    sadece_oynanabilir = st.checkbox('✅ Sadece oynanabilir maçlar', value=False, key='top_playable')
     st.markdown('</div>', unsafe_allow_html=True)
 
 secili_kodlar = selected_league_codes()
 with bar6:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Analiz</div>', unsafe_allow_html=True)
-    analiz_btn = st.button("▶ ANALİZİ BAŞLAT", use_container_width=True, type="primary", key="analiz_baslat_btn")
-    if "son_analiz" in st.session_state:
+    analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
+    if 'son_analiz' in st.session_state:
         st.markdown(
-            f"<div style='font-size:0.76rem;color:#8fa0ba;margin-top:8px'>Son analiz: {st.session_state.son_analiz}<br>Toplam maç: {st.session_state.get('toplam_mac',0)}</div>",
+            f"<div class='summary-note'>Son analiz: {st.session_state.son_analiz}<br>Toplam maç: {st.session_state.get('toplam_mac',0)}</div>",
             unsafe_allow_html=True,
         )
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1879,7 +1995,7 @@ if not fl:
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
       <div style="font-size:2rem;margin-bottom:12px">⚡</div>
       <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
-      <div style="font-size:0.9rem;color:#666;margin-top:6px">Sol menüden API Key ve lig seçin, ardından ANALİZİ BAŞLAT butonuna basın.</div>
+      <div style="font-size:0.9rem;color:#666;margin-top:6px">API ayarlarını açıp anahtarını gir, sonra üst bardan tarih ve lig seçip ANALİZİ BAŞLAT butonuna bas.</div>
     </div>
     """, unsafe_allow_html=True)
 else:
