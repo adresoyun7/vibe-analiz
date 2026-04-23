@@ -1356,7 +1356,7 @@ def _toplam_oran(kupon):
 def smart_kupon_builder(ai_sonuclar):
     """
     3 ayrı kupon üretir. Aynı maç yalnızca 1 kuponda olabilir.
-    Agresifte tutarlı kombo varsa kombo seçilir.
+    Agresif kupon düşük oran yerine mümkünse kombo ve daha yüksek oran arar.
     """
     used = set()
 
@@ -1390,7 +1390,16 @@ def smart_kupon_builder(ai_sonuclar):
         temiz.append(item)
 
     guvenli = []
-    for item in temiz:
+    guvenli_aday = sorted(
+        temiz,
+        key=lambda it: (
+            int(it.get("t", {}).get("ana_p", 0)),
+            float(it.get("ai_skor", 0)),
+            -float(it.get("t", {}).get("ana_odd", 9) or 9),
+        ),
+        reverse=True,
+    )
+    for item in guvenli_aday:
         m, t = item.get("mac", {}), item.get("t", {})
         key = mac_key(m)
         if key in used:
@@ -1404,10 +1413,23 @@ def smart_kupon_builder(ai_sonuclar):
     value = []
     market_say = {}
     lig_say = {}
+    value_aday = []
     for item in temiz:
         m, t = item.get("mac", {}), item.get("t", {})
         key = mac_key(m)
         if key in used or int(t.get("ana_p", 0)) < 60:
+            continue
+        try:
+            odd = float(t.get("ana_odd") or 1.0)
+        except Exception:
+            odd = 1.0
+        score = float(item.get("ai_skor", 0)) * 0.75 + odd * 18
+        value_aday.append((score, item))
+    value_aday.sort(key=lambda x: x[0], reverse=True)
+    for _, item in value_aday:
+        m, t = item.get("mac", {}), item.get("t", {})
+        key = mac_key(m)
+        if key in used:
             continue
         market = t.get("ana_label", "")
         lig = m.get("lig", "")
@@ -1430,16 +1452,18 @@ def smart_kupon_builder(ai_sonuclar):
         if key in used or int(t.get("ana_p", 0)) < 58:
             continue
         pick_label, pick_guven, pick_type, pick_odd = agresif_pick_label(t)
-        est = pick_type == "combo"
         try:
             odd_val = float(pick_odd or t.get("ana_odd") or 1.0)
         except Exception:
             odd_val = 1.0
-        score = float(item.get("ai_skor", 0)) + odd_val * 5 + (8 if pick_type == "combo" else 0)
+        if pick_type != "combo" and odd_val < 1.75:
+            continue
+        if pick_type == "combo" and odd_val < 2.10:
+            continue
+        est = pick_type == "combo"
+        score = (odd_val * 28) + (float(item.get("ai_skor", 0)) * 0.45) + (18 if pick_type == "combo" else 0) + (pick_guven * 0.15)
         adaylar.append((score, item, pick_label, pick_guven, pick_type, odd_val, est))
-
     adaylar.sort(key=lambda x: x[0], reverse=True)
-
     for _, item, pick_label, pick_guven, pick_type, odd_val, est in adaylar:
         m = item.get("mac", {})
         key = mac_key(m)
@@ -1456,12 +1480,35 @@ def smart_kupon_builder(ai_sonuclar):
         if len(agresif) >= 4:
             break
 
+    if len(agresif) < 3:
+        fallback = []
+        for item in temiz:
+            m, t = item.get("mac", {}), item.get("t", {})
+            key = mac_key(m)
+            if key in used or int(t.get("ana_p", 0)) < 58:
+                continue
+            try:
+                odd = float(t.get("ana_odd") or 1.0)
+            except Exception:
+                odd = 1.0
+            if odd >= 1.65:
+                fallback.append((odd, float(item.get("ai_skor", 0)), item))
+        fallback.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        for _, _, item in fallback:
+            m = item.get("mac", {})
+            key = mac_key(m)
+            if key in used:
+                continue
+            agresif.append(base_item(item))
+            used.add(key)
+            if len(agresif) >= 3:
+                break
+
     return {
         "guvenli": (guvenli, _toplam_oran(guvenli)),
         "value": (value, _toplam_oran(value)),
         "agresif": (agresif, _toplam_oran(agresif)),
     }
-
 
 def auto_kupon_builder(ai_sonuclar, mod="guvenli"):
     paketler = smart_kupon_builder(ai_sonuclar)
@@ -1500,8 +1547,8 @@ def gunluk_kasa_plani(kasa, hedef=100000, kalan_gun=30, gun_risk="normal"):
         gerekli_yuzde = (gerekli_carpan - 1) * 100
 
     risk_oranlari = {
-        "dusuk": 0.12,
-        "normal": 0.07,
+        "dusuk": 0.14,
+        "normal": 0.10,
         "yuksek": 0.00,
         "pas": 0.00,
     }
@@ -1522,9 +1569,9 @@ def stake_dagilimi(toplam_stake, gun_risk):
     toplam_stake = max(float(toplam_stake), 0.0)
 
     if gun_risk == "dusuk":
-        oranlar = {"guvenli": 0.60, "value": 0.30, "agresif": 0.10}
+        oranlar = {"guvenli": 0.25, "value": 0.45, "agresif": 0.30}
     elif gun_risk == "normal":
-        oranlar = {"guvenli": 0.70, "value": 0.25, "agresif": 0.05}
+        oranlar = {"guvenli": 0.20, "value": 0.55, "agresif": 0.25}
     elif gun_risk == "yuksek":
         oranlar = {"guvenli": 0.00, "value": 0.00, "agresif": 0.00}
     else:
@@ -3248,22 +3295,16 @@ else:
                     st.session_state.coupon_popup_open = True
                 st.rerun()
 
-    if st.session_state.coupon_popup_open:
+    # Kuponlarım: dialog/modal yerine normal, engellemeyen panel.
+    # Boşken arama sırasında "Henüz kupona maç eklemedin" uyarısı göstermez.
+    if st.session_state.get("coupon_popup_open") and st.session_state.get("kupona"):
         normalized_kupona = []
         for k in st.session_state.kupona:
             if isinstance(k, dict):
                 normalized_kupona.append(k)
             else:
                 raw_text = str(k)
-                item = {
-                    "ev": raw_text,
-                    "dep": "",
-                    "lig": "-",
-                    "zaman_iso": "",
-                    "zaman_text": "-",
-                    "tahmin": "-",
-                    "guven": 0,
-                }
+                item = {"ev": raw_text, "dep": "", "lig": "-", "zaman_iso": "", "zaman_text": "-", "tahmin": "-", "guven": 0}
                 if " — " in raw_text:
                     match_text, tahmin_text = raw_text.split(" — ", 1)
                     item["tahmin"] = tahmin_text.strip()
@@ -3276,47 +3317,36 @@ else:
                 normalized_kupona.append(item)
         st.session_state.kupona = normalized_kupona
 
-        def kupon_dialog_body():
-            if not st.session_state.kupona:
-                st.info("Henüz kupona maç eklemedin.")
-            else:
-                for del_i, item in enumerate(list(st.session_state.kupona)):
-                    mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
-                    durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
-                    mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
-                    alt_satir = (
-                        f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
-                        f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}"
-                        if item.get("guven", 0)
-                        else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
-                    )
-                    c1, c2 = st.columns([8, 1])
-                    with c1:
-                        st.markdown(f"**{mac_ad}**  \n{alt_satir}  \n`{durum}`")
-                    with c2:
-                        if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
-                            st.session_state.kupona.pop(del_i)
-                            st.session_state.coupon_popup_open = True
-                            st.rerun()
-
-                st.markdown("---")
-                b1, b2 = st.columns([1, 1])
-                with b1:
-                    if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_popup", use_container_width=True):
-                        st.session_state.kupona = []
-                        st.session_state.coupon_popup_open = True
-                        st.rerun()
-                with b2:
-                    if st.button("Kapat", key="coupon_close_inside_popup", use_container_width=True):
-                        st.session_state.coupon_popup_open = False
-                        st.rerun()
-
-        if hasattr(st, "dialog"):
-            @st.dialog("🎫 Kuponlarım")
-            def _kupon_dialog():
-                kupon_dialog_body()
-            _kupon_dialog()
-        else:
+        with st.container(border=True):
             st.markdown("### 🎫 Kuponlarım")
-            kupon_dialog_body()
+            for del_i, item in enumerate(list(st.session_state.kupona)):
+                mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
+                durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
+                mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
+                alt_satir = (
+                    f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
+                    f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}"
+                    if item.get("guven", 0)
+                    else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
+                )
+                c1, c2 = st.columns([8, 1])
+                with c1:
+                    st.markdown(f"**{mac_ad}**  \n{alt_satir}  \n`{durum}`")
+                with c2:
+                    if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
+                        st.session_state.kupona.pop(del_i)
+                        if not st.session_state.kupona:
+                            st.session_state.coupon_popup_open = False
+                        st.rerun()
+
+            b1, b2 = st.columns([1, 1])
+            with b1:
+                if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_panel", use_container_width=True):
+                    st.session_state.kupona = []
+                    st.session_state.coupon_popup_open = False
+                    st.rerun()
+            with b2:
+                if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
+                    st.session_state.coupon_popup_open = False
+                    st.rerun()
 
