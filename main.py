@@ -578,6 +578,14 @@ div[data-testid="stExpander"] * {
 .rk {
     color: #cbd5e1 !important;
 }
+
+.detail-header-box * {
+    color: #f8fbff !important;
+    text-shadow: none !important;
+}
+.detail-header-box {
+    display:block !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2024,30 +2032,32 @@ if st.session_state.detay_idx is not None:
     m, t, b_det = item["m"], item["t"], item["b"]
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
-    st.markdown('<div class="detail-header-box">', unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1, 6, 1.2])
-    with c1:
-        if st.button("← Geri", key="geri_btn"):
-            st.session_state.detay_idx = None
-            st.rerun()
-    with c2:
-        st.markdown(f"""
-        <div style="padding:6px 0">
-          <div style="font-family:Rajdhani,sans-serif;font-size:1.8rem;font-weight:700;color:#f8fbff;letter-spacing:1px">
-            {m['ev'].upper()} – {m['dep'].upper()}
+
+    if st.button("← Geri", key="geri_btn"):
+        st.session_state.detay_idx = None
+        st.rerun()
+
+    st.markdown(
+        f"""
+        <div class="detail-header-box">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <div>
+              <div style="font-family:Rajdhani,sans-serif;font-size:2rem;font-weight:700;color:#f8fbff;letter-spacing:1px;line-height:1.1">
+                {m['ev'].upper()} – {m['dep'].upper()}
+              </div>
+              <div style="font-size:0.92rem;color:#9db2d1;margin-top:8px">
+                {m['lig']} &nbsp;·&nbsp; {format_tr_date(m['zaman'].date())} &nbsp;·&nbsp; {m['zaman'].strftime('%H:%M')}
+              </div>
+            </div>
+            <div style="text-align:right">
+              <span class="live-badge" style="background:{durum_color};color:white">{durum_text}</span><br>
+              <span style="font-size:0.82rem;color:#9db2d1;display:inline-block;margin-top:8px">📊 {int(t['ornek'])} örnek</span>
+            </div>
           </div>
-          <div style="font-size:0.84rem;color:#9db2d1;margin-top:4px">
-            {m['lig']} &nbsp;·&nbsp; {format_tr_date(m['zaman'].date())} &nbsp;·&nbsp; {m['zaman'].strftime('%H:%M')}
-          </div>
-        </div>""", unsafe_allow_html=True)
-    with c3:
-        st.markdown(
-            f"""<div style="text-align:right;padding-top:12px">
-            <span class="live-badge" style="background:{durum_color};color:white">{durum_text}</span><br>
-            <span style="font-size:0.76rem;color:#9db2d1;display:inline-block;margin-top:8px">📊 {int(t['ornek'])} örnek</span></div>""",
-            unsafe_allow_html=True,
-        )
-    st.markdown('</div>', unsafe_allow_html=True)
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
 
@@ -2165,6 +2175,13 @@ if st.session_state.detay_idx is not None:
         htft_cls = "db-green" if t["htft_p"] >= 40 else "db-gold"
         combo_cls = "db-gold" if t.get("combo_var", False) else "db-red"
         combo_text = t.get("combo_label", "")
+        combo_row = ""
+        if combo_text:
+            combo_row = f"""
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">{t.get('combo_level', 'Destekli')}</div></div></div>
+            <span class="diger-badge {combo_cls}">{combo_text} %{int(t.get('combo_p', 0))}</span>
+          </div>"""
 
         st.markdown(f"""
         <div class="diger-kart">
@@ -2189,17 +2206,9 @@ if st.session_state.detay_idx is not None:
             <div class="diger-left"><span class="diger-icon">🤝</span><div><div class="diger-name">Karşılıklı Gol</div><div class="diger-sub">KG Var / Yok</div></div></div>
             <span class="diger-badge {kg_cls}">{kg_lbl}</span>
           </div>
-        """, unsafe_allow_html=True)
 
-        if combo_text:
-            st.markdown(f"""
-            <div class="diger-row">
-              <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">{t.get('combo_level', 'Destekli')}</div></div></div>
-              <span class="diger-badge {combo_cls}">{combo_text} %{int(t.get('combo_p', 0))}</span>
-            </div>
-            """, unsafe_allow_html=True)
+          {combo_row}
 
-        st.markdown(f"""
           <div class="diger-row">
             <div class="diger-left"><span class="diger-icon">🧩</span><div><div class="diger-name">En Uyumlu Senaryo</div><div class="diger-sub">Model özeti</div></div></div>
             <span class="diger-badge db-blue">{t.get('scenario_label', '')}</span>
@@ -2214,14 +2223,17 @@ if st.session_state.detay_idx is not None:
             <div class="diger-left"><span class="diger-icon">⚡</span><div><div class="diger-name">Canlı Strateji</div><div class="diger-sub">İlk 10-20 dakika</div></div></div>
             <span class="diger-badge db-blue">İzle</span>
           </div>
-          <div style="font-size:0.78rem;color:#c7d2e3;line-height:1.5;padding:10px 12px 8px 12px;border-bottom:1px solid #1a1d26;background:#0b1628;border-radius:10px">{t.get('canli_strateji', '')}</div>
+
+          <div style="font-size:0.78rem;color:#c7d2e3;line-height:1.5;padding:10px 12px 8px 12px;border:1px solid #1f2a44;background:#0b1628;border-radius:10px;margin-top:8px">
+            {t.get('canli_strateji', '')}
+          </div>
 
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
             <div style="display:flex;gap:16px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div></div>
             </div>
           </div>
         </div>
