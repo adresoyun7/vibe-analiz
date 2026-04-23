@@ -6,6 +6,21 @@ import pandas as pd
 import requests
 import streamlit as st
 
+
+def parse_mac_datetime(value):
+    if isinstance(value, datetime):
+        return value
+    s = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(s.replace("Z", ""))
+    except Exception:
+        return datetime.now()
+
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
 APP_SCHEMA_VERSION = 11
@@ -585,6 +600,30 @@ div[data-testid="stExpander"] * {
 }
 .detail-header-box {
     display:block !important;
+}
+
+/* Force white text in detail dark cards */
+.tahmin-kart, .diger-kart, .neden-kart, .kupon-kart,
+.tahmin-kart *, .diger-kart *, .neden-kart *, .kupon-kart * {
+    color: #f8fbff !important;
+}
+.tahmin-kart small,
+.diger-kart small,
+.neden-kart small {
+    color: #9db2d1 !important;
+}
+.tahmin-kart .tk-key,
+.diger-kart .tk-key,
+.neden-kart .tk-key,
+.diger-kart .diger-name,
+.diger-kart .diger-sub,
+.neden-kart .neden-item {
+    color: #f8fbff !important;
+}
+.tahmin-kart [style*="color:#666"],
+.diger-kart [style*="color:#666"],
+.neden-kart [style*="color:#666"] {
+    color: #9db2d1 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2475,7 +2514,7 @@ else:
         if st.session_state.kupona:
             items_html = ""
             for k in st.session_state.kupona:
-                mac_dt = datetime.strptime(k["zaman_iso"], "%Y-%m-%d %H:%M:%S")
+                mac_dt = parse_mac_datetime(k.get("zaman_iso", ""))
                 durum = mac_canli_durumu(mac_dt)
                 renk = "#16a34a" if durum == "Canlı" else "#2563eb" if durum == "Başlamamış" else "#64748b"
                 items_html += f"<div class='coupon-item'><div class='coupon-item-top'><span>{k['ev']} - {k['dep']}</span><span class='live-badge' style='background:{renk};color:white'>{durum}</span></div><div class='coupon-item-sub'>{k['lig']} | {k['zaman_text']} | {k['tahmin']} | Güven %{k['guven']}</div></div>"
