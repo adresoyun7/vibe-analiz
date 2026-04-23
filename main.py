@@ -53,39 +53,6 @@ section[data-testid="stSidebar"] label {
     margin:0;
     letter-spacing:1px;
 }
-/* DETAY ALT BLOKLAR (beyaz olan kısım fix) */
-.diger-kart,
-.combo-kart,
-.canli-kart,
-.strateji-kart,
-.oranlar-kart {
-    background: linear-gradient(135deg,#0f172a,#111827) !important;
-    border: 1px solid #1f2a44 !important;
-    color: #e5e7eb !important;
-}
-.diger-kart {
-    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-    border-radius: 16px;
-}
-/* Yazılar */
-.diger-kart .tk-key,
-.diger-kart div,
-.combo-kart div,
-.canli-kart div {
-    color: #e5e7eb !important;
-}
-
-/* badge sağ taraflar */
-.diger-badge,
-.combo-badge {
-    background: #1e293b !important;
-    color: #facc15 !important;
-}
-
-/* çizgi */
-.diger-row {
-    border-bottom: 1px solid #1f2a44 !important;
-}
 .top-header .sub {
     font-size:0.88rem;
     color:#64748b;
@@ -429,6 +396,188 @@ section[data-testid="stSidebar"] label {
 .coupon-item-top {display:flex;align-items:center;justify-content:space-between;gap:10px;color:#f8fbff;font-size:.86rem;font-weight:700;}
 .coupon-item-sub {color:#8fa0ba;font-size:.74rem;margin-top:5px;}
 
+
+/* === LIGHT PAGE CONTRAST FIXES === */
+html, body, [class*="css"] {
+    background: #f6f8fc !important;
+    color: #0f172a !important;
+}
+.stApp {
+    background: linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%) !important;
+}
+.main .block-container {
+    background: transparent !important;
+}
+section[data-testid="stSidebar"] {
+    background: #eef3fb !important;
+    border-right: 1px solid #d6e0ef !important;
+}
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] * {
+    color: #334155 !important;
+}
+
+/* Top controls */
+.control-label, .section-kicker, .summary-note, .league-chip-note {
+    color: #64748b !important;
+}
+div[data-baseweb="popover"],
+div[data-testid="stPopover"] button,
+div[data-testid="stPopoverButton"] > button {
+    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
+    color: #f8fafc !important;
+}
+div[data-baseweb="select"] > div,
+div[data-testid="stNumberInput"] div[data-baseweb="input"] > div,
+div[data-testid="stTextInput"] div[data-baseweb="input"] > div,
+div[data-testid="stDateInput"] div[data-baseweb="input"] > div,
+div[data-testid="stNumberInputContainer"],
+div[data-testid="stTextInputRootElement"] {
+    background: #0f1b31 !important;
+    border-color: #284977 !important;
+    color: #f8fafc !important;
+}
+input, textarea {
+    color: #f8fafc !important;
+}
+.stSelectbox label, .stMultiSelect label, .stDateInput label, .stTextInput label, .stNumberInput label {
+    color: #64748b !important;
+}
+.stCheckbox label, .stRadio label {
+    color: #0f172a !important;
+}
+.stCheckbox label span, .stRadio label span {
+    color: #0f172a !important;
+}
+.stMultiSelect [data-baseweb="tag"] {
+    background: #ff5a52 !important;
+    color: white !important;
+}
+
+/* Buttons */
+.stButton > button {
+    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid #284977 !important;
+}
+.stButton > button:hover {
+    border-color: #facc15 !important;
+}
+button[kind="primary"], .st-emotion-cache * button[kind="primary"] {
+    color: #fff !important;
+}
+
+/* Cards remain dark */
+.mac-kart,
+.tahmin-kart, .diger-kart, .neden-kart, .kupon-kart,
+.combo-kart, .canli-kart, .strateji-kart, .oranlar-kart,
+.metrics-card, .control-card, .top-shell, .helper-bar,
+.rehber-box, .top-hero, .topbar-wrap {
+    color: #e5e7eb !important;
+}
+
+/* Detail screen white clash fixes */
+.diger-kart,
+.combo-kart,
+.canli-kart,
+.strateji-kart,
+.oranlar-kart,
+.tahmin-kart,
+.neden-kart,
+.kupon-kart {
+    background: linear-gradient(135deg,#0f172a,#111827) !important;
+    border: 1px solid #1f2a44 !important;
+    color: #e5e7eb !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+}
+.diger-kart *,
+.combo-kart *,
+.canli-kart *,
+.strateji-kart *,
+.oranlar-kart *,
+.tahmin-kart *,
+.neden-kart *,
+.kupon-kart * {
+    color: inherit;
+}
+.diger-row, .tk-row, .neden-item {
+    border-bottom: 1px solid #1f2a44 !important;
+}
+.tk-title, .diger-name, .panel-title, .list-heading {
+    color: #0b1f3a !important;
+}
+.kupon-kart .tk-title,
+.tahmin-kart .tk-title,
+.diger-kart .tk-title,
+.neden-kart .tk-title,
+.combo-kart .tk-title,
+.canli-kart .tk-title,
+.strateji-kart .tk-title,
+.oranlar-kart .tk-title {
+    color: #f8fafc !important;
+}
+.tk-key, .diger-sub, .mk-mini, .panel-date, .list-subheading {
+    color: #94a3b8 !important;
+}
+.diger-badge, .combo-badge {
+    background: #1e293b !important;
+    color: #facc15 !important;
+}
+.db-green { background:#183925 !important; color:#3ddb7c !important; }
+.db-gold  { background:#37290f !important; color:#f1c40f !important; }
+.db-red   { background:#391212 !important; color:#ff6b6b !important; }
+.db-blue  { background:#17304d !important; color:#6ec1ff !important; }
+
+/* Main titles on light background */
+.top-header h2, .list-heading {
+    color:#0b1f3a !important;
+}
+.top-header .sub, .panel-date, .summary-note, .list-subheading {
+    color:#64748b !important;
+}
+
+/* Remove subtitle if exists by hiding */
+.list-subheading {
+    display:none !important;
+}
+
+/* Header / detail title bars */
+.detail-title-bar, .detail-header-box {
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid #21334f !important;
+    border-radius: 14px !important;
+    padding: 10px 14px !important;
+}
+
+/* API expander */
+details, summary {
+    color: #f8fafc !important;
+}
+.streamlit-expanderHeader {
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid #21334f !important;
+    border-radius: 12px !important;
+}
+div[data-testid="stExpander"] {
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 100%) !important;
+    border: 1px solid #21334f !important;
+    border-radius: 12px !important;
+    padding: 4px 8px !important;
+}
+div[data-testid="stExpander"] * {
+    color: #f8fafc !important;
+}
+
+/* Small info texts under dark blocks */
+.metrics-card .sub,
+.hb-sub,
+.hb-label,
+.mk-label,
+.rk {
+    color: #cbd5e1 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
