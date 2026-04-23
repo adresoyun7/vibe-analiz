@@ -1246,6 +1246,31 @@ FUTBOL_LIGLERI = {
 }
 
 
+def tum_lig_listesi():
+    rows = []
+    for kat, ligler in FUTBOL_LIGLERI.items():
+        for isim, kod in ligler.items():
+            rows.append({
+                "kategori": kat,
+                "isim": isim,
+                "kod": kod,
+                "label": isim,
+            })
+    return rows
+
+
+def filtrelenmis_lig_listesi(arama_text: str):
+    ligler = tum_lig_listesi()
+    if not arama_text:
+        return ligler
+
+    q = arama_text.strip().lower()
+    return [
+        x for x in ligler
+        if q in x["isim"].lower() or q in x["kategori"].lower()
+    ]
+
+
 KARLI_LIG_PRESETLERI = {
     "cekirdek": [
         "soccer_epl",
@@ -1253,10 +1278,9 @@ KARLI_LIG_PRESETLERI = {
         "soccer_germany_bundesliga",
         "soccer_italy_serie_a",
         "soccer_france_ligue_one",
-        "soccer_netherlands_eredivisie",
-        "soccer_portugal_primeira_liga",
-        "soccer_denmark_superliga",
-        "soccer_usa_mls",
+        "soccer_uefa_champs_league",
+        "soccer_uefa_europa_league",
+        "soccer_uefa_europa_conference_league",
     ],
     "value": [
         "soccer_netherlands_eredivisie",
@@ -1296,6 +1320,15 @@ def set_leagues(selected_codes):
 def clear_leagues():
     set_leagues([])
 
+
+def toggle_leagues(selected_codes):
+    secili = set(selected_codes)
+    tumu_aktif = all(st.session_state.get(f"cb_{kod}", False) for kod in secili) if secili else False
+    if tumu_aktif:
+        for kod in secili:
+            st.session_state[f"cb_{kod}"] = False
+    else:
+        set_leagues(selected_codes)
 
 init_league_states()
 secili_kodlar = []
@@ -1339,50 +1372,56 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("""
-    <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Hızlı Lig Filtreleri</div>
+    <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">
+    Hızlı Lig Filtreleri
+    </div>
     """, unsafe_allow_html=True)
 
     p1, p2 = st.columns(2)
     with p1:
         if st.button("🎯 Kararlı Çekirdek", use_container_width=True):
-            set_leagues(KARLI_LIG_PRESETLERI["cekirdek"])
-        if st.button("💸 Karlı / Value", use_container_width=True):
-            set_leagues(KARLI_LIG_PRESETLERI["value"])
+            toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek"])
+            st.rerun()
     with p2:
+        if st.button("💸 Karlı / Value", use_container_width=True):
+            toggle_leagues(KARLI_LIG_PRESETLERI["value"])
+            st.rerun()
+
+    p3, p4 = st.columns(2)
+    with p3:
         if st.button("🌍 Hepsini Aç", use_container_width=True):
             set_leagues(tum_lig_kodlari())
+            st.rerun()
+    with p4:
         if st.button("🧹 Temizle", use_container_width=True):
             clear_leagues()
+            st.rerun()
 
-    st.caption("Kararlı Çekirdek: ana büyük ligler + en stabil value ligler. Karlı/Value: hata payı daha yüksek marketler.")
+    st.caption("Kararlı Çekirdek: Avrupa'nın majör ligleri ve Avrupa kupaları. Karlı / Value: daha fırsatlı marketler.")
 
     st.markdown("---")
+    st.markdown("""
+    <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">
+    Lig Filtresi
+    </div>
+    """, unsafe_allow_html=True)
 
-    for kat, ligler in FUTBOL_LIGLERI.items():
-        aktif_sayi = sum(1 for kod in ligler.values() if st.session_state.get(f"cb_{kod}", False))
-        baslik = f"{kat} ({aktif_sayi}/{len(ligler)})"
-        with st.expander(baslik, expanded=(kat in ["TÜRKİYE", "AVRUPA VALUE"])):
-            g1, g2, g3 = st.columns(3)
-            with g1:
-                if st.button("Tümünü Seç", key=f"select_all_{kat}", use_container_width=True):
-                    for kod in ligler.values():
-                        st.session_state[f"cb_{kod}"] = True
-                    st.rerun()
-            with g2:
-                if st.button("Temizle", key=f"clear_{kat}", use_container_width=True):
-                    for kod in ligler.values():
-                        st.session_state[f"cb_{kod}"] = False
-                    st.rerun()
-            with g3:
-                if st.button("Aç/Kapat", key=f"toggle_btn_{kat}", use_container_width=True):
-                    hedef = not all(st.session_state.get(f"cb_{kod}", False) for kod in ligler.values())
-                    for kod in ligler.values():
-                        st.session_state[f"cb_{kod}"] = hedef
-                    st.rerun()
-            for isim, kod in ligler.items():
-                st.checkbox(isim, key=f"cb_{kod}")
-                if st.session_state.get(f"cb_{kod}", False):
-                    secili_kodlar.append(kod)
+    lig_arama = st.text_input("🔎 Lig ara...", placeholder="örn. Türkiye, Premier, İtalya, MLS")
+    filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
+
+    st.caption(f"Gösterilen lig: {len(filtreli_ligler)}")
+
+    col1, col2 = st.columns(2)
+    for i, lig in enumerate(filtreli_ligler):
+        hedef_col = col1 if i % 2 == 0 else col2
+        with hedef_col:
+            aktif = st.session_state.get(f"cb_{lig['kod']}", False)
+            gosterim = f"{lig['isim']}"
+            st.checkbox(gosterim, key=f"cb_{lig['kod']}", value=aktif)
+
+    for lig in tum_lig_listesi():
+        if st.session_state.get(f"cb_{lig['kod']}", False):
+            secili_kodlar.append(lig['kod'])
 
     st.markdown(f"<div style='font-size:0.78rem;color:#c7cfdd'>Seçili lig sayısı: <b>{len(secili_kodlar)}</b></div>", unsafe_allow_html=True)
     st.markdown("---")
