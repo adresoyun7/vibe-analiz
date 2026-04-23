@@ -1307,114 +1307,165 @@ def global_ai_tarama(b_df, maclar, limit=80):
     return tum_sonuclar[:limit]
 
 
-def auto_kupon_builder(ai_sonuclar, mod="guvenli"):
-    ayarlar = {
-        "guvenli": {
-            "mac_sayisi": 3,
-            "min_guven": 65,
-            "max_market": 1,
-            "max_lig": 1,
-            "oran_agirlik": 0.10,
-            "risk_cezasi": 8,
-        },
-        "value": {
-            "mac_sayisi": 3,
-            "min_guven": 60,
-            "max_market": 2,
-            "max_lig": 1,
-            "oran_agirlik": 0.35,
-            "risk_cezasi": 5,
-        },
-        "agresif": {
-            "mac_sayisi": 4,
-            "min_guven": 58,
-            "max_market": 2,
-            "max_lig": 2,
-            "oran_agirlik": 0.60,
-            "risk_cezasi": 3,
-        },
-    }
+def kombo_tahmini_oran(label, ana_odd):
+    """Combo oranı API'den gelmiyorsa agresif kupon için yaklaşık oran üretir."""
+    try:
+        ana_odd = float(ana_odd or 1.0)
+    except Exception:
+        ana_odd = 1.0
 
-    cfg = ayarlar.get(mod, ayarlar["guvenli"])
-    adaylar = []
+    lbl = str(label or "")
+    if not lbl:
+        return ana_odd
 
-    for item in ai_sonuclar or []:
+    if "HT/FT" in lbl:
+        return max(ana_odd * 2.40, 2.40)
+    if "KG Var" in lbl or "KG Yok" in lbl:
+        return max(ana_odd * 1.55, 1.55)
+    if "2.5 Üst" in lbl or "2.5 Alt" in lbl:
+        return max(ana_odd * 1.45, 1.45)
+    return ana_odd
+
+
+def agresif_pick_label(t):
+    """Agresifte, tutarlı ve yeterli güvenli kombo varsa ana tahmin yerine kombo seçer."""
+    combo = str(t.get("combo_label", "") or "").strip()
+    combo_p = int(t.get("combo_p", 0) or 0)
+    combo_hit = int(t.get("combo_hit", 0) or 0)
+
+    if combo and combo_p >= 45 and combo_hit >= 3 and t.get("risk_label") != "YÜKSEK":
+        return combo, combo_p, "combo", kombo_tahmini_oran(combo, t.get("ana_odd"))
+
+    return t.get("ana_label", "-"), int(t.get("ana_p", 0) or 0), "ana", t.get("ana_odd")
+
+
+def mac_key(m):
+    return f"{m.get('ev','')}::{m.get('dep','')}::{m.get('zaman','')}"
+
+
+def _toplam_oran(kupon):
+    toplam = 1.0
+    for item in kupon or []:
+        try:
+            toplam *= float(item.get("oran", 1.0) or 1.0)
+        except Exception:
+            toplam *= 1.0
+    return round(toplam, 2)
+
+
+def smart_kupon_builder(ai_sonuclar):
+    """
+    3 ayrı kupon üretir. Aynı maç yalnızca 1 kuponda olabilir.
+    Agresifte tutarlı kombo varsa kombo seçilir.
+    """
+    used = set()
+
+    def base_item(item, pick_label=None, pick_guven=None, pick_type="ana", pick_odd=None, estimated=False):
         m = item.get("mac", {})
         t = item.get("t", {})
-
-        if t.get("belirsiz"):
-            continue
-        if t.get("ana_p", 0) < cfg["min_guven"]:
-            continue
-        if t.get("ana_odd") is None:
-            continue
-        if t.get("risk_label") == "YÜKSEK" and mod == "guvenli":
-            continue
-
+        oran = pick_odd if pick_odd is not None else t.get("ana_odd")
         try:
-            oran = float(t.get("ana_odd", 1.0))
+            oran = float(oran)
         except Exception:
-            continue
-
-        if mod == "guvenli" and oran < 1.20:
-            continue
-        if mod != "agresif" and oran > 3.50:
-            continue
-
-        final_skor = (
-            float(item.get("ai_skor", t.get("playable_score", 0)))
-            + oran * 10 * cfg["oran_agirlik"]
-            + min(int(t.get("ornek", 0)), 25) * 0.08
-            - (cfg["risk_cezasi"] if t.get("risk_label") == "YÜKSEK" else 0)
-        )
-
-        adaylar.append({
+            oran = 1.0
+        return {
             "mac": m,
             "t": t,
             "oran": oran,
-            "market": t.get("ana_label", ""),
+            "oran_tahmini": bool(estimated),
+            "market": pick_label or t.get("ana_label", ""),
+            "pick_label": pick_label or t.get("ana_label", ""),
+            "pick_guven": int(pick_guven if pick_guven is not None else t.get("ana_p", 0)),
+            "pick_type": pick_type,
             "lig": m.get("lig", ""),
             "tolerans": item.get("tolerans"),
-            "final_skor": round(final_skor, 1),
-        })
+            "final_skor": round(float(item.get("ai_skor", t.get("playable_score", 0))) + oran * 2, 1),
+        }
 
-    adaylar.sort(key=lambda x: x["final_skor"], reverse=True)
-
-    secilen = []
-    market_say = {}
-    lig_say = {}
-
-    for aday in adaylar:
-        market = aday["market"]
-        lig = aday["lig"]
-
-        cok_guclu = (
-            aday["t"].get("ana_p", 0) >= 75
-            and aday["t"].get("playable_score", 0) >= 75
-            and aday["t"].get("risk_label") != "YÜKSEK"
-        )
-
-        max_market = cfg["max_market"] + (1 if cok_guclu and mod != "guvenli" else 0)
-        max_lig = cfg["max_lig"] + (1 if cok_guclu and mod == "agresif" else 0)
-
-        if market_say.get(market, 0) >= max_market:
+    temiz = []
+    for item in ai_sonuclar or []:
+        t = item.get("t", {})
+        if t.get("belirsiz") or t.get("ana_odd") is None or t.get("risk_label") == "YÜKSEK":
             continue
-        if lig_say.get(lig, 0) >= max_lig:
+        temiz.append(item)
+
+    guvenli = []
+    for item in temiz:
+        m, t = item.get("mac", {}), item.get("t", {})
+        key = mac_key(m)
+        if key in used:
             continue
-
-        secilen.append(aday)
-        market_say[market] = market_say.get(market, 0) + 1
-        lig_say[lig] = lig_say.get(lig, 0) + 1
-
-        if len(secilen) >= cfg["mac_sayisi"]:
+        if int(t.get("ana_p", 0)) >= 70:
+            guvenli.append(base_item(item))
+            used.add(key)
+        if len(guvenli) >= 2:
             break
 
-    toplam_oran = 1.0
-    for s_item in secilen:
-        toplam_oran *= float(s_item.get("oran", 1.0))
+    value = []
+    market_say = {}
+    lig_say = {}
+    for item in temiz:
+        m, t = item.get("mac", {}), item.get("t", {})
+        key = mac_key(m)
+        if key in used or int(t.get("ana_p", 0)) < 60:
+            continue
+        market = t.get("ana_label", "")
+        lig = m.get("lig", "")
+        if market_say.get(market, 0) >= 2 or lig_say.get(lig, 0) >= 1:
+            continue
+        value.append(base_item(item))
+        used.add(key)
+        market_say[market] = market_say.get(market, 0) + 1
+        lig_say[lig] = lig_say.get(lig, 0) + 1
+        if len(value) >= 3:
+            break
 
-    return secilen, round(toplam_oran, 2)
+    agresif = []
+    market_say = {}
+    lig_say = {}
+    adaylar = []
+    for item in temiz:
+        m, t = item.get("mac", {}), item.get("t", {})
+        key = mac_key(m)
+        if key in used or int(t.get("ana_p", 0)) < 58:
+            continue
+        pick_label, pick_guven, pick_type, pick_odd = agresif_pick_label(t)
+        est = pick_type == "combo"
+        try:
+            odd_val = float(pick_odd or t.get("ana_odd") or 1.0)
+        except Exception:
+            odd_val = 1.0
+        score = float(item.get("ai_skor", 0)) + odd_val * 5 + (8 if pick_type == "combo" else 0)
+        adaylar.append((score, item, pick_label, pick_guven, pick_type, odd_val, est))
 
+    adaylar.sort(key=lambda x: x[0], reverse=True)
+
+    for _, item, pick_label, pick_guven, pick_type, odd_val, est in adaylar:
+        m = item.get("mac", {})
+        key = mac_key(m)
+        if key in used:
+            continue
+        market = pick_label
+        lig = m.get("lig", "")
+        if market_say.get(market, 0) >= 2 or lig_say.get(lig, 0) >= 2:
+            continue
+        agresif.append(base_item(item, pick_label, pick_guven, pick_type, odd_val, est))
+        used.add(key)
+        market_say[market] = market_say.get(market, 0) + 1
+        lig_say[lig] = lig_say.get(lig, 0) + 1
+        if len(agresif) >= 4:
+            break
+
+    return {
+        "guvenli": (guvenli, _toplam_oran(guvenli)),
+        "value": (value, _toplam_oran(value)),
+        "agresif": (agresif, _toplam_oran(agresif)),
+    }
+
+
+def auto_kupon_builder(ai_sonuclar, mod="guvenli"):
+    paketler = smart_kupon_builder(ai_sonuclar)
+    return paketler.get(mod, ([], 1.0))
 
 def gun_riski_belirle(ai_sonuclar):
     guclu = [
@@ -1451,7 +1502,7 @@ def gunluk_kasa_plani(kasa, hedef=100000, kalan_gun=30, gun_risk="normal"):
     risk_oranlari = {
         "dusuk": 0.12,
         "normal": 0.07,
-        "yuksek": 0.035,
+        "yuksek": 0.00,
         "pas": 0.00,
     }
 
@@ -1475,7 +1526,7 @@ def stake_dagilimi(toplam_stake, gun_risk):
     elif gun_risk == "normal":
         oranlar = {"guvenli": 0.70, "value": 0.25, "agresif": 0.05}
     elif gun_risk == "yuksek":
-        oranlar = {"guvenli": 1.00, "value": 0.00, "agresif": 0.00}
+        oranlar = {"guvenli": 0.00, "value": 0.00, "agresif": 0.00}
     else:
         oranlar = {"guvenli": 0.00, "value": 0.00, "agresif": 0.00}
 
@@ -1503,7 +1554,7 @@ def kuponu_session_formatina_cevir(kupon):
             "lig": m.get("lig", ""),
             "zaman_iso": zaman_iso,
             "zaman_text": zaman_text,
-            "tahmin": f"{t.get('ana_label', '-')} ({fmt_odd(item.get('oran'))})",
+            "tahmin": f"{item.get('pick_label', t.get('ana_label', '-'))} ({fmt_odd(item.get('oran'))}{' tahmini' if item.get('oran_tahmini') else ''})",
             "guven": int(t.get("ana_p", 0)),
         })
 
@@ -2933,22 +2984,28 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
             with st.spinner("AI tüm maçları 0.00 / 0.02 / 0.05 / 0.08 / 0.10 / 0.12 hassasiyetlerde tarıyor..."):
                 ai_sonuclar = global_ai_tarama(gecmis_df, bulten_df, limit=100)
 
-                guvenli, guvenli_oran = auto_kupon_builder(ai_sonuclar, "guvenli")
-                value, value_oran = auto_kupon_builder(ai_sonuclar, "value")
-                agresif, agresif_oran = auto_kupon_builder(ai_sonuclar, "agresif")
-
                 gun_risk = gun_riski_belirle(ai_sonuclar)
                 plan = gunluk_kasa_plani(gun_kasa, ay_hedef, kalan_gun, gun_risk)
                 dagilim = stake_dagilimi(plan["onerilen_stake"], gun_risk)
 
                 st.session_state.ai_global_sonuclar = ai_sonuclar
-                st.session_state.ai_auto_kuponlar = {
-                    "🟢 Güvenli Kupon": (guvenli, guvenli_oran, dagilim["guvenli"], "guvenli"),
-                    "🟡 Value Kupon": (value, value_oran, dagilim["value"], "value"),
-                    "🔴 Agresif Kupon": (agresif, agresif_oran, dagilim["agresif"], "agresif"),
-                }
                 st.session_state.kasa_plani = plan
                 st.session_state.gun_risk = gun_risk
+
+                if gun_risk in ["yuksek", "pas"]:
+                    st.session_state.ai_auto_kuponlar = None
+                    st.session_state.ai_pas_mesaji = "Bugün riskli görünüyor. Sistem PAS öneriyor; kupon oluşturulmadı."
+                else:
+                    paketler = smart_kupon_builder(ai_sonuclar)
+                    guvenli, guvenli_oran = paketler["guvenli"]
+                    value, value_oran = paketler["value"]
+                    agresif, agresif_oran = paketler["agresif"]
+                    st.session_state.ai_pas_mesaji = ""
+                    st.session_state.ai_auto_kuponlar = {
+                        "🟢 Güvenli Kupon": (guvenli, guvenli_oran, dagilim["guvenli"], "guvenli"),
+                        "🟡 Value Kupon": (value, value_oran, dagilim["value"], "value"),
+                        "🔴 Agresif Kupon": (agresif, agresif_oran, dagilim["agresif"], "agresif"),
+                    }
             st.rerun()
 
     if st.session_state.get("kasa_plani"):
@@ -2965,6 +3022,9 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
         </div>
         """, unsafe_allow_html=True)
 
+    if st.session_state.get("ai_pas_mesaji"):
+        st.warning(st.session_state.ai_pas_mesaji)
+
     if st.session_state.get("ai_auto_kuponlar"):
         st.markdown("### 🧠 AI Günlük Kupon Önerileri")
 
@@ -2978,10 +3038,14 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
             for item in kupon:
                 m = item["mac"]
                 t = item["t"]
+                pick_label = item.get("pick_label", t.get("ana_label", "-"))
+                pick_type = "Kombo" if item.get("pick_type") == "combo" else "Ana"
+                oran_not = " tahmini" if item.get("oran_tahmini") else ""
+                guven_txt = item.get("pick_guven", t.get("ana_p", 0))
                 st.markdown(
                     f"- **{m.get('ev','')} - {m.get('dep','')}** | "
-                    f"{t.get('ana_label','-')} (**{item['oran']:.2f}**) | "
-                    f"Güven **%{t.get('ana_p',0)}** | "
+                    f"{pick_label} / **{pick_type}** (**{item['oran']:.2f}{oran_not}**) | "
+                    f"Güven **%{guven_txt}** | "
                     f"AI Skor **{item.get('final_skor',0)}** | "
                     f"Tol **{item.get('tolerans')}** | "
                     f"Skor **{t.get('eg',1)}-{t.get('dg',1)}** | "
@@ -3079,17 +3143,7 @@ else:
 
         combo_text = t.get("combo_label", "")
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
-        yorum_satiri, risk_satiri, canli_satiri = ai_kart_yorumlari(t, m)
-        yorum_satiri = escape(str(yorum_satiri))
-        risk_satiri = escape(str(risk_satiri))
-        canli_satiri = escape(str(canli_satiri))
-        ai_comment_html = f"""
-                <div class="ai-inline">
-                  <div class="ai-line"><b>Yorum:</b> {yorum_satiri}</div>
-                  <div class="ai-line"><b>Risk:</b> {risk_satiri}</div>
-                  <div class="ai-line"><b>Canlı:</b> {canli_satiri}</div>
-                </div>
-        """
+        ai_comment_html = ""
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
