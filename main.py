@@ -2400,10 +2400,12 @@ else:
     with cc1:
         if st.button("🏆 Günün En Favori 3'lü Kuponu", use_container_width=True, key="top3_bestfav_btn"):
             st.session_state.kupona = build_top3_coupon(indexed_fl, mode="best_favorites")
+            st.session_state.coupon_popup_open = True
             st.rerun()
     with cc2:
         if st.button("🎯 Günün En Yüksek Oranlı 3 Favorisi", use_container_width=True, key="top3_highfav_btn"):
             st.session_state.kupona = build_top3_coupon(indexed_fl, mode="high_favorites")
+            st.session_state.coupon_popup_open = True
             st.rerun()
 
     filtre = st.session_state.filtre
