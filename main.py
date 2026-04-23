@@ -2513,11 +2513,38 @@ else:
     if st.session_state.coupon_popup_open:
         if st.session_state.kupona:
             items_html = ""
+            normalized_kupona = []
             for k in st.session_state.kupona:
-                mac_dt = parse_mac_datetime(k.get("zaman_iso", ""))
-                durum = mac_canli_durumu(mac_dt)
-                renk = "#16a34a" if durum == "Canlı" else "#2563eb" if durum == "Başlamamış" else "#64748b"
-                items_html += f"<div class='coupon-item'><div class='coupon-item-top'><span>{k['ev']} - {k['dep']}</span><span class='live-badge' style='background:{renk};color:white'>{durum}</span></div><div class='coupon-item-sub'>{k['lig']} | {k['zaman_text']} | {k['tahmin']} | Güven %{k['guven']}</div></div>"
+                if isinstance(k, dict):
+                    item = k
+                else:
+                    raw_text = str(k)
+                    item = {
+                        "ev": raw_text,
+                        "dep": "",
+                        "lig": "-",
+                        "zaman_iso": "",
+                        "zaman_text": "-",
+                        "tahmin": "-",
+                        "guven": 0,
+                    }
+                    if " — " in raw_text:
+                        match_text, tahmin_text = raw_text.split(" — ", 1)
+                        item["tahmin"] = tahmin_text.strip()
+                        if " vs " in match_text:
+                            ev, dep = match_text.split(" vs ", 1)
+                            item["ev"] = ev.strip()
+                            item["dep"] = dep.strip()
+                        else:
+                            item["ev"] = match_text.strip()
+                normalized_kupona.append(item)
+                mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
+                durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
+                renk = "#16a34a" if durum == "Canlı" else "#2563eb" if durum in ["Başlamamış", "Takipte"] else "#64748b"
+                mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
+                alt_satir = f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}" if item.get("guven", 0) else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
+                items_html += f"<div class='coupon-item'><div class='coupon-item-top'><span>{mac_ad}</span><span class='live-badge' style='background:{renk};color:white'>{durum}</span></div><div class='coupon-item-sub'>{alt_satir}</div></div>"
+            st.session_state.kupona = normalized_kupona
             st.markdown(f"""
             <div class="floating-coupon">
               <div class="floating-coupon-title">🎫 Kuponlarım</div>
