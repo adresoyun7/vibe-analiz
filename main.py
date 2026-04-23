@@ -1356,18 +1356,36 @@ def _toplam_oran(kupon):
 def smart_kupon_builder(ai_sonuclar):
     """
     3 ayrı kupon üretir. Aynı maç yalnızca 1 kuponda olabilir.
-    Agresif kupon düşük oran yerine mümkünse kombo ve daha yüksek oran arar.
+    v8 mantık: Güvenli yol artık listedeki ilk uygun maçı değil, AI skoru en yüksek + risk düşük maçları seçer.
+    Value oran/AI dengesi, Agresif ise yüksek oran/kombo önceliği kullanır.
     """
     used = set()
+
+    def safe_float(v, default=0.0):
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    def safe_int(v, default=0):
+        try:
+            return int(v)
+        except Exception:
+            return default
+
+    def risk_ceza(t):
+        r = str(t.get("risk_label", ""))
+        if r == "YÜKSEK":
+            return 999
+        if r == "ORTA":
+            return 8
+        return 0
 
     def base_item(item, pick_label=None, pick_guven=None, pick_type="ana", pick_odd=None, estimated=False):
         m = item.get("mac", {})
         t = item.get("t", {})
         oran = pick_odd if pick_odd is not None else t.get("ana_odd")
-        try:
-            oran = float(oran)
-        except Exception:
-            oran = 1.0
+        oran = safe_float(oran, 1.0)
         return {
             "mac": m,
             "t": t,
@@ -1375,41 +1393,51 @@ def smart_kupon_builder(ai_sonuclar):
             "oran_tahmini": bool(estimated),
             "market": pick_label or t.get("ana_label", ""),
             "pick_label": pick_label or t.get("ana_label", ""),
-            "pick_guven": int(pick_guven if pick_guven is not None else t.get("ana_p", 0)),
+            "pick_guven": safe_int(pick_guven if pick_guven is not None else t.get("ana_p", 0)),
             "pick_type": pick_type,
             "lig": m.get("lig", ""),
             "tolerans": item.get("tolerans"),
-            "final_skor": round(float(item.get("ai_skor", t.get("playable_score", 0))) + oran * 2, 1),
+            "final_skor": round(safe_float(item.get("ai_skor", t.get("playable_score", 0))) + oran * 2, 1),
         }
 
     temiz = []
     for item in ai_sonuclar or []:
         t = item.get("t", {})
-        if t.get("belirsiz") or t.get("ana_odd") is None or t.get("risk_label") == "YÜKSEK":
+        if t.get("belirsiz") or t.get("ana_odd") is None:
+            continue
+        if t.get("risk_label") == "YÜKSEK":
             continue
         temiz.append(item)
 
+    # 🟢 GÜVENLİ: AI skoru ana belirleyici. Düşük risk, yüksek güven, stabilite bonus.
     guvenli = []
-    guvenli_aday = sorted(
-        temiz,
-        key=lambda it: (
-            int(it.get("t", {}).get("ana_p", 0)),
-            float(it.get("ai_skor", 0)),
-            -float(it.get("t", {}).get("ana_odd", 9) or 9),
-        ),
-        reverse=True,
-    )
-    for item in guvenli_aday:
-        m, t = item.get("mac", {}), item.get("t", {})
+    guvenli_aday = []
+    for item in temiz:
+        t = item.get("t", {})
+        if safe_int(t.get("ana_p", 0)) < 68:
+            continue
+        odd = safe_float(t.get("ana_odd"), 9.0)
+        score = (
+            safe_float(item.get("ai_skor", 0)) * 1.00
+            + safe_int(t.get("ana_p", 0)) * 0.25
+            + safe_float(item.get("stabil_bonus", 0)) * 2.0
+            - risk_ceza(t)
+            - max(0, odd - 1.90) * 6.0
+        )
+        guvenli_aday.append((score, item))
+
+    guvenli_aday.sort(key=lambda x: x[0], reverse=True)
+    for _, item in guvenli_aday:
+        m = item.get("mac", {})
         key = mac_key(m)
         if key in used:
             continue
-        if int(t.get("ana_p", 0)) >= 70:
-            guvenli.append(base_item(item))
-            used.add(key)
+        guvenli.append(base_item(item))
+        used.add(key)
         if len(guvenli) >= 2:
             break
 
+    # 🟡 VALUE: AI skoru + oran dengesi. Güvenli ile maç çakışmaz.
     value = []
     market_say = {}
     lig_say = {}
@@ -1417,14 +1445,18 @@ def smart_kupon_builder(ai_sonuclar):
     for item in temiz:
         m, t = item.get("mac", {}), item.get("t", {})
         key = mac_key(m)
-        if key in used or int(t.get("ana_p", 0)) < 60:
+        if key in used or safe_int(t.get("ana_p", 0)) < 60:
             continue
-        try:
-            odd = float(t.get("ana_odd") or 1.0)
-        except Exception:
-            odd = 1.0
-        score = float(item.get("ai_skor", 0)) * 0.75 + odd * 18
+        odd = safe_float(t.get("ana_odd"), 1.0)
+        score = (
+            safe_float(item.get("ai_skor", 0)) * 0.65
+            + odd * 22
+            + safe_int(t.get("ana_p", 0)) * 0.12
+            + safe_float(item.get("stabil_bonus", 0))
+            - risk_ceza(t) * 0.5
+        )
         value_aday.append((score, item))
+
     value_aday.sort(key=lambda x: x[0], reverse=True)
     for _, item in value_aday:
         m, t = item.get("mac", {}), item.get("t", {})
@@ -1442,6 +1474,7 @@ def smart_kupon_builder(ai_sonuclar):
         if len(value) >= 3:
             break
 
+    # 🔴 AGRESİF: yüksek oran/kombo öncelikli ama AI skoru çok düşük olanı alma.
     agresif = []
     market_say = {}
     lig_say = {}
@@ -1449,20 +1482,24 @@ def smart_kupon_builder(ai_sonuclar):
     for item in temiz:
         m, t = item.get("mac", {}), item.get("t", {})
         key = mac_key(m)
-        if key in used or int(t.get("ana_p", 0)) < 58:
+        if key in used or safe_int(t.get("ana_p", 0)) < 58:
             continue
         pick_label, pick_guven, pick_type, pick_odd = agresif_pick_label(t)
-        try:
-            odd_val = float(pick_odd or t.get("ana_odd") or 1.0)
-        except Exception:
-            odd_val = 1.0
-        if pick_type != "combo" and odd_val < 1.75:
+        odd_val = safe_float(pick_odd or t.get("ana_odd"), 1.0)
+        if pick_type != "combo" and odd_val < 1.70:
             continue
         if pick_type == "combo" and odd_val < 2.10:
             continue
         est = pick_type == "combo"
-        score = (odd_val * 28) + (float(item.get("ai_skor", 0)) * 0.45) + (18 if pick_type == "combo" else 0) + (pick_guven * 0.15)
+        score = (
+            odd_val * 30
+            + safe_float(item.get("ai_skor", 0)) * 0.42
+            + (20 if pick_type == "combo" else 0)
+            + safe_int(pick_guven, 0) * 0.15
+            - risk_ceza(t) * 0.35
+        )
         adaylar.append((score, item, pick_label, pick_guven, pick_type, odd_val, est))
+
     adaylar.sort(key=lambda x: x[0], reverse=True)
     for _, item, pick_label, pick_guven, pick_type, odd_val, est in adaylar:
         m = item.get("mac", {})
@@ -1485,16 +1522,14 @@ def smart_kupon_builder(ai_sonuclar):
         for item in temiz:
             m, t = item.get("mac", {}), item.get("t", {})
             key = mac_key(m)
-            if key in used or int(t.get("ana_p", 0)) < 58:
+            if key in used or safe_int(t.get("ana_p", 0)) < 58:
                 continue
-            try:
-                odd = float(t.get("ana_odd") or 1.0)
-            except Exception:
-                odd = 1.0
+            odd = safe_float(t.get("ana_odd"), 1.0)
             if odd >= 1.65:
-                fallback.append((odd, float(item.get("ai_skor", 0)), item))
-        fallback.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        for _, _, item in fallback:
+                score = odd * 20 + safe_float(item.get("ai_skor", 0)) * 0.5
+                fallback.append((score, item))
+        fallback.sort(key=lambda x: x[0], reverse=True)
+        for _, item in fallback:
             m = item.get("mac", {})
             key = mac_key(m)
             if key in used:
