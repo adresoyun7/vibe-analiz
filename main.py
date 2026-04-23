@@ -1536,34 +1536,57 @@ def gun_riski_belirle(ai_sonuclar):
 
 
 def gunluk_kasa_plani(kasa, hedef=100000, kalan_gun=30, gun_risk="normal"):
-    kasa = max(float(kasa), 0.0)
-    hedef = max(float(hedef), 1.0)
+    kasa = max(float(kasa), 1.0)
+    hedef = max(float(hedef), kasa)
     kalan_gun = max(int(kalan_gun), 1)
 
-    if kasa <= 0:
-        gerekli_yuzde = 0
+    hedef_acigi = max(hedef - kasa, 0.0)
+    gerekli_carpan = (hedef / kasa) ** (1 / kalan_gun)
+    gerekli_yuzde = (gerekli_carpan - 1) * 100
+
+    # Hedef baskısı: hedefe ne kadar uzaksa stake oranı o kadar artar.
+    # Böylece gün/kasa/hedef değişince önerilen stake gerçekten değişir.
+    if gerekli_yuzde <= 2:
+        hedef_stake_orani = 0.03
+    elif gerekli_yuzde <= 5:
+        hedef_stake_orani = 0.06
+    elif gerekli_yuzde <= 10:
+        hedef_stake_orani = 0.10
+    elif gerekli_yuzde <= 18:
+        hedef_stake_orani = 0.16
+    elif gerekli_yuzde <= 30:
+        hedef_stake_orani = 0.24
     else:
-        gerekli_carpan = (hedef / kasa) ** (1 / kalan_gun)
-        gerekli_yuzde = (gerekli_carpan - 1) * 100
+        hedef_stake_orani = 0.35
 
-    risk_oranlari = {
-        "dusuk": 0.14,
-        "normal": 0.10,
-        "yuksek": 0.00,
+    risk_carpan = {
+        "dusuk": 1.20,
+        "normal": 1.00,
+        "yuksek": 0.00,   # riskliyse pas
         "pas": 0.00,
-    }
+    }.get(gun_risk, 1.00)
 
-    stake_orani = risk_oranlari.get(gun_risk, 0.05)
+    stake_orani = hedef_stake_orani * risk_carpan
+
+    # Güvenlik limitleri
+    if gun_risk in ["yuksek", "pas"]:
+        stake_orani = 0.0
+    elif gun_risk == "normal":
+        stake_orani = min(stake_orani, 0.18)
+    elif gun_risk == "dusuk":
+        stake_orani = min(stake_orani, 0.25)
+
+    stake = kasa * stake_orani
 
     return {
         "kasa": round(kasa, 2),
         "hedef": round(hedef, 2),
         "kalan_gun": kalan_gun,
+        "hedef_acigi": round(hedef_acigi, 2),
         "gerekli_gunluk_yuzde": round(gerekli_yuzde, 2),
-        "onerilen_stake": round(kasa * stake_orani, 2),
+        "onerilen_stake": round(stake, 2),
         "stake_orani": round(stake_orani * 100, 1),
     }
-
 
 def stake_dagilimi(toplam_stake, gun_risk):
     toplam_stake = max(float(toplam_stake), 0.0)
@@ -3064,6 +3087,7 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
           <div style="font-family:Rajdhani,sans-serif;font-size:1.3rem;font-weight:800;margin-bottom:8px">🎯 30 Günlük Kasa Planı</div>
           <div>Gün riski: <b>{risk_text}</b></div>
           <div>Güncel kasa: <b>{p['kasa']} TL</b> · Hedef: <b>{p['hedef']} TL</b> · Kalan gün: <b>{p['kalan_gun']}</b></div>
+          <div>Hedef açığı: <b>{p.get('hedef_acigi', 0)} TL</b></div>
           <div>Hedefe yetişmek için gerekli ortalama günlük büyüme: <b>%{p['gerekli_gunluk_yuzde']}</b></div>
           <div>Bugün önerilen toplam stake: <b>{p['onerilen_stake']} TL</b> · Kasa riski: <b>%{p['stake_orani']}</b></div>
         </div>
