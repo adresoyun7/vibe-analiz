@@ -1277,29 +1277,12 @@ def tum_lig_kodlari():
     return [kod for ligler in FUTBOL_LIGLERI.values() for kod in ligler.values()]
 
 
-def grup_durumunu_guncelle(kat, ligler):
-    tumu_secili = all(st.session_state.get(f"cb_{kod}", False) for kod in ligler.values())
-    st.session_state[f"group_{kat}"] = tumu_secili
-
-
 def init_league_states():
-    for kat, ligler in FUTBOL_LIGLERI.items():
-        group_key = f"group_{kat}"
-        if group_key not in st.session_state:
-            st.session_state[group_key] = False
+    for _, ligler in FUTBOL_LIGLERI.items():
         for _, kod in ligler.items():
             item_key = f"cb_{kod}"
             if item_key not in st.session_state:
                 st.session_state[item_key] = False
-        grup_durumunu_guncelle(kat, ligler)
-
-
-
-def toggle_group(kat, ligler):
-    group_value = st.session_state[f"group_{kat}"]
-    for _, kod in ligler.items():
-        st.session_state[f"cb_{kod}"] = group_value
-    grup_durumunu_guncelle(kat, ligler)
 
 
 
@@ -1307,8 +1290,6 @@ def set_leagues(selected_codes):
     secili = set(selected_codes)
     for kod in tum_lig_kodlari():
         st.session_state[f"cb_{kod}"] = kod in secili
-    for kat, ligler in FUTBOL_LIGLERI.items():
-        grup_durumunu_guncelle(kat, ligler)
 
 
 
@@ -1381,20 +1362,25 @@ with st.sidebar:
         aktif_sayi = sum(1 for kod in ligler.values() if st.session_state.get(f"cb_{kod}", False))
         baslik = f"{kat} ({aktif_sayi}/{len(ligler)})"
         with st.expander(baslik, expanded=(kat in ["TÜRKİYE", "AVRUPA VALUE"])):
-            g1, g2 = st.columns(2)
+            g1, g2, g3 = st.columns(3)
             with g1:
-                st.checkbox("Tümünü Seç", key=f"group_{kat}", on_change=toggle_group, args=(kat, ligler))
+                if st.button("Tümünü Seç", key=f"select_all_{kat}", use_container_width=True):
+                    for kod in ligler.values():
+                        st.session_state[f"cb_{kod}"] = True
+                    st.rerun()
             with g2:
+                if st.button("Temizle", key=f"clear_{kat}", use_container_width=True):
+                    for kod in ligler.values():
+                        st.session_state[f"cb_{kod}"] = False
+                    st.rerun()
+            with g3:
                 if st.button("Aç/Kapat", key=f"toggle_btn_{kat}", use_container_width=True):
                     hedef = not all(st.session_state.get(f"cb_{kod}", False) for kod in ligler.values())
                     for kod in ligler.values():
                         st.session_state[f"cb_{kod}"] = hedef
-                    grup_durumunu_guncelle(kat, ligler)
+                    st.rerun()
             for isim, kod in ligler.items():
-                once = st.session_state.get(f"cb_{kod}", False)
-                yeni = st.checkbox(isim, key=f"cb_{kod}")
-                if yeni != once:
-                    grup_durumunu_guncelle(kat, ligler)
+                st.checkbox(isim, key=f"cb_{kod}")
                 if st.session_state.get(f"cb_{kod}", False):
                     secili_kodlar.append(kod)
 
