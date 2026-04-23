@@ -24,7 +24,7 @@ def parse_mac_datetime(value):
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 11
+APP_SCHEMA_VERSION = 12
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -431,6 +431,55 @@ section[data-testid="stSidebar"] label {
 .coupon-item {border:1px solid #223c63;background:#0b1628;border-radius:12px;padding:10px 12px;margin-bottom:8px;}
 .coupon-item-top {display:flex;align-items:center;justify-content:space-between;gap:10px;color:#f8fbff;font-size:.86rem;font-weight:700;}
 .coupon-item-sub {color:#8fa0ba;font-size:.74rem;margin-top:5px;}
+
+/* Non-modal coupon popup: sayfayı kilitlemez */
+.st-key-floating_coupon_box {
+    position: fixed !important;
+    right: 22px !important;
+    bottom: 22px !important;
+    width: 360px !important;
+    max-height: 68vh !important;
+    overflow-y: auto !important;
+    z-index: 99999 !important;
+    background: linear-gradient(180deg,#07111f 0%, #0a1830 100%) !important;
+    border: 1px solid #284977 !important;
+    border-radius: 18px !important;
+    box-shadow: 0 18px 45px rgba(2,8,23,.45) !important;
+    padding: 14px 16px !important;
+}
+.st-key-floating_coupon_box * {
+    color: #f8fbff !important;
+}
+.st-key-floating_coupon_box [data-testid="stMarkdownContainer"] p {
+    margin-bottom: 4px !important;
+}
+.st-key-floating_coupon_box button {
+    min-height: 32px !important;
+    padding: 4px 8px !important;
+    font-size: 0.78rem !important;
+}
+.st-key-floating_coupon_box::-webkit-scrollbar {
+    width: 6px;
+}
+.st-key-floating_coupon_box::-webkit-scrollbar-thumb {
+    background: #facc15;
+    border-radius: 99px;
+}
+.st-key-floating_coupon_button {
+    position: fixed !important;
+    right: 22px !important;
+    bottom: 22px !important;
+    z-index: 99999 !important;
+    width: 170px !important;
+}
+.st-key-floating_coupon_button button {
+    border-radius: 999px !important;
+    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
+    border: 1px solid #facc15 !important;
+    color: #f8fbff !important;
+    box-shadow: 0 12px 28px rgba(2,8,23,.35) !important;
+}
+
 
 
 /* === LIGHT PAGE CONTRAST FIXES === */
@@ -2691,13 +2740,9 @@ else:
         yorum_satiri = escape(str(yorum_satiri))
         risk_satiri = escape(str(risk_satiri))
         canli_satiri = escape(str(canli_satiri))
-        ai_comment_html = f"""
-                <div class="ai-inline">
-                  <div class="ai-line"><b>Yorum:</b> {yorum_satiri}</div>
-                  <div class="ai-line"><b>Risk:</b> {risk_satiri}</div>
-                  <div class="ai-line"><b>Canlı:</b> {canli_satiri}</div>
-                </div>
-        """
+        # Ana ekranda uzun AI yorum bloğunu göstermiyoruz.
+        # Detay ekranındaki analiz/yorumlar kalır.
+        ai_comment_html = ""
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
@@ -2802,7 +2847,8 @@ else:
                     st.session_state.coupon_popup_open = True
                 st.rerun()
 
-    if st.session_state.coupon_popup_open:
+    # Sağ alt kupon paneli: modal değil, sayfayı kilitlemez.
+    def normalize_coupon_items():
         normalized_kupona = []
         for k in st.session_state.kupona:
             if isinstance(k, dict):
@@ -2830,7 +2876,15 @@ else:
                 normalized_kupona.append(item)
         st.session_state.kupona = normalized_kupona
 
-        def kupon_dialog_body():
+    normalize_coupon_items()
+
+    if st.session_state.coupon_popup_open:
+        with st.container(key="floating_coupon_box"):
+            st.markdown("""
+            <div class="floating-coupon-title">🎫 Kuponlarım</div>
+            <div class="floating-coupon-sub">Mini panel · sayfayı kilitlemez</div>
+            """, unsafe_allow_html=True)
+
             if not st.session_state.kupona:
                 st.info("Henüz kupona maç eklemedin.")
             else:
@@ -2844,19 +2898,29 @@ else:
                         if item.get("guven", 0)
                         else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
                     )
-                    c1, c2 = st.columns([8, 1])
+
+                    st.markdown(
+                        f"""
+                        <div class="coupon-item">
+                          <div class="coupon-item-top"><span>{escape(mac_ad)}</span><span>{escape(str(durum))}</span></div>
+                          <div class="coupon-item-sub">{escape(alt_satir)}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    c1, c2 = st.columns([5, 1])
                     with c1:
-                        st.markdown(f"**{mac_ad}**  \n{alt_satir}  \n`{durum}`")
+                        st.write("")
                     with c2:
                         if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
                             st.session_state.kupona.pop(del_i)
                             st.session_state.coupon_popup_open = True
                             st.rerun()
 
-                st.markdown("---")
+                st.markdown('<div class="coupon-actions"></div>', unsafe_allow_html=True)
                 b1, b2 = st.columns([1, 1])
                 with b1:
-                    if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_popup", use_container_width=True):
+                    if st.button("🧹 Temizle", key="coupon_clear_inside_popup", use_container_width=True):
                         st.session_state.kupona = []
                         st.session_state.coupon_popup_open = True
                         st.rerun()
@@ -2864,13 +2928,10 @@ else:
                     if st.button("Kapat", key="coupon_close_inside_popup", use_container_width=True):
                         st.session_state.coupon_popup_open = False
                         st.rerun()
-
-        if hasattr(st, "dialog"):
-            @st.dialog("🎫 Kuponlarım")
-            def _kupon_dialog():
-                kupon_dialog_body()
-            _kupon_dialog()
-        else:
-            st.markdown("### 🎫 Kuponlarım")
-            kupon_dialog_body()
+    else:
+        with st.container(key="floating_coupon_button"):
+            adet = len(st.session_state.get("kupona", []))
+            if st.button(f"🎫 Kuponlarım ({adet})", key="coupon_open_floating_button", use_container_width=True):
+                st.session_state.coupon_popup_open = True
+                st.rerun()
 
