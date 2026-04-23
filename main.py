@@ -1,6 +1,7 @@
 
 import math
 from datetime import datetime, timedelta
+from html import escape
 
 import pandas as pd
 import requests
@@ -404,7 +405,27 @@ section[data-testid="stSidebar"] label {
 .api-navy [data-testid="stTextInputRootElement"] > div, .api-navy div[data-baseweb="input"] > div {background:#0d1a2f !important;border-color:#33598c !important;}
 .live-badge {display:inline-block;padding:4px 10px;border-radius:999px;font-size:0.72rem;font-weight:800;letter-spacing:.3px;}
 .detail-header-box {background: linear-gradient(90deg,#07111f 0%, #0a1830 100%);border:1px solid #223c63;border-radius:18px;padding:14px 18px;margin-bottom:12px;}
-.floating-coupon {position:fixed;right:18px;bottom:18px;width:320px;z-index:999;background:linear-gradient(180deg,#07111f 0%, #0a1830 100%);border:1px solid #284977;border-radius:18px;box-shadow:0 18px 40px rgba(2,8,23,.28);padding:14px 16px;}
+.floating-coupon {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    width: 360px;
+    max-height: 70vh;
+    overflow-y: auto;
+    z-index: 9999;
+    background: linear-gradient(180deg,#07111f 0%, #0a1830 100%);
+    border: 1px solid #284977;
+    border-radius: 18px;
+    box-shadow: 0 18px 45px rgba(2,8,23,.45);
+    padding: 14px 16px;
+}
+.floating-coupon::-webkit-scrollbar {
+    width: 6px;
+}
+.floating-coupon::-webkit-scrollbar-thumb {
+    background: #facc15;
+    border-radius: 99px;
+}
 .floating-coupon-title {font-family:"Rajdhani",sans-serif;color:#f8fbff;font-size:1.2rem;font-weight:700;margin-bottom:8px;}
 .floating-coupon-sub {color:#9db2d1;font-size:.76rem;margin-bottom:10px;}
 .coupon-item {border:1px solid #223c63;background:#0b1628;border-radius:12px;padding:10px 12px;margin-bottom:8px;}
@@ -978,42 +999,53 @@ def pct100(v):
 
 
 def skoru_tahmine_uydur(eg, dg, ana_label, ms_mod):
+    ana = str(ana_label)
+    ms_mod = str(ms_mod)
+
+    # Öncelik ana tahmin: Alt / Üst / KG.
+    # Böylece ana tahmin 2.5 Alt iken skor 1-2 gibi çelişkili çıkmaz.
+    if "2.5 Alt" in ana:
+        if ms_mod == "H":
+            return 1, 0
+        elif ms_mod == "A":
+            return 0, 1
+        else:
+            return 1, 1
+
+    if "2.5 Üst" in ana:
+        if ms_mod == "H":
+            return 2, 1
+        elif ms_mod == "A":
+            return 1, 2
+        else:
+            return 2, 2
+
+    if ana == "KG Yok":
+        if ms_mod == "H":
+            return 2, 0
+        elif ms_mod == "A":
+            return 0, 2
+        else:
+            return 0, 0
+
+    if ana == "KG Var":
+        if ms_mod == "H":
+            return 2, 1
+        elif ms_mod == "A":
+            return 1, 2
+        else:
+            return 1, 1
+
     eg = int(eg)
     dg = int(dg)
-    ana = str(ana_label)
 
     if ana == "MS 1" and eg <= dg:
         eg = dg + 1
     elif ana == "MS 2" and dg <= eg:
         dg = eg + 1
     elif ana == "Beraberlik":
-        mx = max(eg, dg)
-        eg = dg = max(0, mx)
-
-    toplam = eg + dg
-    if "2.5 Alt" in ana and toplam >= 3:
-        if ms_mod == "H":
-            eg, dg = 1, 0
-        elif ms_mod == "A":
-            eg, dg = 0, 1
-        else:
-            eg, dg = 1, 1
-    elif "2.5 Üst" in ana and toplam < 3:
-        if ms_mod == "H":
-            eg, dg = 2, 1
-        elif ms_mod == "A":
-            eg, dg = 1, 2
-        else:
-            eg, dg = 2, 2
-
-    if ana == "KG Yok" and eg > 0 and dg > 0:
-        if ms_mod == "A":
-            eg = 0
-        else:
-            dg = 0
-    elif ana == "KG Var":
-        eg = max(1, eg)
-        dg = max(1, dg)
+        mx = max(eg, dg, 1)
+        eg = dg = mx
 
     return eg, dg
 
@@ -2656,6 +2688,9 @@ else:
         combo_text = t.get("combo_label", "")
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
         yorum_satiri, risk_satiri, canli_satiri = ai_kart_yorumlari(t, m)
+        yorum_satiri = escape(str(yorum_satiri))
+        risk_satiri = escape(str(risk_satiri))
+        canli_satiri = escape(str(canli_satiri))
         ai_comment_html = f"""
                 <div class="ai-inline">
                   <div class="ai-line"><b>Yorum:</b> {yorum_satiri}</div>
