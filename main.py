@@ -1357,7 +1357,9 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("<div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Hızlı Lig Filtreleri</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Hızlı Lig Filtreleri</div>
+    """, unsafe_allow_html=True)
 
     p1, p2 = st.columns(2)
     with p1:
