@@ -1511,6 +1511,65 @@ st.markdown("""
     font-size:0.78rem;
     color:#8ea2c7;
 }
+
+/* Sarı scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #f6c90e #0f1a2d;
+}
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+*::-webkit-scrollbar-track {
+    background: #0f1a2d;
+    border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg,#ffd24a 0%, #f6c90e 100%);
+    border-radius: 999px;
+    border: 2px solid #0f1a2d;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg,#ffe27a 0%, #ffd24a 100%);
+}
+
+/* popover ve input tonları */
+div[data-baseweb="popover"] {
+    border: 1px solid #243f68 !important;
+    border-radius: 18px !important;
+    background: linear-gradient(180deg,#07111f 0%, #09172a 100%) !important;
+}
+
+div[data-testid="stPopover"] button,
+div[data-testid="stPopoverButton"] > button {
+    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
+    border: 1px solid #284977 !important;
+    color: #f7fbff !important;
+    min-height: 54px !important;
+    border-radius: 12px !important;
+}
+
+div[data-baseweb="select"] > div,
+div[data-testid="stNumberInput"] div[data-baseweb="input"] > div,
+div[data-testid="stTextInput"] div[data-baseweb="input"] > div,
+div[data-testid="stDateInput"] div[data-baseweb="input"] > div {
+    background: #101a2c !important;
+    border-color: #284977 !important;
+}
+
+.stMultiSelect [data-baseweb="tag"] {
+    background: #ff5a52 !important;
+    color: white !important;
+}
+
+.stSlider [data-baseweb="slider"] [role="slider"] {
+    background: #ffd24a !important;
+    border: 2px solid #ffe27a !important;
+}
+.stSlider [data-baseweb="slider"] > div > div:nth-child(1) {
+    background: #ffd24a !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1538,7 +1597,13 @@ bar1, bar2, bar3, bar4, bar5, bar6 = st.columns([2.6, 2.0, 1.4, 1.8, 1.8, 2.1], 
 with bar1:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Tarih ve Lig Seçimi</div>', unsafe_allow_html=True)
-    with st.popover("⚽ Tarih ve Lig Seçimi", use_container_width=True):
+    secili_tarih = tarih_secimine_gore_date(
+        st.session_state.get('date_mode', 'Bugün'),
+        bugun,
+        st.session_state.get('special_date', bugun)
+    )
+    popover_title = f"⚽ Tarih ve Lig Seçimi · {len(selected_league_codes())} lig seçili · {format_tr_date(secili_tarih)}"
+    with st.popover(popover_title, use_container_width=True):
         left_col, right_col = st.columns([1.0, 3.2], gap='medium')
         with left_col:
             st.markdown('<div class="pop-title">Tarih Seçimi</div>', unsafe_allow_html=True)
@@ -1578,17 +1643,7 @@ with bar1:
                     hedef_col = lcol1 if i % 2 == 0 else lcol2
                     with hedef_col:
                         st.checkbox(lig['label'], key=f"cb_{lig['kod']}")
-            st.markdown(f"<div style='font-size:0.9rem;color:#33d17a;font-weight:700;margin-top:8px'>{len(selected_league_codes())} lig seçili</div>", unsafe_allow_html=True)
-
-    secili_tarih = tarih_secimine_gore_date(
-        st.session_state.get('date_mode', 'Bugün'),
-        bugun,
-        st.session_state.get('special_date', bugun)
-    )
-    st.markdown(
-        f"<div class='league-trigger'><span>⚽ Tarih ve Lig Seçimi</span><span>▾</span></div><div class='league-sub'>{len(selected_league_codes())} lig seçili · {format_tr_date(secili_tarih)}</div>",
-        unsafe_allow_html=True,
-    )
+            st.markdown(f"<div style='font-size:0.9rem;color:#ffd24a;font-weight:700;margin-top:8px'>{len(selected_league_codes())} lig seçili</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 with bar2:
