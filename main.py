@@ -496,7 +496,28 @@ def futbol_veri_motoru(sezonlar):
     if not sezonlar:
         return pd.DataFrame()
 
-    lig_map = ["T1", "E0", "SP1", "D1", "I1", "F1", "N1", "B1", "P1", "SC0"]
+    lig_map = [
+        # TÜRKİYE
+        "T1",
+
+        # İNGİLTERE
+        "E0", "E1", "E2",
+
+        # İSPANYA
+        "SP1", "SP2",
+
+        # ALMANYA
+        "D1", "D2",
+
+        # İTALYA
+        "I1", "I2",
+
+        # FRANSA
+        "F1", "F2",
+
+        # AVRUPA ANA VALUE
+        "N1", "B1", "P1", "SC0",
+    ]
     liste = []
 
     for k in lig_map:
@@ -1169,31 +1190,58 @@ FUTBOL_LIGLERI = {
     },
     "TÜRKİYE": {
         "Süper Lig": "soccer_turkey_super_league",
-        "1. Lig": "soccer_turkey_pTT_1_lig",
-        "Türkiye Kupası": "soccer_turkey_cup",
     },
     "İNGİLTERE": {
         "Premier League": "soccer_epl",
+        "Championship": "soccer_efl_champ",
+        "League 1": "soccer_england_league1",
+        "League 2": "soccer_england_league2",
         "FA Cup": "soccer_fa_cup",
         "EFL Cup": "soccer_england_efl_cup",
     },
     "İSPANYA": {
         "La Liga": "soccer_spain_la_liga",
+        "La Liga 2": "soccer_spain_segunda_division",
         "Copa del Rey": "soccer_spain_copa_del_rey",
     },
     "ALMANYA": {
         "Bundesliga": "soccer_germany_bundesliga",
+        "Bundesliga 2": "soccer_germany_bundesliga2",
         "DFB-Pokal": "soccer_germany_dfb_pokal",
     },
     "İTALYA": {
         "Serie A": "soccer_italy_serie_a",
+        "Serie B": "soccer_italy_serie_b",
         "Coppa Italia": "soccer_italy_coppa_italia",
     },
-    "AVRUPA DİĞER": {
+    "FRANSA": {
+        "Ligue 1": "soccer_france_ligue_one",
+        "Ligue 2": "soccer_france_ligue_two",
+        "Coupe de France": "soccer_france_coupe_de_france",
+    },
+    "AVRUPA VALUE": {
         "Hollanda": "soccer_netherlands_eredivisie",
-        "Belçika": "soccer_belgium_first_division",
+        "Belçika": "soccer_belgium_first_div",
         "Portekiz": "soccer_portugal_primeira_liga",
         "İskoçya": "soccer_spl",
+        "Danimarka": "soccer_denmark_superliga",
+        "Avusturya": "soccer_austria_bundesliga",
+        "İsviçre": "soccer_switzerland_superleague",
+        "İsveç": "soccer_sweden_allsvenskan",
+        "Norveç": "soccer_norway_eliteserien",
+        "Polonya": "soccer_poland_ekstraklasa",
+        "Finlandiya": "soccer_finland_veikkausliiga",
+        "İrlanda": "soccer_league_of_ireland",
+        "Yunanistan": "soccer_greece_super_league",
+    },
+    "DÜNYA VALUE": {
+        "MLS": "soccer_usa_mls",
+        "Brezilya Serie A": "soccer_brazil_campeonato",
+        "Arjantin Primera": "soccer_argentina_primera_division",
+        "Japonya J League": "soccer_japan_j_league",
+        "Meksika Liga MX": "soccer_mexico_ligamx",
+        "Güney Kore K League 1": "soccer_korea_kleague1",
+        "Şili Primera": "soccer_chile_campeonato",
     },
 }
 
