@@ -8,7 +8,7 @@ import streamlit as st
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 9
+APP_SCHEMA_VERSION = 11
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -381,14 +381,20 @@ section[data-testid="stSidebar"] label {
     letter-spacing:.5px;
     margin:8px 0 2px 0;
 }
-.list-subheading {
-    color:#64748b;
-    font-size:.92rem;
-    margin-bottom:14px;
-}
 .stButton > button {
     box-shadow:none;
 }
+.api-navy details {background: linear-gradient(90deg,#07111f 0%, #0a1830 100%);border:1px solid #233e67;border-radius:12px;padding:6px 10px;}
+.api-navy summary {color:#f8fbff;font-weight:700;}
+.api-navy [data-testid="stTextInputRootElement"] > div, .api-navy div[data-baseweb="input"] > div {background:#0d1a2f !important;border-color:#33598c !important;}
+.live-badge {display:inline-block;padding:4px 10px;border-radius:999px;font-size:0.72rem;font-weight:800;letter-spacing:.3px;}
+.detail-header-box {background: linear-gradient(90deg,#07111f 0%, #0a1830 100%);border:1px solid #223c63;border-radius:18px;padding:14px 18px;margin-bottom:12px;}
+.floating-coupon {position:fixed;right:18px;bottom:18px;width:320px;z-index:999;background:linear-gradient(180deg,#07111f 0%, #0a1830 100%);border:1px solid #284977;border-radius:18px;box-shadow:0 18px 40px rgba(2,8,23,.28);padding:14px 16px;}
+.floating-coupon-title {font-family:"Rajdhani",sans-serif;color:#f8fbff;font-size:1.2rem;font-weight:700;margin-bottom:8px;}
+.floating-coupon-sub {color:#9db2d1;font-size:.76rem;margin-bottom:10px;}
+.coupon-item {border:1px solid #223c63;background:#0b1628;border-radius:12px;padding:10px 12px;margin-bottom:8px;}
+.coupon-item-top {display:flex;align-items:center;justify-content:space-between;gap:10px;color:#f8fbff;font-size:.86rem;font-weight:700;}
+.coupon-item-sub {color:#8fa0ba;font-size:.74rem;margin-top:5px;}
 
 </style>
 """, unsafe_allow_html=True)
@@ -1200,6 +1206,7 @@ for key, default in [
     ("detay_idx", None),
     ("filtre", "tumu"),
     ("kupona", []),
+    ("coupon_popup_open", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1420,14 +1427,34 @@ def tarih_secimine_gore_date(secim: str, bugun_tarih, ozel_tarih):
     return ozel_tarih
 
 
+def mac_canli_durumu(mac_zamani):
+    now = datetime.now()
+    if now < mac_zamani:
+        return "Başlamamış"
+    if now <= mac_zamani + timedelta(hours=2, minutes=15):
+        return "Canlı"
+    return "Bitti"
+
+
+def mac_durum_badge(mac_zamani):
+    durum = mac_canli_durumu(mac_zamani)
+    if durum == "Canlı":
+        return "#16a34a", "CANLI"
+    if durum == "Başlamamış":
+        return "#2563eb", "YAKINDA"
+    return "#64748b", "BİTTİ"
+
+
 init_league_states()
 secili_kodlar = []
 
 
 # ÜST KONTROL BAR
 bugun = datetime.now().date()
+st.markdown('<div class="api-navy">', unsafe_allow_html=True)
 with st.expander("🔑 API Ayarları", expanded=False):
     API_KEY = st.text_input("The Odds API Key", type="password", help="The Odds API anahtarını gir.")
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -1695,8 +1722,22 @@ with bar4:
 
 with bar5:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
-    st.markdown('<div class="control-label">Filtre</div>', unsafe_allow_html=True)
-    sadece_oynanabilir = st.checkbox('✅ Sadece oynanabilir maçlar', value=False, key='top_playable')
+    st.markdown('<div class="control-label">Oynanılabilir / Canlı</div>', unsafe_allow_html=True)
+    oynanabilir_esik = st.selectbox(
+        'Oynanılabilir eşik',
+        options=[0, 55, 60, 65, 70, 75],
+        index=2,
+        format_func=lambda x: 'Tümü' if x == 0 else f'Güven ≥ %{x}',
+        label_visibility='collapsed',
+        key='oynanabilir_esik'
+    )
+    canli_filtre = st.selectbox(
+        'Canlı filtre',
+        options=['Tümü', 'Canlı', 'Başlamamış', 'Bitti'],
+        index=0,
+        label_visibility='collapsed',
+        key='canli_filtre'
+    )
     st.markdown('</div>', unsafe_allow_html=True)
 
 secili_kodlar = selected_league_codes()
@@ -1704,6 +1745,9 @@ with bar6:
     st.markdown('<div class="control-card">', unsafe_allow_html=True)
     st.markdown('<div class="control-label">Analiz</div>', unsafe_allow_html=True)
     analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
+    if st.button('🎫 Kuponlarım', use_container_width=True, key='toggle_coupon_popup'):
+        st.session_state.coupon_popup_open = not st.session_state.coupon_popup_open
+        st.rerun()
     if 'son_analiz' in st.session_state:
         st.markdown(
             f"<div class='summary-note'>Son analiz: {st.session_state.son_analiz}<br>Toplam maç: {st.session_state.get('toplam_mac',0)}</div>",
@@ -1779,7 +1823,9 @@ if analiz_btn:
 
                 if sadece_oynanabilir and not t["oynanabilir"]:
                     continue
-                final.append({"m": m.to_dict(), "t": t, "b": b_det})
+                m_dict = m.to_dict()
+                m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
+                final.append({"m": m_dict, "t": t, "b": b_det})
 
         final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0), x["t"].get("ornek", 0)), reverse=True)
         final = sorted(final, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
@@ -1794,7 +1840,9 @@ if st.session_state.detay_idx is not None:
     item = st.session_state.final_list[idx]
     m, t, b_det = item["m"], item["t"], item["b"]
 
-    c1, c2, c3 = st.columns([1, 6, 1])
+    durum_color, durum_text = mac_durum_badge(m["zaman"])
+    st.markdown('<div class="detail-header-box">', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 6, 1.2])
     with c1:
         if st.button("← Geri", key="geri_btn"):
             st.session_state.detay_idx = None
@@ -1802,21 +1850,21 @@ if st.session_state.detay_idx is not None:
     with c2:
         st.markdown(f"""
         <div style="padding:6px 0">
-          <div style="font-family:Rajdhani,sans-serif;font-size:1.8rem;font-weight:700;color:#0b1f3a;letter-spacing:1px">
+          <div style="font-family:Rajdhani,sans-serif;font-size:1.8rem;font-weight:700;color:#f8fbff;letter-spacing:1px">
             {m['ev'].upper()} – {m['dep'].upper()}
           </div>
-          <div style="font-size:0.84rem;color:#64748b;margin-top:4px">
+          <div style="font-size:0.84rem;color:#9db2d1;margin-top:4px">
             {m['lig']} &nbsp;·&nbsp; {format_tr_date(m['zaman'].date())} &nbsp;·&nbsp; {m['zaman'].strftime('%H:%M')}
           </div>
         </div>""", unsafe_allow_html=True)
     with c3:
         st.markdown(
-            f"""<div style="text-align:right;padding-top:10px">
-            <span style="font-size:0.76rem;color:#666">📊 {int(t['ornek'])} örnek</span></div>""",
+            f"""<div style="text-align:right;padding-top:12px">
+            <span class="live-badge" style="background:{durum_color};color:white">{durum_text}</span><br>
+            <span style="font-size:0.76rem;color:#9db2d1;display:inline-block;margin-top:8px">📊 {int(t['ornek'])} örnek</span></div>""",
             unsafe_allow_html=True,
         )
-
-    st.markdown("---")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
 
@@ -1872,7 +1920,7 @@ if st.session_state.detay_idx is not None:
           <div class="tk-title">MAÇ TAHMİNLERİ</div>
 
           <div class="tk-row">
-            <span class="tk-key">🏆 Maç Sonucu <small style="color:#555">MS 1/X/2</small></span>
+            <span class="tk-key">🏆 Maç Sonucu <small style="color:#8fa0ba">MS 1/X/2</small></span>
             <div style="display:flex;gap:18px">
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{int(t['ms1_p'])}</div></div>
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{int(t['msx_p'])}</div></div>
@@ -1881,7 +1929,7 @@ if st.session_state.detay_idx is not None:
           </div>
 
           <div class="tk-row">
-            <span class="tk-key">⚽ 2.5 Üst/Alt <small style="color:#555">Toplam Gol</small></span>
+            <span class="tk-key">⚽ 2.5 Üst/Alt <small style="color:#8fa0ba">Toplam Gol</small></span>
             <div style="display:flex;gap:18px">
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Üst</div><div style="font-weight:700;color:#27ae60">%{int(t['ms25_p'])}</div></div>
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Alt</div><div style="font-weight:700;color:#e74c3c">%{int(t['ms25a_p'])}</div></div>
@@ -1889,7 +1937,7 @@ if st.session_state.detay_idx is not None:
           </div>
 
           <div class="tk-row">
-            <span class="tk-key">🤝 Karşılıklı Gol <small style="color:#555">KG Var / Yok</small></span>
+            <span class="tk-key">🤝 Karşılıklı Gol <small style="color:#8fa0ba">KG Var / Yok</small></span>
             <div style="display:flex;gap:18px">
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Var</div><div style="font-weight:700;color:#27ae60">%{int(t['kg_var_p'])}</div></div>
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Yok</div><div style="font-weight:700;color:#e74c3c">%{int(t['kg_yok_p'])}</div></div>
@@ -1897,7 +1945,7 @@ if st.session_state.detay_idx is not None:
           </div>
 
           <div class="tk-row">
-            <span class="tk-key">⏱ İlk Yarı Sonucu <small style="color:#555">İY 1/X/2</small></span>
+            <span class="tk-key">⏱ İlk Yarı Sonucu <small style="color:#8fa0ba">İY 1/X/2</small></span>
             <div style="display:flex;gap:18px">
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{int(t['iy1_p'])}</div></div>
               <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{int(t['iyx_p'])}</div></div>
@@ -1983,7 +2031,7 @@ if st.session_state.detay_idx is not None:
             <div class="diger-left"><span class="diger-icon">⚡</span><div><div class="diger-name">Canlı Strateji</div><div class="diger-sub">İlk 10-20 dakika</div></div></div>
             <span class="diger-badge db-blue">İzle</span>
           </div>
-          <div style="font-size:0.78rem;color:#aeb5c3;line-height:1.5;padding:10px 0 4px 0;border-bottom:1px solid #1a1d26">{t.get('canli_strateji', '')}</div>
+          <div style="font-size:0.78rem;color:#c7d2e3;line-height:1.5;padding:10px 12px 8px 12px;border-bottom:1px solid #1a1d26;background:#0b1628;border-radius:10px">{t.get('canli_strateji', '')}</div>
 
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
@@ -2124,7 +2172,7 @@ else:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""
     <div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>
-    <div class="list-subheading">Beyaz arka plan + lacivert başlık temasında canlı analiz listesi</div>
+    
     """, unsafe_allow_html=True)
 
     for i, (real_i, item) in enumerate(goster):
@@ -2140,6 +2188,7 @@ else:
             pill_cls = "gri"
 
         combo_text = t.get("combo_label", "")
+        durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
         if combo_text:
@@ -2162,6 +2211,7 @@ else:
             <div class="mac-kart">
               <div class="mk-zaman">
                 <span class="mk-star">☆</span>
+                <div style="margin-bottom:6px"><span class="live-badge" style="background:{durum_bg};color:white">{durum_lbl}</span></div>
                 <div class="mk-saat">{m['zaman'].strftime('%H:%M')}</div>
                 <div class="mk-lig">{m['lig'][:14]}</div>
               </div>
@@ -2211,24 +2261,49 @@ else:
                 st.session_state.detay_idx = real_i
                 st.rerun()
             if st.button("+ Kupona", key=f"k_{real_i}_{i}", use_container_width=True):
-                lbl = f"{m['ev']} vs {m['dep']} — {t['ana_label']}"
-                if lbl not in st.session_state.kupona:
-                    st.session_state.kupona.append(lbl)
+                coupon_item = {
+                    "ev": m["ev"],
+                    "dep": m["dep"],
+                    "lig": m["lig"],
+                    "zaman_iso": m["zaman"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "zaman_text": m["zaman"].strftime("%d.%m %H:%M"),
+                    "tahmin": t["ana_label"],
+                    "guven": int(t["ana_p"]),
+                }
+                mevcutlar = {(x["ev"], x["dep"], x["tahmin"]) for x in st.session_state.kupona}
+                if (coupon_item["ev"], coupon_item["dep"], coupon_item["tahmin"]) not in mevcutlar:
+                    st.session_state.kupona.append(coupon_item)
+                    st.session_state.coupon_popup_open = True
                 st.rerun()
 
-    if st.session_state.kupona:
-        st.markdown("---")
-        rows_html = "".join(
-            f'<div class="tk-row"><span class="tk-key">✅ {k}</span></div>'
-            for k in st.session_state.kupona
-        )
-        st.markdown(f"""
-        <div class="kupon-kart">
-          <div class="tk-title">🎫 Kuponum ({len(st.session_state.kupona)} seçim)</div>
-          {rows_html}
-        </div>
-        """, unsafe_allow_html=True)
+    if st.session_state.coupon_popup_open:
+        if st.session_state.kupona:
+            items_html = ""
+            for k in st.session_state.kupona:
+                mac_dt = datetime.strptime(k["zaman_iso"], "%Y-%m-%d %H:%M:%S")
+                durum = mac_canli_durumu(mac_dt)
+                renk = "#16a34a" if durum == "Canlı" else "#2563eb" if durum == "Başlamamış" else "#64748b"
+                items_html += f"<div class='coupon-item'><div class='coupon-item-top'><span>{k['ev']} - {k['dep']}</span><span class='live-badge' style='background:{renk};color:white'>{durum}</span></div><div class='coupon-item-sub'>{k['lig']} | {k['zaman_text']} | {k['tahmin']} | Güven %{k['guven']}</div></div>"
+            st.markdown(f"""
+            <div class="floating-coupon">
+              <div class="floating-coupon-title">🎫 Kuponlarım</div>
+              <div class="floating-coupon-sub">Kaydettiğin maçları burada takip edebilirsin.</div>
+              {items_html}
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="floating-coupon">
+              <div class="floating-coupon-title">🎫 Kuponlarım</div>
+              <div class="floating-coupon-sub">Henüz kupona maç eklemedin.</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-        if st.button("🗑️ Kuponu Temizle", key="kupon_temizle_btn"):
-            st.session_state.kupona = []
-            st.rerun()
+        cp1, cp2 = st.columns([8, 2])
+        with cp2:
+            if st.button("Popup Kapat", key="kupon_popup_kapat_btn", use_container_width=True):
+                st.session_state.coupon_popup_open = False
+                st.rerun()
+            if st.session_state.kupona and st.button("Kuponu Temizle", key="kupon_temizle_btn", use_container_width=True):
+                st.session_state.kupona = []
+                st.rerun()
