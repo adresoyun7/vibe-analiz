@@ -2065,8 +2065,8 @@ if analiz_btn:
         final = sorted(
             final,
             key=lambda x: (
-                x["t"].get("ana_p", 0),
                 x["t"].get("playable_score", 0),
+                x["t"].get("ana_p", 0),
                 x["t"].get("score", 0),
                 x["t"].get("ornek", 0),
             ),
