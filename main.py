@@ -631,6 +631,53 @@ div[data-testid="stExpander"] * {
 .dark-white-text * {
     color: #f8fbff !important;
 }
+
+/* Historical table title readability */
+.history-card {
+    background:#13151e !important;
+    border:1px solid #1e2130 !important;
+    border-radius:16px !important;
+    padding:16px 22px !important;
+    margin-bottom:0 !important;
+}
+.history-title {
+    color:#f8fbff !important;
+    font-family:'Rajdhani',sans-serif !important;
+    font-size:1.05rem !important;
+    font-weight:800 !important;
+    letter-spacing:1px !important;
+    margin-bottom:6px !important;
+    text-transform:uppercase !important;
+}
+.history-sub {
+    color:#e5e7eb !important;
+    font-size:0.82rem !important;
+    line-height:1.45 !important;
+}
+.ai-comment {
+    margin-top:10px;
+    padding:10px 12px;
+    background:#0b1628;
+    border:1px solid #1f2a44;
+    border-radius:10px;
+}
+.ai-comment-title {
+    color:#8fb3ff;
+    font-size:0.72rem;
+    font-weight:800;
+    letter-spacing:.5px;
+    margin-bottom:5px;
+}
+.ai-comment-text {
+    color:#f8fbff;
+    font-size:0.80rem;
+    line-height:1.45;
+}
+.coupon-actions {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid #223c63;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -899,6 +946,56 @@ def fmt_odd(odd):
     except Exception:
         return ""
 
+
+def pct100(v):
+    try:
+        return max(0, min(100, int(round(float(v)))))
+    except Exception:
+        return 0
+
+
+def ai_yorum_uret(t):
+    ana = t.get("ana_label", "")
+    guven = int(t.get("ana_p", 0))
+    puan = float(t.get("playable_score", guven))
+    ornek = int(t.get("ornek", 0))
+    mac_tipi_txt = t.get("match_type", "")
+    gol_profili = t.get("goal_profile", "")
+    combo = t.get("combo_label", "")
+    canli = t.get("canli_label", "")
+
+    if t.get("belirsiz"):
+        return "Model bu maçta net taraf ayıramıyor. Ana tahmin yerine canlı başlangıç temposunu izlemek daha mantıklı."
+
+    giris = f"Model ana senaryoda {ana} tarafını öne çıkarıyor."
+    if guven >= 70 and puan >= 70:
+        giris += " Güven ve puan birlikte güçlü olduğu için maç öncelikli izlenebilir."
+    elif puan >= 65:
+        giris += " Puan tarafı iyi, ancak güveni de maç temposuyla teyit etmek gerekir."
+    elif guven >= 65:
+        giris += " Güven iyi olsa da puan çok elit değil, kontrollü yaklaşmak daha doğru."
+    else:
+        giris += " Güven orta seviyede, agresif kupon için tek başına güçlü görünmüyor."
+
+    detaylar = []
+    if mac_tipi_txt:
+        detaylar.append(f"maç tipi {mac_tipi_txt.lower()}")
+    if gol_profili:
+        detaylar.append(f"gol profili {gol_profili.lower()}")
+    if combo:
+        detaylar.append(f"kombo desteği: {combo}")
+    if ornek < 8:
+        detaylar.append("örnek sayısı düşük")
+    elif ornek >= 20:
+        detaylar.append("örnek sayısı sağlıklı")
+
+    sonuc = giris
+    if detaylar:
+        sonuc += " " + " · ".join(detaylar).capitalize() + "."
+    if canli:
+        sonuc += f" Canlı plan: {canli}."
+    return sonuc
+
 def build_top3_coupon(indexed_items, mode="best_favorites"):
     candidates = []
 
@@ -978,7 +1075,15 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
         picks = candidates[:3]
 
     return [
-        f"{c['m']['ev']} vs {c['m']['dep']} — {c['t']['ana_label']} ({fmt_odd(c['ana_odd'])})"
+        {
+            "ev": c["m"]["ev"],
+            "dep": c["m"]["dep"],
+            "lig": c["m"]["lig"],
+            "zaman_iso": c["m"]["zaman"].strftime("%Y-%m-%d %H:%M:%S"),
+            "zaman_text": c["m"]["zaman"].strftime("%d.%m %H:%M"),
+            "tahmin": f"{c['t']['ana_label']} ({fmt_odd(c['ana_odd'])})",
+            "guven": int(c["t"].get("ana_p", 0)),
+        }
         for c in picks
     ]
 
@@ -2308,9 +2413,9 @@ if st.session_state.detay_idx is not None:
     """, unsafe_allow_html=True)
 
     st.markdown(f"""
-    <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:16px 22px;margin-bottom:0">
-      <div class="tk-title" style="margin-bottom:4px">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
-      <div style="font-size:0.72rem;color:#666">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
+    <div class="history-card">
+      <div class="history-title">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
+      <div class="history-sub">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2440,6 +2545,8 @@ else:
             pill_cls = "gri"
 
         combo_text = t.get("combo_label", "")
+        skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
+        ai_comment_html = f'<div class="ai-comment"><div class="ai-comment-title">🧠 AI YORUMU</div><div class="ai-comment-text">{ai_yorum_uret(t)}</div></div>'
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
@@ -2479,6 +2586,7 @@ else:
               <div>
                 <div class="mk-label">ANA TAHMİN</div>
                 <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
+                {skor_html}
                 <div style="margin-top:10px">
                   <div class="mk-label">GÜVEN</div>
                   <div class="guven-pct">{int(t['ana_p'])}%</div>
@@ -2579,11 +2687,33 @@ else:
             st.session_state.kupona = normalized_kupona
             st.markdown(f"""
             <div class="floating-coupon">
-              <div class="floating-coupon-title">🎫 Kuponlarım</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div class="floating-coupon-title">🎫 Kuponlarım</div>
+                <div style="font-size:.72rem;color:#ffd24a;font-weight:800">Yönetim altta</div>
+              </div>
               <div class="floating-coupon-sub">Kaydettiğin maçları burada takip edebilirsin.</div>
               {items_html}
+              <div class="coupon-actions">
+                <div style="color:#9db2d1;font-size:.72rem">Tek tek silme ve temizleme butonları popup altında görünür.</div>
+              </div>
             </div>
             """, unsafe_allow_html=True)
+
+            st.markdown("#### 🎫 Kuponlarım Yönetimi")
+            for del_i, del_item in enumerate(st.session_state.kupona):
+                c_del1, c_del2 = st.columns([8, 1])
+                with c_del1:
+                    st.markdown(
+                        f"**{del_item.get('ev','')} - {del_item.get('dep','')}**  ·  {del_item.get('tahmin','-')}  ·  Güven %{int(del_item.get('guven',0)) if del_item.get('guven',0) else '-'}"
+                    )
+                with c_del2:
+                    if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
+                        st.session_state.kupona.pop(del_i)
+                        st.rerun()
+
+            if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_popup", use_container_width=True):
+                st.session_state.kupona = []
+                st.rerun()
         else:
             st.markdown("""
             <div class="floating-coupon">
