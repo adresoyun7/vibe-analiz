@@ -1256,13 +1256,14 @@ def global_ai_tarama(b_df, maclar, limit=80):
                 continue
             if t.get("belirsiz"):
                 continue
-            if t.get("ana_p", 0) < 58:
+            # AI tarama normal ana ekrandan daha esnek çalışır.
+            if t.get("ana_p", 0) < 52:
                 continue
             if t.get("ana_odd") is None:
                 continue
-            if t.get("ornek", 0) < t.get("onerilen_min_mac", 1):
+            if t.get("ornek", 0) < 1:
                 continue
-            if t.get("risk_label") == "YÜKSEK" and t.get("ana_p", 0) < 68:
+            if t.get("risk_label") == "YÜKSEK" and t.get("ana_p", 0) < 64:
                 continue
 
             stabil_bonus = 0
@@ -2902,6 +2903,108 @@ with hc2:
     if fl:
         st.markdown(f"""<div class="mac-badge" style="margin-top:8px">{len(fl)}<span>MAÇ BULUNDU</span></div>""", unsafe_allow_html=True)
 
+
+# ==========================================================
+# AI KUPON BUILDER + 30 GUNLUK KASA TAKIBI
+# Bu panel final_list bos olsa bile gorunur; bulten/gecmis hafizada varsa calisir.
+# ==========================================================
+st.markdown("<br>", unsafe_allow_html=True)
+with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kasa Planı", expanded=True):
+    st.caption("Günün tüm maçlarını tüm hassasiyetlerde tarar. Güvenli / Value / Agresif kupon üretir. Takip manuel: gün, kasa ve hedefi sen girersin.")
+
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        takip_gun = st.number_input("Kaçıncı gün?", min_value=1, max_value=30, value=1, step=1, key="takip_gun_input")
+    with k2:
+        gun_kasa = st.number_input("Güncel kasa (TL)", min_value=0.0, value=1000.0, step=50.0, key="gun_kasa_input")
+    with k3:
+        ay_hedef = st.number_input("Ay sonu hedef (TL)", min_value=1.0, value=100000.0, step=1000.0, key="ay_hedef_input")
+
+    kalan_gun = max(1, 31 - int(takip_gun))
+    st.caption(f"Kalan gün: {kalan_gun} · Not: 1000 TL → 100.000 TL hedefi çok agresiftir; sistem garanti değil, risk kontrollü plan verir.")
+
+    if st.button("🎯 Günün Tüm Maçlarını Tara + AI Kupon + Kasa Planı Oluştur", use_container_width=True, key="ai_kasa_kupon_btn"):
+        gecmis_df = st.session_state.get("last_gecmis_df")
+        bulten_df = st.session_state.get("last_bulten_df")
+
+        if gecmis_df is None or bulten_df is None or getattr(gecmis_df, "empty", True) or getattr(bulten_df, "empty", True):
+            st.warning("Önce üstten API key + lig seçip ANALİZİ BAŞLAT'a bas. Normal liste 0 maç bulsa bile bu panel ham bülteni kullanıp tekrar tarar.")
+        else:
+            with st.spinner("AI tüm maçları 0.00 / 0.02 / 0.05 / 0.08 / 0.10 / 0.12 hassasiyetlerde tarıyor..."):
+                ai_sonuclar = global_ai_tarama(gecmis_df, bulten_df, limit=100)
+
+                guvenli, guvenli_oran = auto_kupon_builder(ai_sonuclar, "guvenli")
+                value, value_oran = auto_kupon_builder(ai_sonuclar, "value")
+                agresif, agresif_oran = auto_kupon_builder(ai_sonuclar, "agresif")
+
+                gun_risk = gun_riski_belirle(ai_sonuclar)
+                plan = gunluk_kasa_plani(gun_kasa, ay_hedef, kalan_gun, gun_risk)
+                dagilim = stake_dagilimi(plan["onerilen_stake"], gun_risk)
+
+                st.session_state.ai_global_sonuclar = ai_sonuclar
+                st.session_state.ai_auto_kuponlar = {
+                    "🟢 Güvenli Kupon": (guvenli, guvenli_oran, dagilim["guvenli"], "guvenli"),
+                    "🟡 Value Kupon": (value, value_oran, dagilim["value"], "value"),
+                    "🔴 Agresif Kupon": (agresif, agresif_oran, dagilim["agresif"], "agresif"),
+                }
+                st.session_state.kasa_plani = plan
+                st.session_state.gun_risk = gun_risk
+            st.rerun()
+
+    if st.session_state.get("kasa_plani"):
+        p = st.session_state.kasa_plani
+        risk = st.session_state.get("gun_risk", "-")
+        risk_text = {"dusuk": "DÜŞÜK", "normal": "NORMAL", "yuksek": "YÜKSEK", "pas": "PAS"}.get(risk, str(risk).upper())
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#07111f,#0a1830);border:1px solid #284977;border-radius:16px;padding:16px 18px;margin:12px 0;color:#f8fbff">
+          <div style="font-family:Rajdhani,sans-serif;font-size:1.3rem;font-weight:800;margin-bottom:8px">🎯 30 Günlük Kasa Planı</div>
+          <div>Gün riski: <b>{risk_text}</b></div>
+          <div>Güncel kasa: <b>{p['kasa']} TL</b> · Hedef: <b>{p['hedef']} TL</b> · Kalan gün: <b>{p['kalan_gun']}</b></div>
+          <div>Hedefe yetişmek için gerekli ortalama günlük büyüme: <b>%{p['gerekli_gunluk_yuzde']}</b></div>
+          <div>Bugün önerilen toplam stake: <b>{p['onerilen_stake']} TL</b> · Kasa riski: <b>%{p['stake_orani']}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if st.session_state.get("ai_auto_kuponlar"):
+        st.markdown("### 🧠 AI Günlük Kupon Önerileri")
+
+        for baslik, (kupon, toplam_oran, stake, mod_key) in st.session_state.ai_auto_kuponlar.items():
+            st.markdown(f"#### {baslik} — Toplam oran: **{toplam_oran}** · Önerilen stake: **{stake} TL**")
+
+            if not kupon:
+                st.warning("Bu mod için yeterince sağlam maç bulunamadı.")
+                continue
+
+            for item in kupon:
+                m = item["mac"]
+                t = item["t"]
+                st.markdown(
+                    f"- **{m.get('ev','')} - {m.get('dep','')}** | "
+                    f"{t.get('ana_label','-')} (**{item['oran']:.2f}**) | "
+                    f"Güven **%{t.get('ana_p',0)}** | "
+                    f"AI Skor **{item.get('final_skor',0)}** | "
+                    f"Tol **{item.get('tolerans')}** | "
+                    f"Skor **{t.get('eg',1)}-{t.get('dg',1)}** | "
+                    f"Risk **{t.get('risk_label','-')}**"
+                )
+
+            if st.button(f"🎫 {baslik} Kupona Aktar", key=f"aktar_{mod_key}", use_container_width=True):
+                st.session_state.kupona = kuponu_session_formatina_cevir(kupon)
+                st.session_state.coupon_popup_open = True
+                st.rerun()
+
+    if st.session_state.get("ai_global_sonuclar"):
+        with st.expander("🔎 AI taramasında en iyi 10 tekil maç"):
+            for item in st.session_state.ai_global_sonuclar[:10]:
+                m = item["mac"]
+                t = item["t"]
+                st.markdown(
+                    f"**{m.get('ev','')} - {m.get('dep','')}** · "
+                    f"{t.get('ana_label','-')} · Güven %{t.get('ana_p',0)} · "
+                    f"Tol {item.get('tolerans')} · AI Skor {item.get('ai_skor')} · "
+                    f"Oran {fmt_odd(t.get('ana_odd'))}"
+                )
+
 if not fl:
     st.markdown("""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
@@ -2948,105 +3051,6 @@ else:
             st.session_state.coupon_popup_open = True
             st.rerun()
 
-
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    with st.expander("🧠 AI Günlük Tarama + 30 Günlük Kasa Planı", expanded=False):
-        st.caption("Günün tüm maçlarını tüm hassasiyetlerde tarar. Sonra güvenli / value / agresif kupon üretir. Garanti kazanç değil; risk kontrollü seçim ve stake planıdır.")
-
-        k1, k2, k3 = st.columns(3)
-        with k1:
-            takip_gun = st.number_input("Kaçıncı gün?", min_value=1, max_value=30, value=1, step=1, key="takip_gun_input")
-        with k2:
-            gun_kasa = st.number_input("Güncel kasa (TL)", min_value=0.0, value=1000.0, step=50.0, key="gun_kasa_input")
-        with k3:
-            ay_hedef = st.number_input("Ay sonu hedef (TL)", min_value=1.0, value=100000.0, step=1000.0, key="ay_hedef_input")
-
-        kalan_gun = max(1, 31 - int(takip_gun))
-        st.caption(f"Kalan gün: {kalan_gun} · Takip manuel yapılır: her gün güncel kasa ve gün numarasını girmen yeterli.")
-
-        if st.button("🎯 Tüm Maçları Tara + AI Kupon + Kasa Planı Oluştur", use_container_width=True, key="ai_kasa_kupon_btn"):
-            gecmis_df = st.session_state.get("last_gecmis_df")
-            bulten_df = st.session_state.get("last_bulten_df")
-
-            if gecmis_df is None or bulten_df is None or getattr(gecmis_df, "empty", True) or getattr(bulten_df, "empty", True):
-                st.warning("Önce üstten normal analizi başlatmalısın. Böylece günün maçları ve geçmiş veri hafızaya alınır.")
-            else:
-                ai_sonuclar = global_ai_tarama(gecmis_df, bulten_df, limit=80)
-
-                guvenli, guvenli_oran = auto_kupon_builder(ai_sonuclar, "guvenli")
-                value, value_oran = auto_kupon_builder(ai_sonuclar, "value")
-                agresif, agresif_oran = auto_kupon_builder(ai_sonuclar, "agresif")
-
-                gun_risk = gun_riski_belirle(ai_sonuclar)
-                plan = gunluk_kasa_plani(gun_kasa, ay_hedef, kalan_gun, gun_risk)
-                dagilim = stake_dagilimi(plan["onerilen_stake"], gun_risk)
-
-                st.session_state.ai_global_sonuclar = ai_sonuclar
-                st.session_state.ai_auto_kuponlar = {
-                    "🟢 Güvenli Kupon": (guvenli, guvenli_oran, dagilim["guvenli"], "guvenli"),
-                    "🟡 Value Kupon": (value, value_oran, dagilim["value"], "value"),
-                    "🔴 Agresif Kupon": (agresif, agresif_oran, dagilim["agresif"], "agresif"),
-                }
-                st.session_state.kasa_plani = plan
-                st.session_state.gun_risk = gun_risk
-                st.rerun()
-
-        if st.session_state.get("kasa_plani"):
-            p = st.session_state.kasa_plani
-            risk = st.session_state.get("gun_risk", "-")
-            risk_text = {"dusuk": "DÜŞÜK", "normal": "NORMAL", "yuksek": "YÜKSEK", "pas": "PAS"}.get(risk, str(risk).upper())
-
-            st.markdown(f"""
-            <div style="background:linear-gradient(135deg,#07111f,#0a1830);border:1px solid #284977;border-radius:16px;padding:16px 18px;margin:12px 0;color:#f8fbff">
-              <div style="font-family:Rajdhani,sans-serif;font-size:1.3rem;font-weight:800;margin-bottom:8px">🎯 30 Günlük Kasa Planı</div>
-              <div>Gün riski: <b>{risk_text}</b></div>
-              <div>Güncel kasa: <b>{p['kasa']} TL</b> · Hedef: <b>{p['hedef']} TL</b> · Kalan gün: <b>{p['kalan_gun']}</b></div>
-              <div>Hedefe yetişmek için gerekli ortalama günlük büyüme: <b>%{p['gerekli_gunluk_yuzde']}</b></div>
-              <div>Bugün önerilen toplam stake: <b>{p['onerilen_stake']} TL</b> · Kasa riski: <b>%{p['stake_orani']}</b></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        if st.session_state.get("ai_auto_kuponlar"):
-            st.markdown("### 🧠 AI Günlük Kupon Önerileri")
-
-            for baslik, (kupon, toplam_oran, stake, mod_key) in st.session_state.ai_auto_kuponlar.items():
-                st.markdown(f"#### {baslik} — Toplam oran: **{toplam_oran}** · Önerilen stake: **{stake} TL**")
-
-                if not kupon:
-                    st.warning("Bu mod için yeterince sağlam maç bulunamadı.")
-                    continue
-
-                for item in kupon:
-                    m = item["mac"]
-                    t = item["t"]
-
-                    st.markdown(
-                        f"- **{m.get('ev','')} - {m.get('dep','')}** | "
-                        f"{t.get('ana_label','-')} (**{item['oran']:.2f}**) | "
-                        f"Güven **%{t.get('ana_p',0)}** | "
-                        f"AI Skor **{item.get('final_skor',0)}** | "
-                        f"Tol **{item.get('tolerans')}** | "
-                        f"Skor **{t.get('eg',1)}-{t.get('dg',1)}** | "
-                        f"Risk **{t.get('risk_label','-')}**"
-                    )
-
-                if st.button(f"🎫 {baslik} Kupona Aktar", key=f"aktar_{mod_key}", use_container_width=True):
-                    st.session_state.kupona = kuponu_session_formatina_cevir(kupon)
-                    st.session_state.coupon_popup_open = True
-                    st.rerun()
-
-        if st.session_state.get("ai_global_sonuclar"):
-            with st.expander("🔎 AI taramasında en iyi 10 tekil maç"):
-                for item in st.session_state.ai_global_sonuclar[:10]:
-                    m = item["mac"]
-                    t = item["t"]
-                    st.markdown(
-                        f"**{m.get('ev','')} - {m.get('dep','')}** · "
-                        f"{t.get('ana_label','-')} · Güven %{t.get('ana_p',0)} · "
-                        f"AI Skor {item.get('ai_skor')} · Tol {item.get('tolerans')} · "
-                        f"Skor {t.get('eg',1)}-{t.get('dg',1)}"
-                    )
 
     filtre = st.session_state.filtre
     if filtre == "yuksek":
