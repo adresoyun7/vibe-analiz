@@ -1935,7 +1935,7 @@ with bar2:
     yillar = st.multiselect(
         'Sezonlar',
         options=['2122', '2223', '2324', '2425', '2526'],
-        default=['2324', '2425', '2526'],
+        default=['2122', '2223', '2324', '2425', '2526'],
         label_visibility='collapsed',
         key='top_seasons'
     )
@@ -2517,7 +2517,20 @@ else:
                     "tahmin": t["ana_label"],
                     "guven": int(t["ana_p"]),
                 }
-                mevcutlar = {(x["ev"], x["dep"], x["tahmin"]) for x in st.session_state.kupona}
+                mevcutlar = set()
+                for x in st.session_state.kupona:
+                    if isinstance(x, dict):
+                        mevcutlar.add((x.get("ev", ""), x.get("dep", ""), x.get("tahmin", "")))
+                    else:
+                        raw_text = str(x)
+                        ev, dep, tahmin = raw_text, "", ""
+                        if " — " in raw_text:
+                            match_text, tahmin = raw_text.split(" — ", 1)
+                            if " vs " in match_text:
+                                ev, dep = [p.strip() for p in match_text.split(" vs ", 1)]
+                            else:
+                                ev = match_text.strip()
+                        mevcutlar.add((ev, dep, tahmin.strip()))
                 if (coupon_item["ev"], coupon_item["dep"], coupon_item["tahmin"]) not in mevcutlar:
                     st.session_state.kupona.append(coupon_item)
                     st.session_state.coupon_popup_open = True
