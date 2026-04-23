@@ -24,7 +24,7 @@ def parse_mac_datetime(value):
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 11
+APP_SCHEMA_VERSION = 16
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3116,11 +3116,25 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
         st.markdown("### 🧠 AI Günlük Kupon Önerileri")
 
         for baslik, (kupon, toplam_oran, stake_info, mod_key) in st.session_state.ai_auto_kuponlar.items():
-            stake = stake_info.get("stake", 0)
-            stake_orani = stake_info.get("stake_orani", 0)
-            hedef_kar = stake_info.get("bugunku_hedef_kar", 0)
-            beklenen_kar = stake_info.get("beklenen_net_kar", 0)
-            limit_mesaji = stake_info.get("limit_mesaji", "")
+            # v6 güvenli okuma: eski session tuple/list ise app patlamasın.
+            if isinstance(stake_info, dict):
+                stake = stake_info.get("stake", 0)
+                stake_orani = stake_info.get("stake_orani", 0)
+                hedef_kar = stake_info.get("bugunku_hedef_kar", 0)
+                beklenen_kar = stake_info.get("beklenen_net_kar", 0)
+                limit_mesaji = stake_info.get("limit_mesaji", "")
+            elif isinstance(stake_info, (list, tuple)):
+                stake = stake_info[0] if len(stake_info) > 0 else 0
+                hedef_kar = stake_info[1] if len(stake_info) > 1 else 0
+                stake_orani = round((float(stake) / max(float(gun_kasa), 1.0)) * 100, 1)
+                beklenen_kar = round(float(stake) * (float(toplam_oran or 1) - 1), 2)
+                limit_mesaji = "Eski stake formatı otomatik düzeltildi. Tekrar butona basarsan yeni formatla hesaplanır."
+            else:
+                stake = 0
+                stake_orani = 0
+                hedef_kar = 0
+                beklenen_kar = 0
+                limit_mesaji = "Stake bilgisi okunamadı. Tekrar kupon oluşturmayı dene."
             st.markdown(f"#### {baslik} — Toplam oran: **{toplam_oran}** · Önerilen stake: **{stake} TL** (%{stake_orani})")
             st.caption(f"Bugünkü hedef kâr: {hedef_kar} TL · Bu kupon kazanırsa net: {beklenen_kar} TL · {limit_mesaji}")
 
