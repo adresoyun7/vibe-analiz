@@ -53,6 +53,39 @@ section[data-testid="stSidebar"] label {
     margin:0;
     letter-spacing:1px;
 }
+/* DETAY ALT BLOKLAR (beyaz olan kısım fix) */
+.diger-kart,
+.combo-kart,
+.canli-kart,
+.strateji-kart,
+.oranlar-kart {
+    background: linear-gradient(135deg,#0f172a,#111827) !important;
+    border: 1px solid #1f2a44 !important;
+    color: #e5e7eb !important;
+}
+.diger-kart {
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    border-radius: 16px;
+}
+/* Yazılar */
+.diger-kart .tk-key,
+.diger-kart div,
+.combo-kart div,
+.canli-kart div {
+    color: #e5e7eb !important;
+}
+
+/* badge sağ taraflar */
+.diger-badge,
+.combo-badge {
+    background: #1e293b !important;
+    color: #facc15 !important;
+}
+
+/* çizgi */
+.diger-row {
+    border-bottom: 1px solid #1f2a44 !important;
+}
 .top-header .sub {
     font-size:0.88rem;
     color:#64748b;
