@@ -19,23 +19,23 @@ st.markdown("""
 
 html, body, [class*="css"] {
     font-family: 'DM Sans', sans-serif;
-    background: #f5f7fb; /* BEYAZ ARKA PLAN */
+    background: #f6f8fc;
     color: #0f172a;
 }
 
-.main .block-container {
-    background: #f5f7fb;
+.stApp {
+    background: linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%);
 }
 section[data-testid="stSidebar"] {
-    background: #111318 !important;
-    border-right: 1px solid #1e2130;
+    background: #eef3fb !important;
+    border-right: 1px solid #d6e0ef;
 }
 section[data-testid="stSidebar"] label {
     font-size: 0.82rem !important;
-    color: #aaa !important;
+    color: #4b5563 !important;
 }
 .main .block-container {
-    background: #0d0f14;
+    background: transparent;
     padding-top: 1.2rem;
     max-width: 1500px;
 }
@@ -49,13 +49,13 @@ section[data-testid="stSidebar"] label {
     font-family:'Rajdhani',sans-serif;
     font-size:1.9rem;
     font-weight:700;
-    color:#fff;
+    color:#0b1f3a;
     margin:0;
     letter-spacing:1px;
 }
 .top-header .sub {
     font-size:0.88rem;
-    color:#7b8291;
+    color:#64748b;
     margin-top:3px;
 }
 .top-filters {
@@ -372,6 +372,24 @@ section[data-testid="stSidebar"] label {
 .neden-item:last-child {
     border-bottom:none;
 }
+
+.list-heading {
+    color:#0b1f3a !important;
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.85rem;
+    font-weight:800;
+    letter-spacing:.5px;
+    margin:8px 0 2px 0;
+}
+.list-subheading {
+    color:#64748b;
+    font-size:.92rem;
+    margin-bottom:14px;
+}
+.stButton > button {
+    box-shadow:none;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1784,10 +1802,10 @@ if st.session_state.detay_idx is not None:
     with c2:
         st.markdown(f"""
         <div style="padding:6px 0">
-          <div style="font-family:Rajdhani,sans-serif;font-size:1.8rem;font-weight:700;color:#fff;letter-spacing:1px">
+          <div style="font-family:Rajdhani,sans-serif;font-size:1.8rem;font-weight:700;color:#0b1f3a;letter-spacing:1px">
             {m['ev'].upper()} – {m['dep'].upper()}
           </div>
-          <div style="font-size:0.84rem;color:#888;margin-top:4px">
+          <div style="font-size:0.84rem;color:#64748b;margin-top:4px">
             {m['lig']} &nbsp;·&nbsp; {format_tr_date(m['zaman'].date())} &nbsp;·&nbsp; {m['zaman'].strftime('%H:%M')}
           </div>
         </div>""", unsafe_allow_html=True)
@@ -2104,6 +2122,10 @@ else:
         goster = indexed_fl
 
     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>
+    <div class="list-subheading">Beyaz arka plan + lacivert başlık temasında canlı analiz listesi</div>
+    """, unsafe_allow_html=True)
 
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
