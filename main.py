@@ -678,6 +678,29 @@ div[data-testid="stExpander"] * {
     padding-top:10px;
     border-top:1px solid #223c63;
 }
+
+.ai-inline {
+    margin-top:10px;
+    padding:10px 12px;
+    background:#0b1628;
+    border:1px solid #1f2a44;
+    border-radius:12px;
+}
+.ai-line {
+    color:#f8fbff;
+    font-size:0.78rem;
+    line-height:1.45;
+    margin:3px 0;
+}
+.ai-line b {
+    color:#ffd24a !important;
+}
+.history-title {
+    color:#f8fbff !important;
+}
+.history-sub {
+    color:#f8fbff !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -945,6 +968,91 @@ def fmt_odd(odd):
         return f"{float(odd):.2f}"
     except Exception:
         return ""
+
+
+def pct100(v):
+    try:
+        return max(0, min(100, int(round(float(v)))))
+    except Exception:
+        return 0
+
+
+def skoru_tahmine_uydur(eg, dg, ana_label, ms_mod):
+    eg = int(eg)
+    dg = int(dg)
+    ana = str(ana_label)
+
+    if ana == "MS 1" and eg <= dg:
+        eg = dg + 1
+    elif ana == "MS 2" and dg <= eg:
+        dg = eg + 1
+    elif ana == "Beraberlik":
+        mx = max(eg, dg)
+        eg = dg = max(0, mx)
+
+    toplam = eg + dg
+    if "2.5 Alt" in ana and toplam >= 3:
+        if ms_mod == "H":
+            eg, dg = 1, 0
+        elif ms_mod == "A":
+            eg, dg = 0, 1
+        else:
+            eg, dg = 1, 1
+    elif "2.5 Üst" in ana and toplam < 3:
+        if ms_mod == "H":
+            eg, dg = 2, 1
+        elif ms_mod == "A":
+            eg, dg = 1, 2
+        else:
+            eg, dg = 2, 2
+
+    if ana == "KG Yok" and eg > 0 and dg > 0:
+        if ms_mod == "A":
+            eg = 0
+        else:
+            dg = 0
+    elif ana == "KG Var":
+        eg = max(1, eg)
+        dg = max(1, dg)
+
+    return eg, dg
+
+
+def ai_kart_yorumlari(t, m):
+    ana = t.get("ana_label", "")
+    guven = int(t.get("ana_p", 0))
+    puan = float(t.get("playable_score", guven))
+    canli = t.get("canli_label", "İlk 15 dk izle")
+
+    if t.get("belirsiz"):
+        yorum = "Model bu maçta net bir yön bulamıyor; ana tahmin tek başına güçlü değil."
+        risk = "Risk yüksek; maç başı tempo ve ilk 10-15 dakika izlenmeli."
+        canlı = "İlk baskı ve şut hacmi oluşmadan giriş yapmak yerine beklemek daha iyi."
+        return yorum, risk, canlı
+
+    if ana in ["MS 1", "MS 2", "Beraberlik"]:
+        taraf = "ev sahibi" if ana == "MS 1" else "deplasman" if ana == "MS 2" else "beraberlik"
+        yorum = f"{taraf.capitalize()} tarafı oran benzerliğinde öne çıkıyor; ana senaryo {ana}."
+    elif "Üst" in ana or "Alt" in ana:
+        yorum = f"Gol marketinde {ana} senaryosu öne çıkıyor; skor beklentisi bu yöne göre dengelendi."
+    elif "KG" in ana:
+        yorum = f"Karşılıklı gol tarafında {ana} modeli daha güçlü görünüyor."
+    else:
+        yorum = f"Model ana senaryoda {ana} tarafını öne çıkarıyor."
+
+    if guven >= 70 and puan >= 70:
+        risk = "Güven ve puan iyi; yine de tek maç riski tamamen kaybolmaz."
+    elif guven >= 60:
+        risk = "Güven orta-iyi seviyede; beraberlik/tempo riski tamamen dışarıda değil."
+    else:
+        risk = "Güven sınırlı; kuponda düşük ağırlıkla değerlendirmek daha mantıklı."
+
+    if "Canlı" in canli or "İzle" in canli:
+        canlı = "İlk 15 dakikada baskı ve tempo oluşursa ana senaryo daha değerli olur."
+    else:
+        canlı = f"Canlı plan: {canli}. İlk 15 dakikadaki tempo mutlaka kontrol edilmeli."
+
+    return yorum, risk, canlı
 
 
 def pct100(v):
@@ -1399,6 +1507,7 @@ def hesapla(b_df, m_row, tolerans):
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
+    eg, dg = skoru_tahmine_uydur(eg, dg, ana_label, ms_mod)
     gc, gb_cls, gb_lbl = guven_renk(ana_p)
     ornek_durum, ornek_renk = guven_metni(sample, float(tolerans))
 
@@ -2091,7 +2200,7 @@ with bar6:
     st.markdown('<div class="control-label">Analiz</div>', unsafe_allow_html=True)
     analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
     if st.button('🎫 Kuponlarım', use_container_width=True, key='toggle_coupon_popup'):
-        st.session_state.coupon_popup_open = not st.session_state.coupon_popup_open
+        st.session_state.coupon_popup_open = True
         st.rerun()
     if 'son_analiz' in st.session_state:
         st.markdown(
@@ -2414,8 +2523,8 @@ if st.session_state.detay_idx is not None:
 
     st.markdown(f"""
     <div class="history-card">
-      <div class="history-title">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
-      <div class="history-sub">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
+      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
+      <div class="history-sub" style="color:#f8fbff !important">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2546,7 +2655,14 @@ else:
 
         combo_text = t.get("combo_label", "")
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
-        ai_comment_html = f'<div class="ai-comment"><div class="ai-comment-title">🧠 AI YORUMU</div><div class="ai-comment-text">{ai_yorum_uret(t)}</div></div>'
+        yorum_satiri, risk_satiri, canli_satiri = ai_kart_yorumlari(t, m)
+        ai_comment_html = f"""
+                <div class="ai-inline">
+                  <div class="ai-line"><b>Yorum:</b> {yorum_satiri}</div>
+                  <div class="ai-line"><b>Risk:</b> {risk_satiri}</div>
+                  <div class="ai-line"><b>Canlı:</b> {canli_satiri}</div>
+                </div>
+        """
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
@@ -2581,6 +2697,7 @@ else:
                 <div class="mk-dep">🟦 {m['dep']}</div>
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
                 {belirsiz_html}
+                {ai_comment_html}
               </div>
 
               <div>
@@ -2651,82 +2768,74 @@ else:
                 st.rerun()
 
     if st.session_state.coupon_popup_open:
-        if st.session_state.kupona:
-            items_html = ""
-            normalized_kupona = []
-            for k in st.session_state.kupona:
-                if isinstance(k, dict):
-                    item = k
-                else:
-                    raw_text = str(k)
-                    item = {
-                        "ev": raw_text,
-                        "dep": "",
-                        "lig": "-",
-                        "zaman_iso": "",
-                        "zaman_text": "-",
-                        "tahmin": "-",
-                        "guven": 0,
-                    }
-                    if " — " in raw_text:
-                        match_text, tahmin_text = raw_text.split(" — ", 1)
-                        item["tahmin"] = tahmin_text.strip()
-                        if " vs " in match_text:
-                            ev, dep = match_text.split(" vs ", 1)
-                            item["ev"] = ev.strip()
-                            item["dep"] = dep.strip()
-                        else:
-                            item["ev"] = match_text.strip()
+        normalized_kupona = []
+        for k in st.session_state.kupona:
+            if isinstance(k, dict):
+                normalized_kupona.append(k)
+            else:
+                raw_text = str(k)
+                item = {
+                    "ev": raw_text,
+                    "dep": "",
+                    "lig": "-",
+                    "zaman_iso": "",
+                    "zaman_text": "-",
+                    "tahmin": "-",
+                    "guven": 0,
+                }
+                if " — " in raw_text:
+                    match_text, tahmin_text = raw_text.split(" — ", 1)
+                    item["tahmin"] = tahmin_text.strip()
+                    if " vs " in match_text:
+                        ev, dep = match_text.split(" vs ", 1)
+                        item["ev"] = ev.strip()
+                        item["dep"] = dep.strip()
+                    else:
+                        item["ev"] = match_text.strip()
                 normalized_kupona.append(item)
-                mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
-                durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
-                renk = "#16a34a" if durum == "Canlı" else "#2563eb" if durum in ["Başlamamış", "Takipte"] else "#64748b"
-                mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
-                alt_satir = f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}" if item.get("guven", 0) else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
-                items_html += f"<div class='coupon-item'><div class='coupon-item-top'><span>{mac_ad}</span><span class='live-badge' style='background:{renk};color:white'>{durum}</span></div><div class='coupon-item-sub'>{alt_satir}</div></div>"
-            st.session_state.kupona = normalized_kupona
-            st.markdown(f"""
-            <div class="floating-coupon">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-                <div class="floating-coupon-title">🎫 Kuponlarım</div>
-                <div style="font-size:.72rem;color:#ffd24a;font-weight:800">Yönetim altta</div>
-              </div>
-              <div class="floating-coupon-sub">Kaydettiğin maçları burada takip edebilirsin.</div>
-              {items_html}
-              <div class="coupon-actions">
-                <div style="color:#9db2d1;font-size:.72rem">Tek tek silme ve temizleme butonları popup altında görünür.</div>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
+        st.session_state.kupona = normalized_kupona
 
-            st.markdown("#### 🎫 Kuponlarım Yönetimi")
-            for del_i, del_item in enumerate(st.session_state.kupona):
-                c_del1, c_del2 = st.columns([8, 1])
-                with c_del1:
-                    st.markdown(
-                        f"**{del_item.get('ev','')} - {del_item.get('dep','')}**  ·  {del_item.get('tahmin','-')}  ·  Güven %{int(del_item.get('guven',0)) if del_item.get('guven',0) else '-'}"
+        def kupon_dialog_body():
+            if not st.session_state.kupona:
+                st.info("Henüz kupona maç eklemedin.")
+            else:
+                for del_i, item in enumerate(list(st.session_state.kupona)):
+                    mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
+                    durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
+                    mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
+                    alt_satir = (
+                        f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
+                        f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}"
+                        if item.get("guven", 0)
+                        else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
                     )
-                with c_del2:
-                    if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
-                        st.session_state.kupona.pop(del_i)
+                    c1, c2 = st.columns([8, 1])
+                    with c1:
+                        st.markdown(f"**{mac_ad}**  \n{alt_satir}  \n`{durum}`")
+                    with c2:
+                        if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
+                            st.session_state.kupona.pop(del_i)
+                            st.session_state.coupon_popup_open = True
+                            st.rerun()
+
+                st.markdown("---")
+                b1, b2 = st.columns([1, 1])
+                with b1:
+                    if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_popup", use_container_width=True):
+                        st.session_state.kupona = []
+                        st.session_state.coupon_popup_open = True
+                        st.rerun()
+                with b2:
+                    if st.button("Kapat", key="coupon_close_inside_popup", use_container_width=True):
+                        st.session_state.coupon_popup_open = False
                         st.rerun()
 
-            if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_popup", use_container_width=True):
-                st.session_state.kupona = []
-                st.rerun()
+        if hasattr(st, "dialog"):
+            @st.dialog("🎫 Kuponlarım")
+            def _kupon_dialog():
+                kupon_dialog_body()
+            _kupon_dialog()
         else:
-            st.markdown("""
-            <div class="floating-coupon">
-              <div class="floating-coupon-title">🎫 Kuponlarım</div>
-              <div class="floating-coupon-sub">Henüz kupona maç eklemedin.</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("### 🎫 Kuponlarım")
+            kupon_dialog_body()
 
-        cp1, cp2 = st.columns([8, 2])
-        with cp2:
-            if st.button("Popup Kapat", key="kupon_popup_kapat_btn", use_container_width=True):
-                st.session_state.coupon_popup_open = False
-                st.rerun()
-            if st.session_state.kupona and st.button("Kuponu Temizle", key="kupon_temizle_btn", use_container_width=True):
-                st.session_state.kupona = []
-                st.rerun()
