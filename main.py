@@ -24,7 +24,7 @@ def parse_mac_datetime(value):
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 12
+APP_SCHEMA_VERSION = 11
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -431,55 +431,6 @@ section[data-testid="stSidebar"] label {
 .coupon-item {border:1px solid #223c63;background:#0b1628;border-radius:12px;padding:10px 12px;margin-bottom:8px;}
 .coupon-item-top {display:flex;align-items:center;justify-content:space-between;gap:10px;color:#f8fbff;font-size:.86rem;font-weight:700;}
 .coupon-item-sub {color:#8fa0ba;font-size:.74rem;margin-top:5px;}
-
-/* Non-modal coupon popup: sayfayı kilitlemez */
-.st-key-floating_coupon_box {
-    position: fixed !important;
-    right: 22px !important;
-    bottom: 22px !important;
-    width: 360px !important;
-    max-height: 68vh !important;
-    overflow-y: auto !important;
-    z-index: 99999 !important;
-    background: linear-gradient(180deg,#07111f 0%, #0a1830 100%) !important;
-    border: 1px solid #284977 !important;
-    border-radius: 18px !important;
-    box-shadow: 0 18px 45px rgba(2,8,23,.45) !important;
-    padding: 14px 16px !important;
-}
-.st-key-floating_coupon_box * {
-    color: #f8fbff !important;
-}
-.st-key-floating_coupon_box [data-testid="stMarkdownContainer"] p {
-    margin-bottom: 4px !important;
-}
-.st-key-floating_coupon_box button {
-    min-height: 32px !important;
-    padding: 4px 8px !important;
-    font-size: 0.78rem !important;
-}
-.st-key-floating_coupon_box::-webkit-scrollbar {
-    width: 6px;
-}
-.st-key-floating_coupon_box::-webkit-scrollbar-thumb {
-    background: #facc15;
-    border-radius: 99px;
-}
-.st-key-floating_coupon_button {
-    position: fixed !important;
-    right: 22px !important;
-    bottom: 22px !important;
-    z-index: 99999 !important;
-    width: 170px !important;
-}
-.st-key-floating_coupon_button button {
-    border-radius: 999px !important;
-    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
-    border: 1px solid #facc15 !important;
-    color: #f8fbff !important;
-    box-shadow: 0 12px 28px rgba(2,8,23,.35) !important;
-}
-
 
 
 /* === LIGHT PAGE CONTRAST FIXES === */
@@ -1277,6 +1228,286 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
     ]
 
 
+
+
+# ==========================================================
+# AI GUNLUK TARAMA + AUTO KUPON BUILDER + KASA PLANI
+# ==========================================================
+
+def global_ai_tarama(b_df, maclar, limit=80):
+    TOLERANSLAR = [0.00, 0.02, 0.05, 0.08, 0.10, 0.12]
+    tum_sonuclar = []
+
+    if b_df is None or maclar is None:
+        return []
+    if getattr(b_df, "empty", True) or getattr(maclar, "empty", True):
+        return []
+
+    for _, m in maclar.iterrows():
+        en_iyi = None
+
+        for tol in TOLERANSLAR:
+            try:
+                t, b_det = hesapla(b_df, m, tol)
+            except Exception:
+                continue
+
+            if not t:
+                continue
+            if t.get("belirsiz"):
+                continue
+            if t.get("ana_p", 0) < 58:
+                continue
+            if t.get("ana_odd") is None:
+                continue
+            if t.get("ornek", 0) < t.get("onerilen_min_mac", 1):
+                continue
+            if t.get("risk_label") == "YÜKSEK" and t.get("ana_p", 0) < 68:
+                continue
+
+            stabil_bonus = 0
+            for stab_tol in TOLERANSLAR:
+                try:
+                    st_t, _ = hesapla(b_df, m, stab_tol)
+                    if (
+                        st_t
+                        and st_t.get("ana_label") == t.get("ana_label")
+                        and st_t.get("ornek", 0) >= st_t.get("onerilen_min_mac", 1)
+                    ):
+                        stabil_bonus += 1
+                except Exception:
+                    pass
+
+            ai_skor = (
+                float(t.get("playable_score", 0))
+                + float(t.get("ana_p", 0)) * 0.20
+                + min(float(t.get("ornek", 0)), 30) * 0.15
+                + stabil_bonus * 1.6
+                - (6 if t.get("fake_drop") else 0)
+                - (5 if t.get("risk_label") == "YÜKSEK" else 0)
+            )
+
+            if en_iyi is None or ai_skor > en_iyi["ai_skor"]:
+                m_dict = m.to_dict()
+                m_dict["durum"] = mac_canli_durumu(m_dict.get("zaman"))
+                en_iyi = {
+                    "mac": m_dict,
+                    "t": t,
+                    "b": b_det,
+                    "tolerans": tol,
+                    "ai_skor": round(ai_skor, 1),
+                    "stabil_bonus": stabil_bonus,
+                }
+
+        if en_iyi:
+            tum_sonuclar.append(en_iyi)
+
+    tum_sonuclar.sort(key=lambda x: x["ai_skor"], reverse=True)
+    return tum_sonuclar[:limit]
+
+
+def auto_kupon_builder(ai_sonuclar, mod="guvenli"):
+    ayarlar = {
+        "guvenli": {
+            "mac_sayisi": 3,
+            "min_guven": 65,
+            "max_market": 1,
+            "max_lig": 1,
+            "oran_agirlik": 0.10,
+            "risk_cezasi": 8,
+        },
+        "value": {
+            "mac_sayisi": 3,
+            "min_guven": 60,
+            "max_market": 2,
+            "max_lig": 1,
+            "oran_agirlik": 0.35,
+            "risk_cezasi": 5,
+        },
+        "agresif": {
+            "mac_sayisi": 4,
+            "min_guven": 58,
+            "max_market": 2,
+            "max_lig": 2,
+            "oran_agirlik": 0.60,
+            "risk_cezasi": 3,
+        },
+    }
+
+    cfg = ayarlar.get(mod, ayarlar["guvenli"])
+    adaylar = []
+
+    for item in ai_sonuclar or []:
+        m = item.get("mac", {})
+        t = item.get("t", {})
+
+        if t.get("belirsiz"):
+            continue
+        if t.get("ana_p", 0) < cfg["min_guven"]:
+            continue
+        if t.get("ana_odd") is None:
+            continue
+        if t.get("risk_label") == "YÜKSEK" and mod == "guvenli":
+            continue
+
+        try:
+            oran = float(t.get("ana_odd", 1.0))
+        except Exception:
+            continue
+
+        if mod == "guvenli" and oran < 1.20:
+            continue
+        if mod != "agresif" and oran > 3.50:
+            continue
+
+        final_skor = (
+            float(item.get("ai_skor", t.get("playable_score", 0)))
+            + oran * 10 * cfg["oran_agirlik"]
+            + min(int(t.get("ornek", 0)), 25) * 0.08
+            - (cfg["risk_cezasi"] if t.get("risk_label") == "YÜKSEK" else 0)
+        )
+
+        adaylar.append({
+            "mac": m,
+            "t": t,
+            "oran": oran,
+            "market": t.get("ana_label", ""),
+            "lig": m.get("lig", ""),
+            "tolerans": item.get("tolerans"),
+            "final_skor": round(final_skor, 1),
+        })
+
+    adaylar.sort(key=lambda x: x["final_skor"], reverse=True)
+
+    secilen = []
+    market_say = {}
+    lig_say = {}
+
+    for aday in adaylar:
+        market = aday["market"]
+        lig = aday["lig"]
+
+        cok_guclu = (
+            aday["t"].get("ana_p", 0) >= 75
+            and aday["t"].get("playable_score", 0) >= 75
+            and aday["t"].get("risk_label") != "YÜKSEK"
+        )
+
+        max_market = cfg["max_market"] + (1 if cok_guclu and mod != "guvenli" else 0)
+        max_lig = cfg["max_lig"] + (1 if cok_guclu and mod == "agresif" else 0)
+
+        if market_say.get(market, 0) >= max_market:
+            continue
+        if lig_say.get(lig, 0) >= max_lig:
+            continue
+
+        secilen.append(aday)
+        market_say[market] = market_say.get(market, 0) + 1
+        lig_say[lig] = lig_say.get(lig, 0) + 1
+
+        if len(secilen) >= cfg["mac_sayisi"]:
+            break
+
+    toplam_oran = 1.0
+    for s_item in secilen:
+        toplam_oran *= float(s_item.get("oran", 1.0))
+
+    return secilen, round(toplam_oran, 2)
+
+
+def gun_riski_belirle(ai_sonuclar):
+    guclu = [
+        x for x in (ai_sonuclar or [])
+        if x.get("t", {}).get("ana_p", 0) >= 70
+        and x.get("t", {}).get("risk_label") != "YÜKSEK"
+    ]
+    orta = [
+        x for x in (ai_sonuclar or [])
+        if x.get("t", {}).get("ana_p", 0) >= 62
+        and x.get("t", {}).get("risk_label") != "YÜKSEK"
+    ]
+
+    if len(guclu) >= 5:
+        return "dusuk"
+    if len(guclu) >= 3 or len(orta) >= 5:
+        return "normal"
+    if len(orta) >= 2:
+        return "yuksek"
+    return "pas"
+
+
+def gunluk_kasa_plani(kasa, hedef=100000, kalan_gun=30, gun_risk="normal"):
+    kasa = max(float(kasa), 0.0)
+    hedef = max(float(hedef), 1.0)
+    kalan_gun = max(int(kalan_gun), 1)
+
+    if kasa <= 0:
+        gerekli_yuzde = 0
+    else:
+        gerekli_carpan = (hedef / kasa) ** (1 / kalan_gun)
+        gerekli_yuzde = (gerekli_carpan - 1) * 100
+
+    risk_oranlari = {
+        "dusuk": 0.12,
+        "normal": 0.07,
+        "yuksek": 0.035,
+        "pas": 0.00,
+    }
+
+    stake_orani = risk_oranlari.get(gun_risk, 0.05)
+
+    return {
+        "kasa": round(kasa, 2),
+        "hedef": round(hedef, 2),
+        "kalan_gun": kalan_gun,
+        "gerekli_gunluk_yuzde": round(gerekli_yuzde, 2),
+        "onerilen_stake": round(kasa * stake_orani, 2),
+        "stake_orani": round(stake_orani * 100, 1),
+    }
+
+
+def stake_dagilimi(toplam_stake, gun_risk):
+    toplam_stake = max(float(toplam_stake), 0.0)
+
+    if gun_risk == "dusuk":
+        oranlar = {"guvenli": 0.60, "value": 0.30, "agresif": 0.10}
+    elif gun_risk == "normal":
+        oranlar = {"guvenli": 0.70, "value": 0.25, "agresif": 0.05}
+    elif gun_risk == "yuksek":
+        oranlar = {"guvenli": 1.00, "value": 0.00, "agresif": 0.00}
+    else:
+        oranlar = {"guvenli": 0.00, "value": 0.00, "agresif": 0.00}
+
+    return {k: round(toplam_stake * v, 2) for k, v in oranlar.items()}
+
+
+def kuponu_session_formatina_cevir(kupon):
+    sonuc = []
+
+    for item in kupon or []:
+        m = item.get("mac", {})
+        t = item.get("t", {})
+        z = m.get("zaman")
+
+        try:
+            zaman_iso = z.strftime("%Y-%m-%d %H:%M:%S")
+            zaman_text = z.strftime("%d.%m %H:%M")
+        except Exception:
+            zaman_iso = ""
+            zaman_text = "-"
+
+        sonuc.append({
+            "ev": m.get("ev", ""),
+            "dep": m.get("dep", ""),
+            "lig": m.get("lig", ""),
+            "zaman_iso": zaman_iso,
+            "zaman_text": zaman_text,
+            "tahmin": f"{t.get('ana_label', '-')} ({fmt_odd(item.get('oran'))})",
+            "guven": int(t.get("ana_p", 0)),
+        })
+
+    return sonuc
+
 def market_label_to_odd(m_row, label):
     if not isinstance(m_row, dict):
         try:
@@ -1738,6 +1969,12 @@ for key, default in [
     ("filtre", "tumu"),
     ("kupona", []),
     ("coupon_popup_open", False),
+    ("last_gecmis_df", None),
+    ("last_bulten_df", None),
+    ("ai_global_sonuclar", []),
+    ("ai_auto_kuponlar", None),
+    ("kasa_plani", None),
+    ("gun_risk", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -2309,6 +2546,8 @@ if analiz_btn:
         with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
+            st.session_state.last_gecmis_df = gecmis
+            st.session_state.last_bulten_df = bulten
 
         final = []
         stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
@@ -2709,6 +2948,106 @@ else:
             st.session_state.coupon_popup_open = True
             st.rerun()
 
+
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("🧠 AI Günlük Tarama + 30 Günlük Kasa Planı", expanded=False):
+        st.caption("Günün tüm maçlarını tüm hassasiyetlerde tarar. Sonra güvenli / value / agresif kupon üretir. Garanti kazanç değil; risk kontrollü seçim ve stake planıdır.")
+
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            takip_gun = st.number_input("Kaçıncı gün?", min_value=1, max_value=30, value=1, step=1, key="takip_gun_input")
+        with k2:
+            gun_kasa = st.number_input("Güncel kasa (TL)", min_value=0.0, value=1000.0, step=50.0, key="gun_kasa_input")
+        with k3:
+            ay_hedef = st.number_input("Ay sonu hedef (TL)", min_value=1.0, value=100000.0, step=1000.0, key="ay_hedef_input")
+
+        kalan_gun = max(1, 31 - int(takip_gun))
+        st.caption(f"Kalan gün: {kalan_gun} · Takip manuel yapılır: her gün güncel kasa ve gün numarasını girmen yeterli.")
+
+        if st.button("🎯 Tüm Maçları Tara + AI Kupon + Kasa Planı Oluştur", use_container_width=True, key="ai_kasa_kupon_btn"):
+            gecmis_df = st.session_state.get("last_gecmis_df")
+            bulten_df = st.session_state.get("last_bulten_df")
+
+            if gecmis_df is None or bulten_df is None or getattr(gecmis_df, "empty", True) or getattr(bulten_df, "empty", True):
+                st.warning("Önce üstten normal analizi başlatmalısın. Böylece günün maçları ve geçmiş veri hafızaya alınır.")
+            else:
+                ai_sonuclar = global_ai_tarama(gecmis_df, bulten_df, limit=80)
+
+                guvenli, guvenli_oran = auto_kupon_builder(ai_sonuclar, "guvenli")
+                value, value_oran = auto_kupon_builder(ai_sonuclar, "value")
+                agresif, agresif_oran = auto_kupon_builder(ai_sonuclar, "agresif")
+
+                gun_risk = gun_riski_belirle(ai_sonuclar)
+                plan = gunluk_kasa_plani(gun_kasa, ay_hedef, kalan_gun, gun_risk)
+                dagilim = stake_dagilimi(plan["onerilen_stake"], gun_risk)
+
+                st.session_state.ai_global_sonuclar = ai_sonuclar
+                st.session_state.ai_auto_kuponlar = {
+                    "🟢 Güvenli Kupon": (guvenli, guvenli_oran, dagilim["guvenli"], "guvenli"),
+                    "🟡 Value Kupon": (value, value_oran, dagilim["value"], "value"),
+                    "🔴 Agresif Kupon": (agresif, agresif_oran, dagilim["agresif"], "agresif"),
+                }
+                st.session_state.kasa_plani = plan
+                st.session_state.gun_risk = gun_risk
+                st.rerun()
+
+        if st.session_state.get("kasa_plani"):
+            p = st.session_state.kasa_plani
+            risk = st.session_state.get("gun_risk", "-")
+            risk_text = {"dusuk": "DÜŞÜK", "normal": "NORMAL", "yuksek": "YÜKSEK", "pas": "PAS"}.get(risk, str(risk).upper())
+
+            st.markdown(f"""
+            <div style="background:linear-gradient(135deg,#07111f,#0a1830);border:1px solid #284977;border-radius:16px;padding:16px 18px;margin:12px 0;color:#f8fbff">
+              <div style="font-family:Rajdhani,sans-serif;font-size:1.3rem;font-weight:800;margin-bottom:8px">🎯 30 Günlük Kasa Planı</div>
+              <div>Gün riski: <b>{risk_text}</b></div>
+              <div>Güncel kasa: <b>{p['kasa']} TL</b> · Hedef: <b>{p['hedef']} TL</b> · Kalan gün: <b>{p['kalan_gun']}</b></div>
+              <div>Hedefe yetişmek için gerekli ortalama günlük büyüme: <b>%{p['gerekli_gunluk_yuzde']}</b></div>
+              <div>Bugün önerilen toplam stake: <b>{p['onerilen_stake']} TL</b> · Kasa riski: <b>%{p['stake_orani']}</b></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        if st.session_state.get("ai_auto_kuponlar"):
+            st.markdown("### 🧠 AI Günlük Kupon Önerileri")
+
+            for baslik, (kupon, toplam_oran, stake, mod_key) in st.session_state.ai_auto_kuponlar.items():
+                st.markdown(f"#### {baslik} — Toplam oran: **{toplam_oran}** · Önerilen stake: **{stake} TL**")
+
+                if not kupon:
+                    st.warning("Bu mod için yeterince sağlam maç bulunamadı.")
+                    continue
+
+                for item in kupon:
+                    m = item["mac"]
+                    t = item["t"]
+
+                    st.markdown(
+                        f"- **{m.get('ev','')} - {m.get('dep','')}** | "
+                        f"{t.get('ana_label','-')} (**{item['oran']:.2f}**) | "
+                        f"Güven **%{t.get('ana_p',0)}** | "
+                        f"AI Skor **{item.get('final_skor',0)}** | "
+                        f"Tol **{item.get('tolerans')}** | "
+                        f"Skor **{t.get('eg',1)}-{t.get('dg',1)}** | "
+                        f"Risk **{t.get('risk_label','-')}**"
+                    )
+
+                if st.button(f"🎫 {baslik} Kupona Aktar", key=f"aktar_{mod_key}", use_container_width=True):
+                    st.session_state.kupona = kuponu_session_formatina_cevir(kupon)
+                    st.session_state.coupon_popup_open = True
+                    st.rerun()
+
+        if st.session_state.get("ai_global_sonuclar"):
+            with st.expander("🔎 AI taramasında en iyi 10 tekil maç"):
+                for item in st.session_state.ai_global_sonuclar[:10]:
+                    m = item["mac"]
+                    t = item["t"]
+                    st.markdown(
+                        f"**{m.get('ev','')} - {m.get('dep','')}** · "
+                        f"{t.get('ana_label','-')} · Güven %{t.get('ana_p',0)} · "
+                        f"AI Skor {item.get('ai_skor')} · Tol {item.get('tolerans')} · "
+                        f"Skor {t.get('eg',1)}-{t.get('dg',1)}"
+                    )
+
     filtre = st.session_state.filtre
     if filtre == "yuksek":
         goster = sorted(yuksek, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
@@ -2740,9 +3079,13 @@ else:
         yorum_satiri = escape(str(yorum_satiri))
         risk_satiri = escape(str(risk_satiri))
         canli_satiri = escape(str(canli_satiri))
-        # Ana ekranda uzun AI yorum bloğunu göstermiyoruz.
-        # Detay ekranındaki analiz/yorumlar kalır.
-        ai_comment_html = ""
+        ai_comment_html = f"""
+                <div class="ai-inline">
+                  <div class="ai-line"><b>Yorum:</b> {yorum_satiri}</div>
+                  <div class="ai-line"><b>Risk:</b> {risk_satiri}</div>
+                  <div class="ai-line"><b>Canlı:</b> {canli_satiri}</div>
+                </div>
+        """
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
@@ -2847,8 +3190,7 @@ else:
                     st.session_state.coupon_popup_open = True
                 st.rerun()
 
-    # Sağ alt kupon paneli: modal değil, sayfayı kilitlemez.
-    def normalize_coupon_items():
+    if st.session_state.coupon_popup_open:
         normalized_kupona = []
         for k in st.session_state.kupona:
             if isinstance(k, dict):
@@ -2876,15 +3218,7 @@ else:
                 normalized_kupona.append(item)
         st.session_state.kupona = normalized_kupona
 
-    normalize_coupon_items()
-
-    if st.session_state.coupon_popup_open:
-        with st.container(key="floating_coupon_box"):
-            st.markdown("""
-            <div class="floating-coupon-title">🎫 Kuponlarım</div>
-            <div class="floating-coupon-sub">Mini panel · sayfayı kilitlemez</div>
-            """, unsafe_allow_html=True)
-
+        def kupon_dialog_body():
             if not st.session_state.kupona:
                 st.info("Henüz kupona maç eklemedin.")
             else:
@@ -2898,29 +3232,19 @@ else:
                         if item.get("guven", 0)
                         else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
                     )
-
-                    st.markdown(
-                        f"""
-                        <div class="coupon-item">
-                          <div class="coupon-item-top"><span>{escape(mac_ad)}</span><span>{escape(str(durum))}</span></div>
-                          <div class="coupon-item-sub">{escape(alt_satir)}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                    c1, c2 = st.columns([5, 1])
+                    c1, c2 = st.columns([8, 1])
                     with c1:
-                        st.write("")
+                        st.markdown(f"**{mac_ad}**  \n{alt_satir}  \n`{durum}`")
                     with c2:
                         if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
                             st.session_state.kupona.pop(del_i)
                             st.session_state.coupon_popup_open = True
                             st.rerun()
 
-                st.markdown('<div class="coupon-actions"></div>', unsafe_allow_html=True)
+                st.markdown("---")
                 b1, b2 = st.columns([1, 1])
                 with b1:
-                    if st.button("🧹 Temizle", key="coupon_clear_inside_popup", use_container_width=True):
+                    if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_popup", use_container_width=True):
                         st.session_state.kupona = []
                         st.session_state.coupon_popup_open = True
                         st.rerun()
@@ -2928,10 +3252,13 @@ else:
                     if st.button("Kapat", key="coupon_close_inside_popup", use_container_width=True):
                         st.session_state.coupon_popup_open = False
                         st.rerun()
-    else:
-        with st.container(key="floating_coupon_button"):
-            adet = len(st.session_state.get("kupona", []))
-            if st.button(f"🎫 Kuponlarım ({adet})", key="coupon_open_floating_button", use_container_width=True):
-                st.session_state.coupon_popup_open = True
-                st.rerun()
+
+        if hasattr(st, "dialog"):
+            @st.dialog("🎫 Kuponlarım")
+            def _kupon_dialog():
+                kupon_dialog_body()
+            _kupon_dialog()
+        else:
+            st.markdown("### 🎫 Kuponlarım")
+            kupon_dialog_body()
 
