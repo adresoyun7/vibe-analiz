@@ -1188,6 +1188,7 @@ def hesapla(b_df, m_row, tolerans):
         "match_type": match_type,
         "nedenler": nedenler,
         "oynanabilir": oynanabilir,
+        "oynanabilir_esik_ok": (ana_p >= 55),
         "fake_drop": fake_drop,
         "score": score,
         "stability_tols": [],
@@ -1821,7 +1822,7 @@ if analiz_btn:
                     1
                 )
 
-                if sadece_oynanabilir and not t["oynanabilir"]:
+                if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
                     continue
                 m_dict = m.to_dict()
                 m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
