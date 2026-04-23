@@ -625,6 +625,12 @@ div[data-testid="stExpander"] * {
 .neden-kart [style*="color:#666"] {
     color: #9db2d1 !important;
 }
+
+/* Extra readability for historical-match section and dark boxes */
+.dark-white-text,
+.dark-white-text * {
+    color: #f8fbff !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2419,10 +2425,7 @@ else:
         goster = indexed_fl
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("""
-    <div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>
-    
-    """, unsafe_allow_html=True)
+    st.markdown("""<div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>""", unsafe_allow_html=True)
 
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
@@ -2440,6 +2443,7 @@ else:
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
+        skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
         if combo_text:
             combo_level = t.get("combo_level", "")
             level_text = f' · {combo_level}' if combo_level else ''
