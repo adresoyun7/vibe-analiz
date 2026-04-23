@@ -1584,25 +1584,29 @@ def filtrelenmis_lig_listesi(arama_text: str):
 KARLI_LIG_PRESETLERI = {
     "cekirdek": [
         "soccer_epl",
+        "soccer_efl_champ",
         "soccer_spain_la_liga",
-        "soccer_germany_bundesliga",
+        "soccer_spain_segunda_division",
         "soccer_italy_serie_a",
+        "soccer_germany_bundesliga",
+        "soccer_germany_bundesliga2",
         "soccer_france_ligue_one",
+        "soccer_turkey_super_league",
+        "soccer_netherlands_eredivisie",
+        "soccer_norway_eliteserien",
+        "soccer_usa_mls",
+        "soccer_switzerland_superleague",
         "soccer_uefa_champs_league",
         "soccer_uefa_europa_league",
         "soccer_uefa_europa_conference_league",
     ],
     "value": [
-        "soccer_netherlands_eredivisie",
         "soccer_portugal_primeira_liga",
-        "soccer_denmark_superliga",
         "soccer_belgium_first_div",
-        "soccer_switzerland_superleague",
         "soccer_austria_bundesliga",
-        "soccer_norway_eliteserien",
+        "soccer_denmark_superliga",
         "soccer_sweden_allsvenskan",
-        "soccer_usa_mls",
-        "soccer_japan_j_league",
+        "soccer_finland_veikkausliiga",
     ],
 }
 
@@ -2058,7 +2062,16 @@ if analiz_btn:
                 final.append({"m": m_dict, "t": t, "b": b_det})
 
         final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0), x["t"].get("ornek", 0)), reverse=True)
-        final = sorted(final, key=lambda x: x["t"].get("playable_score", x["t"].get("ana_p", 0)), reverse=True)
+        final = sorted(
+            final,
+            key=lambda x: (
+                x["t"].get("ana_p", 0),
+                x["t"].get("playable_score", 0),
+                x["t"].get("score", 0),
+                x["t"].get("ornek", 0),
+            ),
+            reverse=True,
+        )
         st.session_state.final_list = final
         st.session_state.detay_idx = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
