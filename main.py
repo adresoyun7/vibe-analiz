@@ -1536,6 +1536,10 @@ def gun_riski_belirle(ai_sonuclar):
 
 
 def gunluk_kasa_plani(kasa, hedef=100000, kalan_gun=30, gun_risk="normal"):
+    """
+    Genel hedef planı. Bu fonksiyon artık tek toplam stake dağıtmaz.
+    Her kuponun stake'i, kendi toplam oranına göre ayrıca hesaplanır.
+    """
     kasa = max(float(kasa), 1.0)
     hedef = max(float(hedef), kasa)
     kalan_gun = max(int(kalan_gun), 1)
@@ -1543,40 +1547,8 @@ def gunluk_kasa_plani(kasa, hedef=100000, kalan_gun=30, gun_risk="normal"):
     hedef_acigi = max(hedef - kasa, 0.0)
     gerekli_carpan = (hedef / kasa) ** (1 / kalan_gun)
     gerekli_yuzde = (gerekli_carpan - 1) * 100
-
-    # Hedef baskısı: hedefe ne kadar uzaksa stake oranı o kadar artar.
-    # Böylece gün/kasa/hedef değişince önerilen stake gerçekten değişir.
-    if gerekli_yuzde <= 2:
-        hedef_stake_orani = 0.03
-    elif gerekli_yuzde <= 5:
-        hedef_stake_orani = 0.06
-    elif gerekli_yuzde <= 10:
-        hedef_stake_orani = 0.10
-    elif gerekli_yuzde <= 18:
-        hedef_stake_orani = 0.16
-    elif gerekli_yuzde <= 30:
-        hedef_stake_orani = 0.24
-    else:
-        hedef_stake_orani = 0.35
-
-    risk_carpan = {
-        "dusuk": 1.20,
-        "normal": 1.00,
-        "yuksek": 0.00,   # riskliyse pas
-        "pas": 0.00,
-    }.get(gun_risk, 1.00)
-
-    stake_orani = hedef_stake_orani * risk_carpan
-
-    # Güvenlik limitleri
-    if gun_risk in ["yuksek", "pas"]:
-        stake_orani = 0.0
-    elif gun_risk == "normal":
-        stake_orani = min(stake_orani, 0.18)
-    elif gun_risk == "dusuk":
-        stake_orani = min(stake_orani, 0.25)
-
-    stake = kasa * stake_orani
+    bugunku_hedef_kasa = kasa * gerekli_carpan
+    bugunku_hedef_kar = max(bugunku_hedef_kasa - kasa, 0.0)
 
     return {
         "kasa": round(kasa, 2),
@@ -1584,25 +1556,64 @@ def gunluk_kasa_plani(kasa, hedef=100000, kalan_gun=30, gun_risk="normal"):
         "kalan_gun": kalan_gun,
         "hedef_acigi": round(hedef_acigi, 2),
         "gerekli_gunluk_yuzde": round(gerekli_yuzde, 2),
-        "onerilen_stake": round(stake, 2),
-        "stake_orani": round(stake_orani * 100, 1),
+        "bugunku_hedef_kasa": round(bugunku_hedef_kasa, 2),
+        "bugunku_hedef_kar": round(bugunku_hedef_kar, 2),
+        "onerilen_stake": 0.0,
+        "stake_orani": 0.0,
     }
 
-def stake_dagilimi(toplam_stake, gun_risk):
-    toplam_stake = max(float(toplam_stake), 0.0)
 
-    if gun_risk == "dusuk":
-        oranlar = {"guvenli": 0.25, "value": 0.45, "agresif": 0.30}
-    elif gun_risk == "normal":
-        oranlar = {"guvenli": 0.20, "value": 0.55, "agresif": 0.25}
-    elif gun_risk == "yuksek":
-        oranlar = {"guvenli": 0.00, "value": 0.00, "agresif": 0.00}
+def kupon_stake_hesapla(kasa, hedef, kalan_gun, toplam_oran, gun_risk, mod="value"):
+    """
+    3 yolun da hedefi aynı: ay sonu hedef.
+    Ama oran düşükse stake yüksek, oran yüksekse stake düşük çıkar.
+    """
+    kasa = max(float(kasa), 1.0)
+    hedef = max(float(hedef), kasa)
+    kalan_gun = max(int(kalan_gun), 1)
+    toplam_oran = max(float(toplam_oran or 1.0), 1.01)
+
+    if gun_risk in ["yuksek", "pas"]:
+        return {
+            "stake": 0.0,
+            "stake_orani": 0.0,
+            "bugunku_hedef_kar": 0.0,
+            "beklenen_net_kar": 0.0,
+            "limit_mesaji": "Gün riskli olduğu için pas.",
+        }
+
+    gerekli_carpan = (hedef / kasa) ** (1 / kalan_gun)
+    bugunku_hedef_kasa = kasa * gerekli_carpan
+    bugunku_hedef_kar = max(bugunku_hedef_kasa - kasa, 0.0)
+    teorik_stake = bugunku_hedef_kar / (toplam_oran - 1)
+
+    risk_limitleri = {
+        "dusuk":  {"guvenli": 0.30, "value": 0.18, "agresif": 0.08},
+        "normal": {"guvenli": 0.22, "value": 0.12, "agresif": 0.05},
+    }
+    max_oran = risk_limitleri.get(gun_risk, risk_limitleri["normal"]).get(mod, 0.10)
+    max_stake = kasa * max_oran
+
+    stake = min(teorik_stake, max_stake)
+    stake = max(stake, 0.0)
+    beklenen_net_kar = stake * (toplam_oran - 1)
+
+    if teorik_stake > max_stake:
+        limit_mesaji = "Hedef için gereken stake risk limitini aştı; limitli önerildi."
     else:
-        oranlar = {"guvenli": 0.00, "value": 0.00, "agresif": 0.00}
+        limit_mesaji = "Bu kupon oranıyla günlük hedef kâr teorik olarak yakalanabilir."
 
-    return {k: round(toplam_stake * v, 2) for k, v in oranlar.items()}
+    return {
+        "stake": round(stake, 2),
+        "stake_orani": round((stake / kasa) * 100, 1),
+        "bugunku_hedef_kar": round(bugunku_hedef_kar, 2),
+        "beklenen_net_kar": round(beklenen_net_kar, 2),
+        "limit_mesaji": limit_mesaji,
+    }
 
 
+def stake_dagilimi(toplam_stake, gun_risk):
+    return {"guvenli": 0.0, "value": 0.0, "agresif": 0.0}
 def kuponu_session_formatina_cevir(kupon):
     sonuc = []
 
@@ -3056,7 +3067,6 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
 
                 gun_risk = gun_riski_belirle(ai_sonuclar)
                 plan = gunluk_kasa_plani(gun_kasa, ay_hedef, kalan_gun, gun_risk)
-                dagilim = stake_dagilimi(plan["onerilen_stake"], gun_risk)
 
                 st.session_state.ai_global_sonuclar = ai_sonuclar
                 st.session_state.kasa_plani = plan
@@ -3070,11 +3080,16 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
                     guvenli, guvenli_oran = paketler["guvenli"]
                     value, value_oran = paketler["value"]
                     agresif, agresif_oran = paketler["agresif"]
+
+                    guvenli_stake = kupon_stake_hesapla(gun_kasa, ay_hedef, kalan_gun, guvenli_oran, gun_risk, "guvenli")
+                    value_stake = kupon_stake_hesapla(gun_kasa, ay_hedef, kalan_gun, value_oran, gun_risk, "value")
+                    agresif_stake = kupon_stake_hesapla(gun_kasa, ay_hedef, kalan_gun, agresif_oran, gun_risk, "agresif")
+
                     st.session_state.ai_pas_mesaji = ""
                     st.session_state.ai_auto_kuponlar = {
-                        "🟢 Güvenli Kupon": (guvenli, guvenli_oran, dagilim["guvenli"], "guvenli"),
-                        "🟡 Value Kupon": (value, value_oran, dagilim["value"], "value"),
-                        "🔴 Agresif Kupon": (agresif, agresif_oran, dagilim["agresif"], "agresif"),
+                        "🟢 Güvenli Yol": (guvenli, guvenli_oran, guvenli_stake, "guvenli"),
+                        "🟡 Value Yol": (value, value_oran, value_stake, "value"),
+                        "🔴 Agresif Yol": (agresif, agresif_oran, agresif_stake, "agresif"),
                     }
             st.rerun()
 
@@ -3089,7 +3104,8 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
           <div>Güncel kasa: <b>{p['kasa']} TL</b> · Hedef: <b>{p['hedef']} TL</b> · Kalan gün: <b>{p['kalan_gun']}</b></div>
           <div>Hedef açığı: <b>{p.get('hedef_acigi', 0)} TL</b></div>
           <div>Hedefe yetişmek için gerekli ortalama günlük büyüme: <b>%{p['gerekli_gunluk_yuzde']}</b></div>
-          <div>Bugün önerilen toplam stake: <b>{p['onerilen_stake']} TL</b> · Kasa riski: <b>%{p['stake_orani']}</b></div>
+          <div>Bugünkü hedef kasa: <b>{p.get('bugunku_hedef_kasa', 0)} TL</b> · Bugünkü hedef kâr: <b>{p.get('bugunku_hedef_kar', 0)} TL</b></div>
+          <div style="color:#9db2d1;margin-top:4px">Stake artık kupon oranına göre ayrı hesaplanır: güvenli düşük oran = daha yüksek stake, agresif yüksek oran = daha düşük stake.</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -3099,8 +3115,14 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
     if st.session_state.get("ai_auto_kuponlar"):
         st.markdown("### 🧠 AI Günlük Kupon Önerileri")
 
-        for baslik, (kupon, toplam_oran, stake, mod_key) in st.session_state.ai_auto_kuponlar.items():
-            st.markdown(f"#### {baslik} — Toplam oran: **{toplam_oran}** · Önerilen stake: **{stake} TL**")
+        for baslik, (kupon, toplam_oran, stake_info, mod_key) in st.session_state.ai_auto_kuponlar.items():
+            stake = stake_info.get("stake", 0)
+            stake_orani = stake_info.get("stake_orani", 0)
+            hedef_kar = stake_info.get("bugunku_hedef_kar", 0)
+            beklenen_kar = stake_info.get("beklenen_net_kar", 0)
+            limit_mesaji = stake_info.get("limit_mesaji", "")
+            st.markdown(f"#### {baslik} — Toplam oran: **{toplam_oran}** · Önerilen stake: **{stake} TL** (%{stake_orani})")
+            st.caption(f"Bugünkü hedef kâr: {hedef_kar} TL · Bu kupon kazanırsa net: {beklenen_kar} TL · {limit_mesaji}")
 
             if not kupon:
                 st.warning("Bu mod için yeterince sağlam maç bulunamadı.")
