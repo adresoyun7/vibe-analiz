@@ -19,8 +19,12 @@ st.markdown("""
 
 html, body, [class*="css"] {
     font-family: 'DM Sans', sans-serif;
-    background: #0d0f14;
-    color: #fff;
+    background: #f5f7fb; /* BEYAZ ARKA PLAN */
+    color: #0f172a;
+}
+
+.main .block-container {
+    background: #f5f7fb;
 }
 section[data-testid="stSidebar"] {
     background: #111318 !important;
