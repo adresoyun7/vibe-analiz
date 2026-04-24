@@ -1304,7 +1304,6 @@ def global_ai_tarama(b_df, maclar, limit=120):
             if tol_ceza:
                 t["ana_p"] = max(1, int(t.get("ana_p", 0) - tol_ceza))
                 t["playable_score"] = max(1, float(t.get("playable_score", 0)) - tol_ceza)
-
             # Düşük tolerans bonusu
             if tol_key <= 0.04:
                 t["ana_p"] = min(100, int(t.get("ana_p", 0) + 3))
@@ -1454,16 +1453,49 @@ def ai_sonuclari_excel_buffer(ai_sonuclar, paketler=None):
     return buffer
 
 
+
 def top10_market_cesitli(ai_sonuclar, limit=10):
-    # Top 10 tekil maç da sadece ana tolerans bandından gelsin.
+    """
+    AI Top 10 sadece 0.00 - 0.10 aralığından gelir.
+    0.00 en güçlü, 0.05 denge, 0.10 normal kabul edilir.
+    Tolerans yükseldikçe sıralama skoru ve güven algısı bilinçli düşürülür.
+    """
     ANA_TOLERANSLAR = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
+
+    def tol_float(item):
+        try:
+            return round(float(item.get("tolerans", 0)), 2)
+        except Exception:
+            return 0.30
+
+    def top10_skor(item):
+        tol = tol_float(item)
+        base = float(item.get("ai_skor", 0) or 0)
+
+        # 0.00 iyi, 0.05 denge, 0.10 normal.
+        # Tolerans genişledikçe Top 10 sıralama avantajı azalır.
+        if tol == 0.00:
+            tol_bonus = 15
+        elif tol <= 0.02:
+            tol_bonus = 12
+        elif tol <= 0.04:
+            tol_bonus = 9
+        elif tol <= 0.06:
+            tol_bonus = 5
+        elif tol <= 0.08:
+            tol_bonus = 1
+        else:  # 0.10
+            tol_bonus = -5
+
+        return base + tol_bonus
 
     secilen = []
     market_say = {}
     lig_say = {}
 
-    for item in sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True):
-        if item.get("tolerans") not in ANA_TOLERANSLAR:
+    for item in sorted(ai_sonuclar or [], key=top10_skor, reverse=True):
+        tol = tol_float(item)
+        if tol not in ANA_TOLERANSLAR or tol > 0.10:
             continue
 
         t = item.get("t", {})
@@ -1471,7 +1503,7 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
         market = t.get("ana_label", "-")
         lig = m.get("lig", "-")
 
-        # Sadece MS'e yığılmasın: aynı ana marketten maksimum 2.
+        # Sadece MS veya tek market spam olmasın.
         if market_say.get(market, 0) >= 2:
             continue
 
@@ -1486,11 +1518,12 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
         if len(secilen) >= limit:
             break
 
-    # Çeşitlilik yüzünden 10'a tamamlanmazsa yine ana tolerans bandından AI skora göre tamamla.
+    # Çeşitlilik yüzünden 10'a tamamlanmazsa yine 0.00 - 0.10 içinden tamamla.
     if len(secilen) < limit:
         used = {mac_key(x.get("mac", {})) for x in secilen}
-        for item in sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True):
-            if item.get("tolerans") not in ANA_TOLERANSLAR:
+        for item in sorted(ai_sonuclar or [], key=top10_skor, reverse=True):
+            tol = tol_float(item)
+            if tol not in ANA_TOLERANSLAR or tol > 0.10:
                 continue
             if mac_key(item.get("mac", {})) in used:
                 continue
@@ -1499,6 +1532,25 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
                 break
 
     return secilen
+
+
+def tolerans_label(tol):
+    try:
+        tol = round(float(tol), 2)
+    except Exception:
+        tol = 0.30
+
+    if tol == 0.00:
+        return "🔥 0.00 Ultra Net"
+    if tol <= 0.04:
+        return "✅ Çok İyi"
+    if tol <= 0.06:
+        return "⚖️ Dengeli"
+    if tol <= 0.08:
+        return "👍 Normal"
+    if tol <= 0.10:
+        return "⚠️ Geniş / Güven Düşük"
+    return "❌ Sadece Arka Plan"
 
 def ai_sonuclarini_toleransa_gore_filtrele(ai_sonuclar, secilen_tolerans):
     """AI Otomatik dışında seçilen tolerans için aynı maçların o toleranstaki sonucunu gösterir."""
@@ -3555,7 +3607,7 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
                 st.markdown(
                     f"**{m.get('ev','')} - {m.get('dep','')}** · "
                     f"{t.get('ana_label','-')} · Güven %{t.get('ana_p',0)} · "
-                    f"Tol {item.get('tolerans')} · AI Skor {item.get('ai_skor')} · "
+                    f"{tolerans_label(item.get('tolerans'))} · Tol {item.get('tolerans')} · AI Skor {item.get('ai_skor')} · "
                     f"Oran {fmt_odd(t.get('ana_odd'))}"
                 )
 
