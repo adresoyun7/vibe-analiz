@@ -1238,7 +1238,7 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
 def global_ai_tarama(b_df, maclar, limit=120):
     """
     Tüm maçları 0.00 - 0.30 arası çoklu oran hassasiyetiyle tek seferde tarar.
-    Ana AI seçim/kupon/top10 sadece 0.00 / 0.03 / 0.05 / 0.08 / 0.10 bandından yapılır.
+    Ana AI seçim/kupon/top10 sadece 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 bandından yapılır.
     0.12 - 0.30 sonuçları arka plan ve Excel/diagnostic için tutulur.
     Tolerans büyüdükçe güven ve playable_score bilinçli düşürülür.
     0.00 toleransta minimum 3 örnek yeterlidir; 3-4 örnekte sahte güven kırılır.
@@ -1306,12 +1306,12 @@ def global_ai_tarama(b_df, maclar, limit=120):
                 t["playable_score"] = max(1, float(t.get("playable_score", 0)) - tol_ceza)
 
             # Düşük tolerans bonusu
-if tol_key <= 0.04:
-    t["ana_p"] = min(100, int(t.get("ana_p", 0) + 3))
-    t["playable_score"] = min(100, float(t.get("playable_score", 0)) + 3)
-elif tol_key <= 0.06:
-    t["ana_p"] = min(100, int(t.get("ana_p", 0) + 1))
-    t["playable_score"] = min(100, float(t.get("playable_score", 0)) + 1)
+            if tol_key <= 0.04:
+                t["ana_p"] = min(100, int(t.get("ana_p", 0) + 3))
+                t["playable_score"] = min(100, float(t.get("playable_score", 0)) + 3)
+            elif tol_key <= 0.06:
+                t["ana_p"] = min(100, int(t.get("ana_p", 0) + 1))
+                t["playable_score"] = min(100, float(t.get("playable_score", 0)) + 1)
     
             # Ceza sonrası temel kalite filtresi.
             if t.get("ana_p", 0) < 52:
@@ -1366,7 +1366,7 @@ elif tol_key <= 0.06:
             }
             tolerans_sonuclari.append(sonuc)
 
-            # Ana seçim yalnızca 0.00 / 0.03 / 0.05 / 0.08 / 0.10 içinden yapılsın.
+            # Ana seçim yalnızca 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 içinden yapılsın.
             if tol in ANA_TOLERANSLAR and (en_iyi is None or ai_skor > en_iyi["ai_skor"]):
                 m_dict = m.to_dict()
                 m_dict["durum"] = mac_canli_durumu(m_dict.get("zaman"))
