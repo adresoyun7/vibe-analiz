@@ -121,6 +121,119 @@ def premium_legal_notice():
     )
 
 
+def legal_sidebar_sections():
+    """Sidebar içinde disclaimer, kullanım şartları, premium satış metni ve pricing alanı."""
+    payment_url = str(get_secret_value("PREMIUM_PAYMENT_URL", "")).strip()
+
+    with st.sidebar:
+        st.markdown("---")
+
+        with st.expander("⚖️ Disclaimer", expanded=False):
+            st.markdown("""
+Bu platform yalnızca **istatistiksel analiz** ve **yapay zekâ destekli tahminler** sunar.
+
+Sunulan içerikler kesinlik içermez ve yatırım tavsiyesi değildir.
+
+Kullanıcılar kendi kararlarını kendileri verir. Bu platform üzerinden doğrudan bahis oynanmaz ve herhangi bir bahis hizmeti sunulmaz.
+
+**Bahis oynamak risk içerir ve maddi kayıplara yol açabilir.**
+            """)
+
+        with st.expander("📜 Kullanım Şartları", expanded=False):
+            st.markdown("""
+**1. Hizmet Tanımı**  
+Bu platform, spor karşılaşmalarına ilişkin istatistiksel analizler ve yapay zekâ destekli tahminler sunar.
+
+**2. Sorumluluk Reddi**  
+Platformda yer alan hiçbir içerik kesin kazanç garantisi vermez. Kullanıcılar, elde ettikleri verileri kendi riskleri doğrultusunda değerlendirir.
+
+**3. Bahis Hizmeti Sunulmaması**  
+Bu platform bir bahis sitesi değildir. Kullanıcılara doğrudan bahis oynama imkânı sunulmaz ve herhangi bir bahis kuruluşu ile resmi bir bağlantısı bulunmaz.
+
+**4. Kullanıcı Sorumluluğu**  
+Kullanıcılar, platformu kullanırken yürürlükteki yasalara uymakla yükümlüdür.
+
+**5. Hizmet Değişikliği**  
+Platform, hizmet içeriğini önceden bildirmeksizin değiştirme hakkını saklı tutar.
+            """)
+
+        with st.expander("🚀 Premium Satış Metni", expanded=False):
+            st.markdown("""
+### Vibe Analiz Pro
+
+Maçlara sıradan bakmayı bırak.  
+**Veri + Yapay Zekâ** ile analiz edilen maçları keşfet.
+
+✔ Gelişmiş AI analiz sistemi  
+✔ Yüksek güven skorlu maçlar  
+✔ Otomatik kupon oluşturma  
+✔ Güvenli / Value / Agresif stratejiler  
+✔ Detaylı maç yorumları ve senaryolar
+
+🎯 Amaç: Rastgele karar vermek yerine veriye dayalı karar vermek.
+
+⚠️ Premium üyelik kesin kazanç garantisi vermez; daha fazla analiz ve veri erişimi sağlar.
+            """)
+            if payment_url and not is_premium():
+                st.link_button("🚀 Premium'a Geç", payment_url, use_container_width=True)
+
+        with st.expander("💎 Pricing / Planlar", expanded=False):
+            st.markdown("""
+**Free Plan**
+- Günlük sınırlı analiz
+- Temel tahminler
+- Sınırlı maç erişimi
+
+**Premium Plan**
+- Sınırsız analiz
+- Tüm uygun maçlara erişim
+- AI destekli detaylı yorumlar
+- Otomatik kupon oluşturma
+- Yüksek güven skorlu maçlar
+
+💎 Veriye dayalı analiz yapanlar daha bilinçli karar verir.
+            """)
+
+
+def premium_sales_banner():
+    """Ana ekranda kısa premium satış/pricing kartı."""
+    if is_premium():
+        return
+
+    payment_url = str(get_secret_value("PREMIUM_PAYMENT_URL", "")).strip()
+
+    st.markdown("""
+    <div style="background:linear-gradient(135deg,#07111f,#0b1f3a);border:1px solid #284977;border-radius:18px;padding:18px 20px;margin:12px 0 16px 0;color:#f8fafc;">
+        <div style="font-size:1.15rem;font-weight:800;color:#facc15;margin-bottom:6px;">🚀 Vibe Analiz Pro</div>
+        <div style="font-size:0.92rem;color:#dbeafe;line-height:1.55;">
+            Sınırsız analiz, tüm uygun maçlar, AI detay yorumları ve otomatik kupon stratejileri.
+            Premium üyelik kesin kazanç garantisi vermez; daha fazla veri ve analiz erişimi sağlar.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+            <span style="background:#102340;border:1px solid #2c7be5;border-radius:999px;padding:5px 10px;font-size:0.78rem;">Free: sınırlı analiz</span>
+            <span style="background:#153b25;border:1px solid #1f8d53;border-radius:999px;padding:5px 10px;font-size:0.78rem;">Premium: tam erişim</span>
+            <span style="background:#37290f;border:1px solid #facc15;border-radius:999px;padding:5px 10px;font-size:0.78rem;color:#facc15;">AI + Kupon Stratejileri</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if payment_url:
+        st.link_button("🚀 Premium Satın Al", payment_url, use_container_width=True)
+
+
+def legal_footer():
+    """Sayfanın en altında kısa hukuki footer."""
+    st.markdown("""
+    ---
+    <div style="text-align:center;font-size:12px;color:#64748b;line-height:1.55;padding:10px 0 4px 0;">
+        <b>Yasal Uyarı:</b> Bu platform yalnızca istatistiksel analiz ve yapay zekâ destekli tahminler sunar.<br>
+        Kesin kazanç garantisi verilmez. Kullanıcılar kararlarını kendi sorumluluğunda verir.<br>
+        Bu platform üzerinden doğrudan bahis oynanmaz. Bahis oynamak risk içerir ve maddi kayıplara yol açabilir.
+    </div>
+    """, unsafe_allow_html=True)
+
+
+
 APP_SCHEMA_VERSION = 17
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
@@ -823,7 +936,9 @@ div[data-testid="stExpander"] * {
 """, unsafe_allow_html=True)
 
 login_panel()
+legal_sidebar_sections()
 premium_legal_notice()
+premium_sales_banner()
 
 
 def format_tr_date(d):
@@ -4032,3 +4147,4 @@ else:
                     st.session_state.coupon_popup_open = False
                     st.rerun()
 
+legal_footer()
