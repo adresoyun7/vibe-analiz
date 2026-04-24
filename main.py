@@ -1,4 +1,5 @@
 
+import io
 import math
 from datetime import datetime, timedelta
 from html import escape
@@ -24,7 +25,7 @@ def parse_mac_datetime(value):
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
-APP_SCHEMA_VERSION = 16
+APP_SCHEMA_VERSION = 17
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1234,8 +1235,12 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
 # AI GUNLUK TARAMA + AUTO KUPON BUILDER + KASA PLANI
 # ==========================================================
 
-def global_ai_tarama(b_df, maclar, limit=80):
-    TOLERANSLAR = [0.00, 0.02, 0.05, 0.08, 0.10, 0.12]
+def global_ai_tarama(b_df, maclar, limit=120):
+    """
+    Tüm maçları 0.00 - 0.30 arası çoklu oran hassasiyetiyle tek seferde tarar.
+    Her maç için en yüksek AI skor veren toleransı seçer.
+    """
+    TOLERANSLAR = [0.00, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30]
     tum_sonuclar = []
 
     if b_df is None or maclar is None:
@@ -1245,6 +1250,7 @@ def global_ai_tarama(b_df, maclar, limit=80):
 
     for _, m in maclar.iterrows():
         en_iyi = None
+        tolerans_sonuclari = []
 
         for tol in TOLERANSLAR:
             try:
@@ -1256,7 +1262,6 @@ def global_ai_tarama(b_df, maclar, limit=80):
                 continue
             if t.get("belirsiz"):
                 continue
-            # AI tarama normal ana ekrandan daha esnek çalışır.
             if t.get("ana_p", 0) < 52:
                 continue
             if t.get("ana_odd") is None:
@@ -1279,6 +1284,14 @@ def global_ai_tarama(b_df, maclar, limit=80):
                 except Exception:
                     pass
 
+            genis_tol_cezasi = 0
+            if tol >= 0.20:
+                genis_tol_cezasi = 4
+            if tol >= 0.25:
+                genis_tol_cezasi = 7
+            if tol >= 0.30:
+                genis_tol_cezasi = 10
+
             ai_skor = (
                 float(t.get("playable_score", 0))
                 + float(t.get("ana_p", 0)) * 0.20
@@ -1286,7 +1299,17 @@ def global_ai_tarama(b_df, maclar, limit=80):
                 + stabil_bonus * 1.6
                 - (6 if t.get("fake_drop") else 0)
                 - (5 if t.get("risk_label") == "YÜKSEK" else 0)
+                - genis_tol_cezasi
             )
+
+            sonuc = {
+                "tolerans": tol,
+                "t": t,
+                "b": b_det,
+                "ai_skor": round(ai_skor, 1),
+                "stabil_bonus": stabil_bonus,
+            }
+            tolerans_sonuclari.append(sonuc)
 
             if en_iyi is None or ai_skor > en_iyi["ai_skor"]:
                 m_dict = m.to_dict()
@@ -1298,14 +1321,116 @@ def global_ai_tarama(b_df, maclar, limit=80):
                     "tolerans": tol,
                     "ai_skor": round(ai_skor, 1),
                     "stabil_bonus": stabil_bonus,
+                    "tum_toleranslar": tolerans_sonuclari,
                 }
 
         if en_iyi:
             tum_sonuclar.append(en_iyi)
 
-    tum_sonuclar.sort(key=lambda x: x["ai_skor"], reverse=True)
+    tum_sonuclar.sort(key=lambda x: x.get("ai_skor", 0), reverse=True)
     return tum_sonuclar[:limit]
 
+
+def ai_sonuclari_excel_buffer(ai_sonuclar, paketler=None):
+    rows = []
+
+    for item in ai_sonuclar or []:
+        m = item.get("mac", {})
+        t = item.get("t", {})
+        z = m.get("zaman")
+
+        rows.append({
+            "Tarih": z.strftime("%Y-%m-%d %H:%M") if hasattr(z, "strftime") else str(z),
+            "Lig": m.get("lig", ""),
+            "Ev": m.get("ev", ""),
+            "Dep": m.get("dep", ""),
+            "Tolerans": item.get("tolerans"),
+            "Ana Tahmin": t.get("ana_label", ""),
+            "Oran": t.get("ana_odd", ""),
+            "Güven %": t.get("ana_p", ""),
+            "AI Skor": item.get("ai_skor", ""),
+            "Risk": t.get("risk_label", ""),
+            "Oynanabilir": t.get("oynanabilir", ""),
+            "Örnek Sayısı": t.get("ornek", ""),
+            "Tahmini Skor": f"{t.get('eg','')}-{t.get('dg','')}",
+            "Maç Tipi": t.get("match_type", ""),
+            "Gol Profili": t.get("goal_profile", ""),
+            "Kombo": t.get("combo_label", ""),
+            "Kombo Güven": t.get("combo_p", ""),
+        })
+
+    df = pd.DataFrame(rows)
+    buffer = io.BytesIO()
+
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Tüm Maçlar", index=False)
+
+        if not df.empty:
+            oynanabilir_df = df[df["Oynanabilir"] == True]
+            oynanabilir_df.to_excel(writer, sheet_name="Oynanabilir", index=False)
+            df.sort_values("AI Skor", ascending=False).head(10).to_excel(writer, sheet_name="AI Top 10", index=False)
+
+        if paketler:
+            for key, sheet_name in [
+                ("guvenli", "Güvenli Yol"),
+                ("value", "Oynanılabilir Yol"),
+                ("agresif", "Agresif Yol"),
+            ]:
+                kupon, toplam_oran = paketler.get(key, ([], 1.0))
+                k_rows = []
+                for item in kupon:
+                    m = item.get("mac", {})
+                    t = item.get("t", {})
+                    k_rows.append({
+                        "Lig": m.get("lig", ""),
+                        "Maç": f"{m.get('ev','')} - {m.get('dep','')}",
+                        "Tahmin": item.get("pick_label", t.get("ana_label", "")),
+                        "Oran": item.get("oran", ""),
+                        "Güven": item.get("pick_guven", t.get("ana_p", "")),
+                        "Risk": t.get("risk_label", ""),
+                        "Tolerans": item.get("tolerans", ""),
+                        "AI Skor": item.get("final_skor", ""),
+                        "Toplam Oran": toplam_oran,
+                    })
+                pd.DataFrame(k_rows).to_excel(writer, sheet_name=sheet_name, index=False)
+
+    buffer.seek(0)
+    return buffer
+
+
+def top10_market_cesitli(ai_sonuclar, limit=10):
+    secilen = []
+    market_say = {}
+    lig_say = {}
+
+    for item in sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True):
+        t = item.get("t", {})
+        m = item.get("mac", {})
+        market = t.get("ana_label", "-")
+        lig = m.get("lig", "-")
+
+        if market_say.get(market, 0) >= 3:
+            continue
+        if lig_say.get(lig, 0) >= 3:
+            continue
+
+        secilen.append(item)
+        market_say[market] = market_say.get(market, 0) + 1
+        lig_say[lig] = lig_say.get(lig, 0) + 1
+
+        if len(secilen) >= limit:
+            break
+
+    if len(secilen) < limit:
+        used = {mac_key(x.get("mac", {})) for x in secilen}
+        for item in sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True):
+            if mac_key(item.get("mac", {})) in used:
+                continue
+            secilen.append(item)
+            if len(secilen) >= limit:
+                break
+
+    return secilen
 
 def kombo_tahmini_oran(label, ana_odd):
     """Combo oranı API'den gelmiyorsa agresif kupon için yaklaşık oran üretir."""
@@ -1539,6 +1664,11 @@ def smart_kupon_builder(ai_sonuclar):
             if len(agresif) >= 3:
                 break
 
+    # Oynanılabilir Yol toplam oran maksimum 6.00 kalsın.
+    while _toplam_oran(value) > 6.00 and len(value) > 1:
+        value.sort(key=lambda x: x.get("oran", 1.0), reverse=True)
+        value.pop(0)
+
     return {
         "guvenli": (guvenli, _toplam_oran(guvenli)),
         "value": (value, _toplam_oran(value)),
@@ -1686,23 +1816,23 @@ def ai_yol_oner(kasa, hedef, kalan_gun, paketler, stake_bilgileri, gun_risk):
         if g_k and g_s > 0 and g_so <= 8:
             return {"key": "guvenli", "baslik": "🟢 Güvenli Yol", "sebep": "Hedef baskısı düşük; düşük riskli kupon hedefe yetişmek için yeterli.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
         if v_k and v_s > 0:
-            return {"key": "value", "baslik": "🟡 Value Yol", "sebep": "Güvenli yol stake’i yüksek kaldı; value yol daha dengeli.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
+            return {"key": "value", "baslik": "🟡 Oynanılabilir Yol", "sebep": "Güvenli yol stake’i yüksek kaldı; oynanılabilir yol daha dengeli.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
 
     # Orta baskıda value ana yol olsun.
     if gerekli_yuzde <= 12:
         if v_k and v_o >= 3 and v_s > 0:
-            return {"key": "value", "baslik": "🟡 Value Yol", "sebep": "Hedef için güvenli yol yavaş kalabilir; value oran/stake dengesi daha uygun.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
+            return {"key": "value", "baslik": "🟡 Oynanılabilir Yol", "sebep": "Hedef için güvenli yol yavaş kalabilir; value oran/stake dengesi daha uygun.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
         if g_k and g_s > 0 and g_so <= 12:
-            return {"key": "guvenli", "baslik": "🟢 Güvenli Yol", "sebep": "Value kalitesi yeterli değil; güvenli yol daha kontrollü.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
+            return {"key": "guvenli", "baslik": "🟢 Güvenli Yol", "sebep": "Oynanılabilir yol kalitesi yeterli değil; güvenli yol daha kontrollü.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
 
     # Yüksek baskıda agresif yol gerekir; özellikle 1000→100k gibi hedeflerde.
     if a_k and a_o >= 8 and a_s > 0:
         if gun_risk == "yuksek" and a_o < 20:
             return {"key": "pas", "baslik": "⛔ PAS", "sebep": "Gün riski yüksek ve agresif oran hedef için yeterince güçlü değil. Pas daha doğru.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
-        return {"key": "agresif", "baslik": "🔴 Agresif Yol", "sebep": "Hedef baskısı yüksek; güvenli/value yolları çok fazla stake ister. Düşük stake ile agresif yol daha mantıklı.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
+        return {"key": "agresif", "baslik": "🔴 Agresif Yol", "sebep": "Hedef baskısı yüksek; güvenli/oynanılabilir yolları çok fazla stake ister. Düşük stake ile agresif yol daha mantıklı.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
 
     if v_k and v_o >= 4 and v_s > 0 and gun_risk != "yuksek":
-        return {"key": "value", "baslik": "🟡 Value Yol", "sebep": "Agresif kupon yeterli değil; value yol en dengeli alternatif.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
+        return {"key": "value", "baslik": "🟡 Oynanılabilir Yol", "sebep": "Agresif kupon yeterli değil; oynanılabilir yol en dengeli alternatif.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
 
     return {
         "key": "pas",
@@ -2424,10 +2554,10 @@ def tarih_secimine_gore_date(secim: str, bugun_tarih, ozel_tarih):
         return bugun_tarih
     if secim == "Yarın":
         return bugun_tarih + timedelta(days=1)
-    if secim == "Cumartesi":
-        return sonraki_hafta_gunu(bugun_tarih, 5)
-    if secim == "Pazar":
-        return sonraki_hafta_gunu(bugun_tarih, 6)
+    if secim == "2 gün sonra":
+        return bugun_tarih + timedelta(days=2)
+    if secim == "3 gün sonra":
+        return bugun_tarih + timedelta(days=3)
     return ozel_tarih
 
 
@@ -2662,8 +2792,8 @@ with bar1:
             st.markdown('<div class="pop-title">Tarih Seçimi</div>', unsafe_allow_html=True)
             date_mode = st.radio(
                 'Tarih modu',
-                options=['Bugün', 'Yarın', 'Cumartesi', 'Pazar', 'Özel Tarih'],
-                index=['Bugün', 'Yarın', 'Cumartesi', 'Pazar', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
+                options=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'],
+                index=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
                 key='date_mode',
                 label_visibility='collapsed'
             )
@@ -2843,6 +2973,14 @@ if analiz_btn:
                 x["t"].get("ornek", 0),
             ),
             reverse=True,
+        )
+        final = sorted(
+            final,
+            key=lambda x: (
+                x.get("t", {}).get("playable_score", 0),
+                x.get("t", {}).get("ana_p", 0),
+            ),
+            reverse=True
         )
         st.session_state.final_list = final
         st.session_state.detay_idx = None
@@ -3141,7 +3279,7 @@ with hc2:
 # ==========================================================
 st.markdown("<br>", unsafe_allow_html=True)
 with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kasa Planı", expanded=True):
-    st.caption("Günün tüm maçlarını tüm hassasiyetlerde tarar. Güvenli / Value / Agresif kupon üretir. Takip manuel: gün, kasa ve hedefi sen girersin.")
+    st.caption("Günün tüm maçlarını 0.00 - 0.30 arası çoklu hassasiyetle tarar. Güvenli / Oynanılabilir / Agresif kupon üretir. Takip manuel: gün, kasa ve hedefi sen girersin.")
 
     k1, k2, k3 = st.columns(3)
     with k1:
@@ -3161,7 +3299,7 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
         if gecmis_df is None or bulten_df is None or getattr(gecmis_df, "empty", True) or getattr(bulten_df, "empty", True):
             st.warning("Önce üstten API key + lig seçip ANALİZİ BAŞLAT'a bas. Normal liste 0 maç bulsa bile bu panel ham bülteni kullanıp tekrar tarar.")
         else:
-            with st.spinner("AI tüm maçları 0.00 / 0.02 / 0.05 / 0.08 / 0.10 / 0.12 hassasiyetlerde tarıyor..."):
+            with st.spinner("AI tüm maçları 0.00 - 0.30 arası çoklu hassasiyetle tek seferde tarıyor..."):
                 ai_sonuclar = global_ai_tarama(gecmis_df, bulten_df, limit=100)
 
                 gun_risk = gun_riski_belirle(ai_sonuclar)
@@ -3188,7 +3326,7 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
                 st.session_state.ai_pas_mesaji = "" if yol_oneri.get("key") != "pas" else yol_oneri.get("sebep", "Bugün pas önerildi.")
                 st.session_state.ai_auto_kuponlar = {
                     "🟢 Güvenli Yol": (guvenli, guvenli_oran, stake_bilgileri["guvenli"], "guvenli"),
-                    "🟡 Value Yol": (value, value_oran, stake_bilgileri["value"], "value"),
+                    "🟡 Oynanılabilir Yol": (value, value_oran, stake_bilgileri["value"], "value"),
                     "🔴 Agresif Yol": (agresif, agresif_oran, stake_bilgileri["agresif"], "agresif"),
                 }
             st.rerun()
@@ -3279,8 +3417,20 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
                 st.rerun()
 
     if st.session_state.get("ai_global_sonuclar"):
+        paketler_excel = smart_kupon_builder(st.session_state.ai_global_sonuclar)
+        excel_buffer = ai_sonuclari_excel_buffer(st.session_state.ai_global_sonuclar, paketler_excel)
+
+        st.download_button(
+            label="📥 Tüm Maçları Excel İndir",
+            data=excel_buffer.getvalue(),
+            file_name=f"vibe_ai_maclar_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="ai_excel_download_btn",
+        )
+
         with st.expander("🔎 AI taramasında en iyi 10 tekil maç"):
-            for item in st.session_state.ai_global_sonuclar[:10]:
+            for item in top10_market_cesitli(st.session_state.ai_global_sonuclar, limit=10):
                 m = item["mac"]
                 t = item["t"]
                 st.markdown(
