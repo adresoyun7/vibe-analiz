@@ -775,11 +775,15 @@ def pick_for_mode(t: Dict, mod: str, stabil: int = 0, skip_stabil: bool = False)
                 continue
 
         elif mod == "value":
-            if label not in ["3.5 Alt", "1X", "X2", "1.5 Üst", "Ev Sahibi 0.5 Üst", "Deplasman 0.5 Üst", "MS 1", "MS 2", "KG Yok"]:
+            # Oynanılabilir: value iddiası değil; mantıklı, dengeli seçim.
+            if label not in ["3.5 Alt", "1X", "X2", "1.5 Üst", "Ev Sahibi 0.5 Üst", "Deplasman 0.5 Üst", "MS 1", "MS 2", "KG Yok", "KG Var", "2.5 Üst"]:
                 continue
-            if pct_int(prob) < 65:
+            if pct_int(prob) < 60:
                 continue
             if risk_label(prob, label) == "YÜKSEK":
+                continue
+            odd_check, _ = market_odd(label, prob, t.get("mac", {}))
+            if not (1.30 <= odd_check <= 2.50):
                 continue
             # MS sadece net favoriyse ve çifte şans zaten çok daha mantıklı değilse.
             if label in ["MS 1", "MS 2"]:
@@ -842,10 +846,16 @@ def global_ai_tarama(b_df: pd.DataFrame, maclar: pd.DataFrame, limit: int = 100)
             if not mode_best:
                 continue
 
-            # Her maç için genel AI skoru.
-            ai_skor = total_score / max(len(mode_best), 1)
-            ai_skor += min(t.get("ornek", 0), 30) * 0.20
-            ai_skor += max([p.get("stabil", 0) for p in mode_best.values()] or [0]) * 1.5
+            # Anlık maç tahminleri ve genel liste için tek net sıralama puanı.
+            best_pick_score = max([p.get("score", 0) for p in mode_best.values()] or [0])
+            best_pick_guven = max([p.get("p", 0) for p in mode_best.values()] or [0])
+            best_pick_stabil = max([p.get("stabil", 0) for p in mode_best.values()] or [0])
+            ai_skor = (
+                best_pick_score
+                + best_pick_guven * 0.35
+                + min(t.get("ornek", 0), 30) * 0.25
+                + best_pick_stabil * 2.25
+            )
 
             item = {
                 "mac": t["mac"],
@@ -854,6 +864,9 @@ def global_ai_tarama(b_df: pd.DataFrame, maclar: pd.DataFrame, limit: int = 100)
                 "tolerans": tol,
                 "ai_skor": round(ai_skor, 1),
                 "mode_best": mode_best,
+                "display_guven": best_pick_guven,
+                "display_stabil": best_pick_stabil,
+                "display_ornek": t.get("ornek", 0),
             }
             if best_item is None or ai_skor > best_item["ai_skor"]:
                 best_item = item
@@ -861,7 +874,18 @@ def global_ai_tarama(b_df: pd.DataFrame, maclar: pd.DataFrame, limit: int = 100)
         if best_item:
             results.append(best_item)
 
-    results.sort(key=lambda x: x["ai_skor"], reverse=True)
+    # Ana/anlık liste sıralaması: oynanabilirlik + puan + stabilite + örnek + güven + saat.
+    results.sort(
+        key=lambda x: (
+            1 if x.get("mode_best") else 0,
+            x.get("ai_skor", 0),
+            x.get("display_stabil", 0),
+            x.get("display_ornek", 0),
+            x.get("display_guven", 0),
+            -parse_mac_datetime(x.get("mac", {}).get("zaman", datetime.max)).timestamp(),
+        ),
+        reverse=True,
+    )
     return results[:limit]
 
 
@@ -916,7 +940,7 @@ def smart_3_kupon_builder(ai_sonuclar: List[Dict]) -> Dict[str, Tuple[List[Dict]
 
     configs = {
         "ultra": {"max_len": 2, "min_len": 1, "title": "Ultra Güvenli"},
-        "value": {"max_len": 3, "min_len": 1, "title": "Oynanabilir"},
+        "value": {"max_len": 3, "min_len": 1, "title": "Oynanabilir", "max_total_odd": 6.00},
         "agresif": {"max_len": 5, "min_len": 1, "title": "Yüksek Oran"},
     }
 
@@ -930,15 +954,28 @@ def smart_3_kupon_builder(ai_sonuclar: List[Dict]) -> Dict[str, Tuple[List[Dict]
 
             # Mode özel son filtreler.
             if mod == "ultra":
+                # Güvenli yol: yatma ihtimali en düşük marketler.
                 if ci["guven"] < 75 or ci["risk"] == "YÜKSEK":
+                    continue
+                if ci["market"] not in ["4.5 Alt", "3.5 Alt", "1X", "X2"]:
                     continue
                 if ci["stabil"] < 2 and ci["ornek"] < 8:
                     continue
             elif mod == "value":
-                if ci["guven"] < 65 or ci["risk"] == "YÜKSEK":
+                # Oynanılabilir yol: makul güven + makul oran. Artık yüksek oran avcısı değil.
+                if ci["guven"] < 60 or ci["risk"] == "YÜKSEK":
+                    continue
+                if not (1.30 <= ci["oran"] <= 2.50):
+                    continue
+                if ci["market"] in ["KG Var", "2.5 Üst"] and ci["guven"] < 64:
                     continue
             elif mod == "agresif":
+                # Agresif yol: yüksek oran kalır ama tamamen zayıf sinyaller alınmaz.
                 if ci["guven"] < 55:
+                    continue
+                if ci["risk"] == "YÜKSEK" and ci["guven"] < 60:
+                    continue
+                if ci["oran"] < 1.55:
                     continue
 
             adaylar.append(ci)
@@ -967,6 +1004,12 @@ def smart_3_kupon_builder(ai_sonuclar: List[Dict]) -> Dict[str, Tuple[List[Dict]
                 if used_markets.get(market, 0) >= (1 if mod == "value" else 2):
                     continue
                 if used_leagues.get(lig, 0) >= (1 if mod == "value" else 2):
+                    continue
+
+            # Oynanılabilir yol 5-6 toplam oran bandını geçmesin.
+            if mod == "value":
+                yeni_oran = toplam_oran(kupon + [c])
+                if yeni_oran > cfg.get("max_total_odd", 6.00):
                     continue
 
             kupon.append(c)
@@ -1079,11 +1122,11 @@ def ai_yol_oner(kasa: float, hedef: float, kalan_gun: int, paketler: Dict, stake
     if gerekli_yuzde <= 4 and ultra:
         return {"key": "ultra", "baslik": "🟢 Ultra Güvenli", "sebep": "Hedef baskısı düşük; en az riskli seçim yeterli.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
     if gerekli_yuzde <= 12 and value:
-        return {"key": "value", "baslik": "🟡 Oynanabilir", "sebep": "Güven ve oran dengesi hedef için daha uygun.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
+        return {"key": "value", "baslik": "🟡 Oynanılabilir", "sebep": "Güven ve oran dengesi hedef için daha uygun.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
     if agresif and agresif_oran >= 3.0:
         return {"key": "agresif", "baslik": "🔴 Yüksek Oran", "sebep": "Hedef baskısı yüksek; düşük stake ile daha yüksek oran gerekli.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
     if value:
-        return {"key": "value", "baslik": "🟡 Oynanabilir", "sebep": "Agresif kalite yeterli değil; value en dengeli yol.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
+        return {"key": "value", "baslik": "🟡 Oynanılabilir", "sebep": "Agresif kalite yeterli değil; oynanılabilir yol en dengeli yol.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
     if ultra:
         return {"key": "ultra", "baslik": "🟢 Ultra Güvenli", "sebep": "Sadece düşük riskli seçim var; tek maç yaklaşımı daha doğru.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
     return {"key": "pas", "baslik": "⛔ PAS", "sebep": "Kaliteli market bulunamadı.", "gerekli_yuzde": round(gerekli_yuzde, 2)}
@@ -1160,6 +1203,125 @@ def render_coupon(title: str, subtitle: str, kupon: List[Dict], oran: float, sta
     )
 
 
+def top10_diverse_single_picks(ai_sonuclar: List[Dict]) -> List[Dict]:
+    """
+    En oynanılabilir 10 tekil maç listesi.
+    Liste maç bazlı kalır ama market çeşitliliği artırılır.
+    Maksimum 6 MS, minimum mümkünse gol/KG/alt marketleri de içeri alır.
+    """
+    adaylar = []
+    for item in ai_sonuclar or []:
+        m = item.get("mac", {})
+        mode_best = item.get("mode_best", {})
+        t = item.get("t", {})
+
+        # Öncelik: oynanılabilir pick, yoksa ultra, yoksa agresif.
+        pick = mode_best.get("value") or mode_best.get("ultra") or mode_best.get("agresif")
+        if not pick:
+            continue
+
+        label = pick.get("label", "")
+        prob = float(pick.get("prob", 0))
+        odd = float(pick.get("odd", 1.0))
+        group = market_grubu(label)
+
+        # MS bias kırıcı: MS seçildiyse, makul alternatif daha güvenli/temizse onu seç.
+        if label in ["MS 1", "MS 2"]:
+            alternatifler = []
+            for p in t.get("picks", []):
+                plabel = p.get("label", "")
+                if plabel in ["4.5 Alt", "3.5 Alt", "1X", "X2", "1.5 Üst", "KG Yok", "KG Var", "2.5 Üst"]:
+                    pp = float(p.get("prob", 0))
+                    if pct_int(pp) >= 60 and risk_label(pp, plabel) != "YÜKSEK":
+                        alternatifler.append(p)
+            alternatifler.sort(
+                key=lambda p: (
+                    # market çeşitliliği için MS dışına küçük bonus
+                    8 if p.get("label") not in ["MS 1", "MS 2"] else 0,
+                    pct_int(p.get("prob", 0)),
+                    -market_sira(p.get("label", "")),
+                ),
+                reverse=True,
+            )
+            if alternatifler:
+                alt = alternatifler[0]
+                alt_prob = float(alt.get("prob", 0))
+                # Alternatif MS'ten çok kopuk değilse veya daha güvenliyse alternatif seç.
+                if pct_int(alt_prob) >= pct_int(prob) - 5 or market_sira(alt.get("label", "")) < market_sira(label):
+                    pick = alt
+                    label = pick.get("label", "")
+                    prob = float(pick.get("prob", 0))
+                    odd = float(pick.get("odd", 1.0))
+                    group = market_grubu(label)
+
+        adaylar.append({
+            "mac": m,
+            "market": label,
+            "prob": prob,
+            "guven": pct_int(prob),
+            "oran": odd,
+            "risk": risk_label(prob, label),
+            "group": group,
+            "tolerans": item.get("tolerans"),
+            "ornek": t.get("ornek", 0),
+            "stabil": pick.get("stabil", 0),
+            "ai_skor": item.get("ai_skor", 0),
+            "score_hint": pick.get("score_hint", t.get("score_hint", "-")),
+        })
+
+    # Önce genel kaliteye göre sırala.
+    adaylar.sort(key=lambda x: (x["ai_skor"], x["stabil"], x["ornek"], x["guven"]), reverse=True)
+
+    sonuc = []
+    group_count = {}
+    ms_count = 0
+    used = set()
+
+    for a in adaylar:
+        key = mac_key(a["mac"])
+        if key in used:
+            continue
+        is_ms = a["market"] in ["MS 1", "MS 2"]
+        if is_ms and ms_count >= 6:
+            continue
+        if group_count.get(a["group"], 0) >= 3 and len(sonuc) < 10:
+            continue
+        sonuc.append(a)
+        used.add(key)
+        group_count[a["group"]] = group_count.get(a["group"], 0) + 1
+        if is_ms:
+            ms_count += 1
+        if len(sonuc) >= 10:
+            break
+
+    # 10'a tamamlanmadıysa kalan en güçlüleri ekle.
+    if len(sonuc) < 10:
+        for a in adaylar:
+            key = mac_key(a["mac"])
+            if key in used:
+                continue
+            sonuc.append(a)
+            used.add(key)
+            if len(sonuc) >= 10:
+                break
+
+    return sonuc
+
+
+def render_top10_diverse(ai_sonuclar: List[Dict]):
+    picks = top10_diverse_single_picks(ai_sonuclar)
+    with st.expander("🔎 AI taramasında en oynanılabilir 10 tekil maç", expanded=True):
+        if not picks:
+            st.info("Tekil maç bulunamadı.")
+            return
+        for p in picks:
+            m = p["mac"]
+            st.markdown(
+                f"**{m.get('ev')} - {m.get('dep')} · {p.get('market')} · Güven %{p.get('guven')} · "
+                f"Tol {p.get('tolerans')} · AI Skor {p.get('ai_skor')} · Oran {fmt_odd(p.get('oran'))} · Risk {p.get('risk')}**"
+            )
+
+
 def render_match_detail(item: Dict):
     m = item.get("mac", {})
     t = item.get("t", {})
@@ -1191,7 +1353,7 @@ def render_match_detail(item: Dict):
 
         st.markdown("**AI mod seçimleri**")
         cols = st.columns(3)
-        labels = [("ultra", "🟢 Ultra"), ("value", "🟡 Oynanabilir"), ("agresif", "🔴 Yüksek Oran")]
+        labels = [("ultra", "🟢 Ultra"), ("value", "🟡 Oynanılabilir"), ("agresif", "🔴 Yüksek Oran")]
         for col, (key, label) in zip(cols, labels):
             with col:
                 p = mode_best.get(key)
@@ -1224,7 +1386,25 @@ st.markdown(
 with st.sidebar:
     st.header("⚙️ Ayarlar")
     api_key = st.text_input("The Odds API Key", type="password")
-    target_date = st.date_input("Maç tarihi", value=datetime.now().date())
+    # Dinamik tarih seçimi: gün isimleri hardcoded değil, her gün otomatik kayar.
+    today = datetime.now().date()
+    tarih_secim = st.radio(
+        "Tarih seçimi",
+        ["Bugün", "Yarın", "2 gün sonra", "3 gün sonra", "Özel Tarih"],
+        index=0,
+    )
+    if tarih_secim == "Bugün":
+        target_date = today
+    elif tarih_secim == "Yarın":
+        target_date = today + timedelta(days=1)
+    elif tarih_secim == "2 gün sonra":
+        target_date = today + timedelta(days=2)
+    elif tarih_secim == "3 gün sonra":
+        target_date = today + timedelta(days=3)
+    else:
+        target_date = st.date_input("Özel tarih", value=today)
+
+    st.caption(f"Seçilen tarih: {format_tr_date(target_date)}")
 
     sports_options = {
         "İngiltere Premier League": "soccer_epl",
@@ -1364,8 +1544,8 @@ with k1:
     )
 with k2:
     render_coupon(
-        "🟡 Oynanabilir",
-        "2-3 maç · güven + oran dengesi · MS varsa alternatifi kontrol edilir",
+        "🟡 Oynanılabilir",
+        "2-3 maç · toplam oran 5-6 bandını geçmez · güven + oran dengesi",
         value,
         value_oran,
         stake_bilgileri.get("value", {}),
@@ -1380,6 +1560,10 @@ with k3:
         stake_bilgileri.get("agresif", {}),
         "red-border",
     )
+
+st.markdown("---")
+st.subheader("🔎 En Oynanılabilir Tekil Maçlar")
+render_top10_diverse(ai_sonuclar)
 
 st.markdown("---")
 st.subheader("📋 AI Maç Detayları")
