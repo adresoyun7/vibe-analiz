@@ -4,3 +4,4 @@ requests
 xlsxwriter
 numpy
 scipy
+openpyxl
