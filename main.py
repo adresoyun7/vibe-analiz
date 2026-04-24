@@ -1455,11 +1455,12 @@ def ai_sonuclari_excel_buffer(ai_sonuclar, paketler=None):
 
 
 
-def top10_market_cesitli(ai_sonuclar, limit=10):
+
+def top10_market_cesitli(ai_sonuclar, limit=None):
     """
-    AI Top 10 sadece 0.00 - 0.10 aralığından gelir.
-    Tek markete/MS'e yığılmasın diye aynı maçtan en iyi farklı market adayı üretilir:
-    MS / Alt-Üst / KG / Kombo karışık seçilir.
+    0.00 - 0.10 arası TÜM uygun maçları getirir.
+    Limit yok, market kotası yok, lig kotası yok.
+    MS / Alt-Üst / KG / Kombo adayları içinden her maç için en iyi market seçilir.
     """
     ANA_TOLERANSLAR = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
 
@@ -1474,12 +1475,12 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
         if label.startswith("MS") or label == "Beraberlik":
             return "MS"
         if "2.5" in label or "3.5" in label or "1.5" in label or "Alt" in label or "Üst" in label:
-            return "ALT/ÜST"
+            return "Alt/Üst"
         if "KG" in label:
             return "KG"
         if "HT/FT" in label or "/" in label:
-            return "HT/FT"
-        return "DİĞER"
+            return "Kombo"
+        return "Diğer"
 
     def tol_bonus(tol):
         # 0.00 iyi, 0.05 denge, 0.10 normal.
@@ -1499,6 +1500,8 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
 
     for item in ai_sonuclar or []:
         tol = tol_float(item)
+
+        # Sadece 0.00 - 0.10 aralığı
         if tol not in ANA_TOLERANSLAR or tol > 0.10:
             continue
 
@@ -1522,7 +1525,7 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
                 "guven": int(t.get("alt_p", 0) or 0),
                 "oran": None,
                 "tip": "Alt/Üst",
-                "ek_bonus": 8,
+                "ek_bonus": 10,
             })
 
         # KG marketi
@@ -1532,7 +1535,7 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
                 "guven": int(t.get("kg_p", 0) or 0),
                 "oran": None,
                 "tip": "KG",
-                "ek_bonus": 8,
+                "ek_bonus": 9,
             })
 
         # Kombo marketi
@@ -1545,6 +1548,13 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
                 "ek_bonus": 5,
             })
 
+        if not marketler:
+            continue
+
+        # Her maçtan en iyi marketi seç
+        en_iyi_mk = None
+        en_iyi_skor = -9999
+
         for mk in marketler:
             label = mk.get("label")
             guven = int(mk.get("guven", 0) or 0)
@@ -1552,10 +1562,10 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
             if not label or label in ["Tahmin Zayıf", "Belirsiz Maç"]:
                 continue
 
-            # Çok düşük güvenli alternatifleri alma.
-            if mk.get("tip") != "Ana" and guven < 58:
-                continue
             if mk.get("tip") == "Ana" and guven < 52:
+                continue
+
+            if mk.get("tip") != "Ana" and guven < 58:
                 continue
 
             skor = (
@@ -1565,60 +1575,25 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
                 + mk.get("ek_bonus", 0)
             )
 
-            yeni = item.copy()
-            yeni["top10_label"] = label
-            yeni["top10_guven"] = guven
-            yeni["top10_oran"] = mk["oran"] if mk["oran"] is not None else t.get("ana_odd")
-            yeni["top10_tip"] = mk.get("tip", "Ana")
-            yeni["top10_market_turu"] = market_turu(label)
-            yeni["top10_skor"] = round(skor, 1)
-            adaylar.append(yeni)
+            if skor > en_iyi_skor:
+                en_iyi_skor = skor
+                en_iyi_mk = mk
+
+        if not en_iyi_mk:
+            continue
+
+        yeni = item.copy()
+        yeni["top10_label"] = en_iyi_mk.get("label")
+        yeni["top10_guven"] = int(en_iyi_mk.get("guven", 0) or 0)
+        yeni["top10_oran"] = en_iyi_mk.get("oran") if en_iyi_mk.get("oran") is not None else t.get("ana_odd")
+        yeni["top10_tip"] = en_iyi_mk.get("tip", "Ana")
+        yeni["top10_market_turu"] = market_turu(en_iyi_mk.get("label"))
+        yeni["top10_skor"] = round(en_iyi_skor, 1)
+        adaylar.append(yeni)
 
     adaylar.sort(key=lambda x: x.get("top10_skor", 0), reverse=True)
 
-    secilen = []
-    used_mac = set()
-    market_turu_say = {}
-    lig_say = {}
-
-    for item in adaylar:
-        m = item.get("mac", {})
-        key = mac_key(m)
-        lig = m.get("lig", "-")
-        tur = item.get("top10_market_turu", "DİĞER")
-
-        if key in used_mac:
-            continue
-
-        # Tek market spam olmasın. MS en fazla 3, diğer türler en fazla 3.
-        if market_turu_say.get(tur, 0) >= 3:
-            continue
-
-        # Aynı lig spam olmasın.
-        if lig_say.get(lig, 0) >= 3:
-            continue
-
-        secilen.append(item)
-        used_mac.add(key)
-        market_turu_say[tur] = market_turu_say.get(tur, 0) + 1
-        lig_say[lig] = lig_say.get(lig, 0) + 1
-
-        if len(secilen) >= limit:
-            break
-
-    # 10'a tamamlanmazsa yine aynı maç tekrar etmeden en iyi kalanları ekle.
-    if len(secilen) < limit:
-        for item in adaylar:
-            m = item.get("mac", {})
-            key = mac_key(m)
-            if key in used_mac:
-                continue
-            secilen.append(item)
-            used_mac.add(key)
-            if len(secilen) >= limit:
-                break
-
-    return secilen
+    return adaylar
 
 
 def tolerans_label(tol):
@@ -3687,8 +3662,8 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
             key="ai_excel_download_btn",
         )
 
-        with st.expander("🔎 AI taramasında en iyi 10 tekil maç"):
-            for item in top10_market_cesitli(ai_gosterilecek_sonuclar, limit=10):
+        with st.expander("🔎 AI taramasında 0.00 - 0.10 arası tüm uygun maçlar"):
+            for item in top10_market_cesitli(ai_gosterilecek_sonuclar):
                     m = item.get("mac", {})
                     t = item.get("t", {})
                     st.markdown(
