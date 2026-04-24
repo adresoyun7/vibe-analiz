@@ -1238,9 +1238,27 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
 def global_ai_tarama(b_df, maclar, limit=120):
     """
     Tüm maçları 0.00 - 0.30 arası çoklu oran hassasiyetiyle tek seferde tarar.
-    Her maç için en yüksek AI skor veren toleransı seçer.
+    Ana AI seçim/kupon/top10 sadece 0.00 / 0.03 / 0.05 / 0.08 / 0.10 bandından yapılır.
+    0.12 - 0.30 sonuçları arka plan ve Excel/diagnostic için tutulur.
+    Tolerans büyüdükçe güven ve playable_score bilinçli düşürülür.
+    0.00 toleransta minimum 3 örnek yeterlidir; 3-4 örnekte sahte güven kırılır.
     """
-    TOLERANSLAR = [0.00, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30]
+    TOLERANSLAR = [0.00, 0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30]
+    ANA_TOLERANSLAR = [0.00, 0.03, 0.05, 0.08, 0.10]
+
+    tol_guven_cezasi_map = {
+        0.00: 0,
+        0.03: 2,
+        0.05: 4,
+        0.08: 7,
+        0.10: 10,
+        0.12: 14,
+        0.15: 18,
+        0.20: 25,
+        0.25: 32,
+        0.30: 40,
+    }
+
     tum_sonuclar = []
 
     if b_df is None or maclar is None:
@@ -1258,15 +1276,38 @@ def global_ai_tarama(b_df, maclar, limit=120):
             except Exception:
                 continue
 
-            if not t:
-                continue
-            if t.get("belirsiz"):
-                continue
-            if t.get("ana_p", 0) < 52:
+            if not t or t.get("belirsiz"):
                 continue
             if t.get("ana_odd") is None:
                 continue
-            if t.get("ornek", 0) < 1:
+
+            t = t.copy()
+            sample = int(t.get("ornek", 0) or 0)
+
+            # 0.00 sniper tolerans: 3 örnek yeterli, ama 3-4 örnekte güven kırılır.
+            if round(float(tol), 2) == 0.00:
+                if sample < 3:
+                    continue
+                if sample == 3:
+                    t["ana_p"] = max(1, int(t.get("ana_p", 0) - 8))
+                    t["playable_score"] = max(1, float(t.get("playable_score", 0)) - 8)
+                elif sample == 4:
+                    t["ana_p"] = max(1, int(t.get("ana_p", 0) - 4))
+                    t["playable_score"] = max(1, float(t.get("playable_score", 0)) - 4)
+                if int(t.get("ana_p", 0)) > 85 and sample == 3:
+                    t["ana_p"] = max(1, int(t.get("ana_p", 0) - 10))
+
+            # Tolerans büyüdükçe güven kademeli düşsün.
+            tol_key = round(float(tol), 2)
+            tol_ceza = tol_guven_cezasi_map.get(tol_key, 20)
+            if tol_ceza:
+                t["ana_p"] = max(1, int(t.get("ana_p", 0) - tol_ceza))
+                t["playable_score"] = max(1, float(t.get("playable_score", 0)) - tol_ceza)
+
+            # Ceza sonrası temel kalite filtresi.
+            if t.get("ana_p", 0) < 52:
+                continue
+            if sample < 1:
                 continue
             if t.get("risk_label") == "YÜKSEK" and t.get("ana_p", 0) < 64:
                 continue
@@ -1284,22 +1325,27 @@ def global_ai_tarama(b_df, maclar, limit=120):
                 except Exception:
                     pass
 
-            genis_tol_cezasi = 0
-            if tol >= 0.20:
-                genis_tol_cezasi = 4
-            if tol >= 0.25:
-                genis_tol_cezasi = 7
-            if tol >= 0.30:
-                genis_tol_cezasi = 10
+            # 0.00-0.05 ana bölgeye küçük ödül, 0.10'a küçük ceza.
+            tol_bonus = 0
+            if tol_key == 0.00:
+                tol_bonus = 4
+            elif tol_key <= 0.05:
+                tol_bonus = 3
+            elif tol_key <= 0.08:
+                tol_bonus = 1
+            elif tol_key == 0.10:
+                tol_bonus = -2
+            else:
+                tol_bonus = -8
 
             ai_skor = (
                 float(t.get("playable_score", 0))
                 + float(t.get("ana_p", 0)) * 0.20
-                + min(float(t.get("ornek", 0)), 30) * 0.15
+                + min(float(sample), 30) * 0.15
                 + stabil_bonus * 1.6
+                + tol_bonus
                 - (6 if t.get("fake_drop") else 0)
                 - (5 if t.get("risk_label") == "YÜKSEK" else 0)
-                - genis_tol_cezasi
             )
 
             sonuc = {
@@ -1311,7 +1357,8 @@ def global_ai_tarama(b_df, maclar, limit=120):
             }
             tolerans_sonuclari.append(sonuc)
 
-            if en_iyi is None or ai_skor > en_iyi["ai_skor"]:
+            # Ana seçim yalnızca 0.00 / 0.03 / 0.05 / 0.08 / 0.10 içinden yapılsın.
+            if tol in ANA_TOLERANSLAR and (en_iyi is None or ai_skor > en_iyi["ai_skor"]):
                 m_dict = m.to_dict()
                 m_dict["durum"] = mac_canli_durumu(m_dict.get("zaman"))
                 en_iyi = {
@@ -1321,15 +1368,15 @@ def global_ai_tarama(b_df, maclar, limit=120):
                     "tolerans": tol,
                     "ai_skor": round(ai_skor, 1),
                     "stabil_bonus": stabil_bonus,
-                    "tum_toleranslar": tolerans_sonuclari,
+                    "tum_toleranslar": [],
                 }
 
         if en_iyi:
+            en_iyi["tum_toleranslar"] = tolerans_sonuclari
             tum_sonuclar.append(en_iyi)
 
     tum_sonuclar.sort(key=lambda x: x.get("ai_skor", 0), reverse=True)
     return tum_sonuclar[:limit]
-
 
 def ai_sonuclari_excel_buffer(ai_sonuclar, paketler=None):
     rows = []
@@ -1362,7 +1409,7 @@ def ai_sonuclari_excel_buffer(ai_sonuclar, paketler=None):
     df = pd.DataFrame(rows)
     buffer = io.BytesIO()
 
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         df.to_excel(writer, sheet_name="Tüm Maçlar", index=False)
 
         if not df.empty:
@@ -1399,18 +1446,27 @@ def ai_sonuclari_excel_buffer(ai_sonuclar, paketler=None):
 
 
 def top10_market_cesitli(ai_sonuclar, limit=10):
+    # Top 10 tekil maç da sadece ana tolerans bandından gelsin.
+    ANA_TOLERANSLAR = [0.00, 0.03, 0.05, 0.08, 0.10]
+
     secilen = []
     market_say = {}
     lig_say = {}
 
     for item in sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True):
+        if item.get("tolerans") not in ANA_TOLERANSLAR:
+            continue
+
         t = item.get("t", {})
         m = item.get("mac", {})
         market = t.get("ana_label", "-")
         lig = m.get("lig", "-")
 
-        if market_say.get(market, 0) >= 3:
+        # Sadece MS'e yığılmasın: aynı ana marketten maksimum 2.
+        if market_say.get(market, 0) >= 2:
             continue
+
+        # Aynı lig spam olmasın.
         if lig_say.get(lig, 0) >= 3:
             continue
 
@@ -1421,9 +1477,12 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
         if len(secilen) >= limit:
             break
 
+    # Çeşitlilik yüzünden 10'a tamamlanmazsa yine ana tolerans bandından AI skora göre tamamla.
     if len(secilen) < limit:
         used = {mac_key(x.get("mac", {})) for x in secilen}
         for item in sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True):
+            if item.get("tolerans") not in ANA_TOLERANSLAR:
+                continue
             if mac_key(item.get("mac", {})) in used:
                 continue
             secilen.append(item)
@@ -1431,6 +1490,40 @@ def top10_market_cesitli(ai_sonuclar, limit=10):
                 break
 
     return secilen
+
+def ai_sonuclarini_toleransa_gore_filtrele(ai_sonuclar, secilen_tolerans):
+    """AI Otomatik dışında seçilen tolerans için aynı maçların o toleranstaki sonucunu gösterir."""
+    if secilen_tolerans == "AI Otomatik":
+        return sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True)
+
+    filtreli = []
+    try:
+        hedef_tol = round(float(secilen_tolerans), 2)
+    except Exception:
+        return sorted(ai_sonuclar or [], key=lambda x: x.get("ai_skor", 0), reverse=True)
+
+    for item in ai_sonuclar or []:
+        secilen_alt = None
+        for alt in item.get("tum_toleranslar", []):
+            try:
+                if round(float(alt.get("tolerans")), 2) == hedef_tol:
+                    secilen_alt = alt
+                    break
+            except Exception:
+                continue
+
+        if secilen_alt:
+            yeni_item = item.copy()
+            yeni_item["t"] = secilen_alt.get("t", {})
+            yeni_item["b"] = secilen_alt.get("b")
+            yeni_item["tolerans"] = secilen_alt.get("tolerans")
+            yeni_item["ai_skor"] = secilen_alt.get("ai_skor", 0)
+            yeni_item["stabil_bonus"] = secilen_alt.get("stabil_bonus", 0)
+            yeni_item["tum_toleranslar"] = item.get("tum_toleranslar", [])
+            filtreli.append(yeni_item)
+
+    return sorted(filtreli, key=lambda x: x.get("ai_skor", 0), reverse=True)
+
 
 def kombo_tahmini_oran(label, ana_odd):
     """Combo oranı API'den gelmiyorsa agresif kupon için yaklaşık oran üretir."""
@@ -3417,8 +3510,25 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
                 st.rerun()
 
     if st.session_state.get("ai_global_sonuclar"):
-        paketler_excel = smart_kupon_builder(st.session_state.ai_global_sonuclar)
-        excel_buffer = ai_sonuclari_excel_buffer(st.session_state.ai_global_sonuclar, paketler_excel)
+        st.markdown("#### 🎚️ AI Hassasiyet Filtresi")
+        secilen_ai_tolerans = st.selectbox(
+            "Sonuçları hangi hassasiyete göre gösterelim?",
+            ["AI Otomatik", 0.00, 0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30],
+            index=0,
+            key="ai_tolerans_filtresi",
+            help="Kupon ana seçimi 0.00-0.10 bandından yapılır. 0.12-0.30 sadece kontrol/Excel için gösterilebilir."
+        )
+
+        ai_gosterilecek_sonuclar = ai_sonuclarini_toleransa_gore_filtrele(
+            st.session_state.ai_global_sonuclar,
+            secilen_ai_tolerans
+        )
+
+        if secilen_ai_tolerans != "AI Otomatik" and not ai_gosterilecek_sonuclar:
+            st.warning("Bu hassasiyette gösterilecek uygun maç bulunamadı.")
+
+        paketler_excel = smart_kupon_builder(ai_gosterilecek_sonuclar)
+        excel_buffer = ai_sonuclari_excel_buffer(ai_gosterilecek_sonuclar, paketler_excel)
 
         st.download_button(
             label="📥 Tüm Maçları Excel İndir",
@@ -3430,7 +3540,7 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
         )
 
         with st.expander("🔎 AI taramasında en iyi 10 tekil maç"):
-            for item in top10_market_cesitli(st.session_state.ai_global_sonuclar, limit=10):
+            for item in top10_market_cesitli(ai_gosterilecek_sonuclar, limit=10):
                 m = item["mac"]
                 t = item["t"]
                 st.markdown(
