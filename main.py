@@ -25,6 +25,102 @@ def parse_mac_datetime(value):
 
 st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
 
+# ==========================================================
+# PREMIUM / FREE ACCESS SYSTEM
+# ==========================================================
+
+# Streamlit Cloud > App > Settings > Secrets örnek:
+# ODDS_API_KEY = "senin_api_keyin"
+# PREMIUM_USERS = "mail1@mail.com,mail2@mail.com"
+# PREMIUM_PAYMENT_URL = "https://shopier.com/xxxx"
+
+def get_secret_value(name, default=""):
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+def get_app_api_key():
+    return str(get_secret_value("ODDS_API_KEY", "")).strip()
+
+
+def get_premium_users():
+    raw = get_secret_value("PREMIUM_USERS", "")
+    if isinstance(raw, list):
+        return [str(x).strip().lower() for x in raw if str(x).strip()]
+    return [x.strip().lower() for x in str(raw).split(",") if x.strip()]
+
+
+def is_premium():
+    email = st.session_state.get("user_email", "").strip().lower()
+    return bool(email and email in get_premium_users())
+
+
+def login_panel():
+    with st.sidebar:
+        st.markdown("### 👤 Üyelik")
+        email = st.text_input(
+            "Email",
+            value=st.session_state.get("user_email", ""),
+            placeholder="mail@example.com",
+            key="login_email_input",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Giriş", use_container_width=True, key="login_btn"):
+                st.session_state["user_email"] = email.strip().lower()
+                st.rerun()
+        with c2:
+            if st.button("Çıkış", use_container_width=True, key="logout_btn"):
+                st.session_state.pop("user_email", None)
+                st.rerun()
+
+        if is_premium():
+            st.success("Premium aktif ✅")
+        elif st.session_state.get("user_email"):
+            st.info("Ücretsiz sürüm aktif")
+        else:
+            st.caption("Email ile ücretsiz giriş yapabilirsin.")
+
+        payment_url = str(get_secret_value("PREMIUM_PAYMENT_URL", "")).strip()
+        if payment_url and not is_premium():
+            st.link_button("🚀 Premium Satın Al", payment_url, use_container_width=True)
+
+
+def limit_for_free(items, free_limit=3):
+    if is_premium():
+        return list(items or [])
+    return list(items or [])[:free_limit]
+
+
+def premium_locked_box(title="🔒 Premium özellik", text="Bu alan Premium üyelikte açıktır."):
+    st.markdown(
+        f"""
+        <div style="background:#0b1628;border:1px solid #284977;border-radius:14px;padding:14px 16px;margin:10px 0;color:#f8fafc;">
+            <b>{title}</b><br>
+            <span style="color:#9db2d1;font-size:0.88rem;">{text}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    payment_url = str(get_secret_value("PREMIUM_PAYMENT_URL", "")).strip()
+    if payment_url and not is_premium():
+        st.link_button("🚀 Premium Satın Al", payment_url)
+
+
+def premium_legal_notice():
+    st.markdown(
+        """
+        <div style="background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:12px 14px;margin:8px 0;color:#7c2d12;font-size:0.86rem;">
+        <b>⚠️ Yasal Uyarı:</b> Bu platform yalnızca istatistiksel analizler, geçmiş veri karşılaştırmaları ve yapay zekâ destekli tahminler sunar.
+        Kesin kazanç garantisi verilmez. Bahis oynamak risk içerir ve bağımlılık oluşturabilir.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 APP_SCHEMA_VERSION = 17
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
@@ -726,6 +822,9 @@ div[data-testid="stExpander"] * {
 </style>
 """, unsafe_allow_html=True)
 
+login_panel()
+premium_legal_notice()
+
 
 def format_tr_date(d):
     aylar = {
@@ -895,6 +994,12 @@ def futbol_veri_motoru(sezonlar):
 
 
 def bulten_cek(key, kodlar, t):
+    secret_key = get_app_api_key()
+    if secret_key:
+        key = secret_key
+    if not key:
+        st.error("ODDS_API_KEY bulunamadı. Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY eklemelisin.")
+        return pd.DataFrame()
     res = []
 
     for k in kodlar:
@@ -1700,6 +1805,13 @@ def smart_kupon_builder(ai_sonuclar):
     v8 mantık: Güvenli yol artık listedeki ilk uygun maçı değil, AI skoru en yüksek + risk düşük maçları seçer.
     Value oran/AI dengesi, Agresif ise yüksek oran/kombo önceliği kullanır.
     """
+    if not is_premium():
+        return {
+            "guvenli": ([], 1.0),
+            "value": ([], 1.0),
+            "agresif": ([], 1.0),
+        }
+
     used = set()
 
     def safe_float(v, default=0.0):
@@ -2803,7 +2915,11 @@ secili_kodlar = []
 bugun = datetime.now().date()
 st.markdown('<div class="api-navy">', unsafe_allow_html=True)
 with st.expander("🔑 API Ayarları", expanded=False):
-    API_KEY = st.text_input("The Odds API Key", type="password", help="The Odds API anahtarını gir.")
+    API_KEY = get_app_api_key()
+    if API_KEY:
+        st.success("API key sistemde tanımlı ✅")
+    else:
+        st.error("ODDS_API_KEY Streamlit Secrets içinde tanımlı değil.")
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("""
@@ -3636,7 +3752,7 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
         st.markdown("#### 🎚️ AI Hassasiyet Filtresi")
         secilen_ai_tolerans = st.selectbox(
             "Sonuçları hangi hassasiyete göre gösterelim?",
-            ["AI Otomatik", 0.00, 0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30],
+            ["AI Otomatik", 0.00, 0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30],
             index=0,
             key="ai_tolerans_filtresi",
             help="Kupon ana seçimi 0.00-0.10 bandından yapılır. 0.12-0.30 sadece kontrol/Excel için gösterilebilir."
@@ -3651,18 +3767,23 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
             st.warning("Bu hassasiyette gösterilecek uygun maç bulunamadı.")
 
         paketler_excel = smart_kupon_builder(ai_gosterilecek_sonuclar)
-        excel_buffer = ai_sonuclari_excel_buffer(ai_gosterilecek_sonuclar, paketler_excel)
 
-        st.download_button(
-            label="📥 Tüm Maçları Excel İndir",
-            data=excel_buffer.getvalue(),
-            file_name=f"vibe_ai_maclar_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key="ai_excel_download_btn",
-        )
+        if is_premium():
+            excel_buffer = ai_sonuclari_excel_buffer(ai_gosterilecek_sonuclar, paketler_excel)
+            st.download_button(
+                label="📥 Tüm Maçları Excel İndir",
+                data=excel_buffer.getvalue(),
+                file_name=f"vibe_ai_maclar_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="ai_excel_download_btn",
+            )
+        else:
+            premium_locked_box("📥 Excel indirme Premium", "Tüm maçları Excel olarak indirmek için Premium üyelik gerekir.")
 
         with st.expander("🔎 AI taramasında 0.00 - 0.10 arası tüm uygun maçlar"):
+            if not is_premium():
+                st.info("Ücretsiz sürümde ilk 3 maç gösterilir. Premium ile tüm uygun maçlar açılır.")
             for item in top10_market_cesitli(ai_gosterilecek_sonuclar):
                     m = item.get("mac", {})
                     t = item.get("t", {})
