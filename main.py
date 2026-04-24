@@ -1259,13 +1259,7 @@ def global_ai_tarama(b_df, maclar, limit=120):
        0.25: 35,
        0.30: 45,
     }
-    # düşük tolerans bonusu
-if tol <= 0.04:
-    t["ana_p"] += 3
-    t["playable_score"] += 3
-elif tol <= 0.06:
-    t["ana_p"] += 1
-
+ 
     tum_sonuclar = []
 
     if b_df is None or maclar is None:
@@ -1311,6 +1305,14 @@ elif tol <= 0.06:
                 t["ana_p"] = max(1, int(t.get("ana_p", 0) - tol_ceza))
                 t["playable_score"] = max(1, float(t.get("playable_score", 0)) - tol_ceza)
 
+            # Düşük tolerans bonusu
+if tol_key <= 0.04:
+    t["ana_p"] = min(100, int(t.get("ana_p", 0) + 3))
+    t["playable_score"] = min(100, float(t.get("playable_score", 0)) + 3)
+elif tol_key <= 0.06:
+    t["ana_p"] = min(100, int(t.get("ana_p", 0) + 1))
+    t["playable_score"] = min(100, float(t.get("playable_score", 0)) + 1)
+    
             # Ceza sonrası temel kalite filtresi.
             if t.get("ana_p", 0) < 52:
                 continue
@@ -1454,7 +1456,7 @@ def ai_sonuclari_excel_buffer(ai_sonuclar, paketler=None):
 
 def top10_market_cesitli(ai_sonuclar, limit=10):
     # Top 10 tekil maç da sadece ana tolerans bandından gelsin.
-    ANA_TOLERANSLAR = [0.00, 0.03, 0.05, 0.08, 0.10]
+    ANA_TOLERANSLAR = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
 
     secilen = []
     market_say = {}
