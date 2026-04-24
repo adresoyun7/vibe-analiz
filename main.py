@@ -1243,21 +1243,28 @@ def global_ai_tarama(b_df, maclar, limit=120):
     Tolerans büyüdükçe güven ve playable_score bilinçli düşürülür.
     0.00 toleransta minimum 3 örnek yeterlidir; 3-4 örnekte sahte güven kırılır.
     """
-    TOLERANSLAR = [0.00, 0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30]
-    ANA_TOLERANSLAR = [0.00, 0.03, 0.05, 0.08, 0.10]
+    TOLERANSLAR = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30]
+    ANA_TOLERANSLAR = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
 
     tol_guven_cezasi_map = {
-        0.00: 0,
-        0.03: 2,
-        0.05: 4,
-        0.08: 7,
-        0.10: 10,
-        0.12: 14,
-        0.15: 18,
-        0.20: 25,
-        0.25: 32,
-        0.30: 40,
+       0.00: 0,
+       0.02: 2,
+       0.04: 4,
+       0.06: 6,
+       0.08: 9,
+       0.10: 12,
+       0.12: 16,
+       0.15: 20,
+       0.20: 28,
+       0.25: 35,
+       0.30: 45,
     }
+    # düşük tolerans bonusu
+if tol <= 0.04:
+    t["ana_p"] += 3
+    t["playable_score"] += 3
+elif tol <= 0.06:
+    t["ana_p"] += 1
 
     tum_sonuclar = []
 
