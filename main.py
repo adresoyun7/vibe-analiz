@@ -1736,7 +1736,7 @@ def safe(v, default="-"):
     return default if v is None or v == "" else v
 
 
-def render_history_table(b_det, max_rows=8):
+def render_history_table(b_det, max_rows=10):
     """HTML table yerine div-grid kullanır; Streamlit'te <tr>/<td> kod olarak görünme sorununu engeller."""
     if b_det is None or getattr(b_det, "empty", True):
         return "<div class='why-box'>Benzer maç verisi bulunamadı.</div>"
@@ -1746,7 +1746,8 @@ def render_history_table(b_det, max_rows=8):
         if c not in b_det.columns:
             return "<div class='why-box'>Geçmiş maç tablosu için gerekli kolonlar yok.</div>"
 
-    temp = b_det.tail(max_rows).copy()
+    # b_det Date descending sıralı geldiği için en güncel/son 10 maç için head() kullanılır.
+    temp = b_det.head(max_rows).copy()
     rows = []
     for _, r in temp.iterrows():
         try:
@@ -1959,10 +1960,15 @@ def mac_detay_modal():
             st.rerun()
     components.html(
     textwrap.dedent(render_detail_html(item)),
-    height=1040,
+    height=1120,
     scrolling=True
 )
 
+
+def clear_detail_state():
+    """Filtre/sıralama değişince eski detay modalının kendiliğinden açılmasını engeller."""
+    st.session_state.detay_item = None
+    st.session_state.detay_idx = None
 
 # Sidebar filtreleri
 bugun = datetime.now().date()
@@ -1983,40 +1989,40 @@ with st.sidebar:
         st.session_state.date_mode = "Bugün"
     if "special_date" not in st.session_state:
         st.session_state.special_date = bugun
-    date_mode = st.radio("Tarih", ["Bugün", "Yarın", "2 gün sonra", "3 gün sonra", "Özel Tarih"], key="date_mode", label_visibility="collapsed")
+    date_mode = st.radio("Tarih", ["Bugün", "Yarın", "2 gün sonra", "3 gün sonra", "Özel Tarih"], key="date_mode", label_visibility="collapsed", on_change=clear_detail_state)
     if date_mode == "Özel Tarih":
-        st.date_input("Özel tarih", value=st.session_state.special_date, key="special_date")
+        st.date_input("Özel tarih", value=st.session_state.special_date, key="special_date", on_change=clear_detail_state)
     secili_tarih = tarih_secimine_gore_date(date_mode, bugun, st.session_state.special_date)
 
     st.markdown("<div class='side-section'><div class='side-title'>Ligler</div></div>", unsafe_allow_html=True)
-    lig_arama = st.text_input("Lig ara", placeholder="Bundesliga, MLS...", label_visibility="collapsed")
+    lig_arama = st.text_input("Lig ara", placeholder="Bundesliga, MLS...", label_visibility="collapsed", on_change=clear_detail_state)
     lc1, lc2 = st.columns(2)
     with lc1:
         if st.button("Tümü", use_container_width=True):
-            set_leagues(tum_lig_kodlari()); st.rerun()
+            clear_detail_state(); set_leagues(tum_lig_kodlari()); st.rerun()
     with lc2:
         if st.button("Temizle", use_container_width=True):
-            clear_leagues(); st.rerun()
+            clear_detail_state(); clear_leagues(); st.rerun()
     if st.button("Çekirdek + Value", use_container_width=True):
-        toggle_leagues(KARLI_LIG_PRESETLERI.get("cekirdek_value", tum_lig_kodlari())); st.rerun()
+        clear_detail_state(); toggle_leagues(KARLI_LIG_PRESETLERI.get("cekirdek_value", tum_lig_kodlari())); st.rerun()
     lig_box = st.container(height=250, border=False)
     with lig_box:
         for lig in filtrelenmis_lig_listesi(lig_arama):
-            st.checkbox(lig["label"], key=f"cb_{lig['kod']}")
+            st.checkbox(lig["label"], key=f"cb_{lig['kod']}", on_change=clear_detail_state)
 
     st.markdown("<div class='side-section'><div class='side-title'>Güven Skoru</div></div>", unsafe_allow_html=True)
-    guven_filtreleri = st.multiselect("Güven", ["Yüksek (70%+)", "Orta (50–70%)", "Düşük (<50%)"], default=["Yüksek (70%+)", "Orta (50–70%)"], label_visibility="collapsed")
+    guven_filtreleri = st.multiselect("Güven", ["Yüksek (70%+)", "Orta (50–70%)", "Düşük (<50%)"], default=["Yüksek (70%+)", "Orta (50–70%)"], label_visibility="collapsed", on_change=clear_detail_state)
 
     st.markdown("<div class='side-section'><div class='side-title'>Tahmin Tipi</div></div>", unsafe_allow_html=True)
-    tip_ms = st.checkbox("MS1 / MS2 / X", value=True)
-    tip_ou = st.checkbox("2.5 Üst/Alt", value=True)
-    tip_kg = st.checkbox("KG Var/Yok", value=True)
+    tip_ms = st.checkbox("MS1 / MS2 / X", value=True, on_change=clear_detail_state)
+    tip_ou = st.checkbox("2.5 Üst/Alt", value=True, on_change=clear_detail_state)
+    tip_kg = st.checkbox("KG Var/Yok", value=True, on_change=clear_detail_state)
 
     st.markdown("<div class='side-section'><div class='side-title'>Analiz Ayarları</div></div>", unsafe_allow_html=True)
-    yillar = st.multiselect("Sezonlar", ['2122','2223','2324','2425','2526'], default=['2122','2223','2324','2425','2526'])
-    min_ornek = st.number_input("Min. örnek", min_value=1, value=1)
-    TOLERANS = st.slider("Oran hassasiyeti", 0.00, 0.30, 0.08, step=0.01)
-    canli_filtre = st.selectbox("Canlı", ["Tümü", "Canlı", "Başlamamış", "Bitti"])
+    yillar = st.multiselect("Sezonlar", ['2122','2223','2324','2425','2526'], default=['2122','2223','2324','2425','2526'], on_change=clear_detail_state)
+    min_ornek = st.number_input("Min. örnek", min_value=1, value=1, on_change=clear_detail_state)
+    TOLERANS = st.slider("Oran hassasiyeti", 0.00, 0.30, 0.08, step=0.01, on_change=clear_detail_state)
+    canli_filtre = st.selectbox("Canlı", ["Tümü", "Canlı", "Başlamamış", "Bitti"], on_change=clear_detail_state)
     analiz_btn = st.button("▶ ANALİZİ BAŞLAT", use_container_width=True, type="primary")
 
 secili_kodlar = selected_league_codes()
@@ -2075,7 +2081,7 @@ for item in fl:
 st.markdown("<div class='app-top'><div class='app-title'>Anlık Maç Tahminleri <span class='count-pill'>%d Maç</span> <span style='font-size:12px;color:#20b970'><span class='live-dot'></span>Canlı</span></div><div class='sort-wrap'></div></div>" % len(filtered), unsafe_allow_html=True)
 sort_col1, sort_col2 = st.columns([3,1])
 with sort_col2:
-    siralama = st.selectbox("Sıralama", ["Güven: Yüksek → Düşük", "Saat: Yakın → Uzak", "Oran: Yüksek → Düşük"], label_visibility="collapsed")
+    siralama = st.selectbox("Sıralama", ["Güven: Yüksek → Düşük", "Saat: Yakın → Uzak", "Oran: Yüksek → Düşük"], label_visibility="collapsed", on_change=clear_detail_state)
 if siralama.startswith("Güven"):
     filtered.sort(key=lambda x: x["t"].get("ana_p",0), reverse=True)
 elif siralama.startswith("Saat"):
