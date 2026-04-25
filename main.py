@@ -2210,7 +2210,9 @@ def filtrelenmis_lig_listesi(arama_text: str):
 
 
 KARLI_LIG_PRESETLERI = {
-    "cekirdek": [
+    # Popup içindeki tek hızlı filtre: Kararlı çekirdek + kârlı/value ligler birlikte seçilir.
+    "cekirdek_value": [
+        # Kararlı çekirdek
         "soccer_epl",
         "soccer_efl_champ",
         "soccer_spain_la_liga",
@@ -2227,8 +2229,7 @@ KARLI_LIG_PRESETLERI = {
         "soccer_uefa_champs_league",
         "soccer_uefa_europa_league",
         "soccer_uefa_europa_conference_league",
-    ],
-    "value": [
+        # Kârlı / value ek ligler
         "soccer_portugal_primeira_liga",
         "soccer_belgium_first_div",
         "soccer_austria_bundesliga",
@@ -2533,12 +2534,13 @@ with bar1:
                 st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date')
 
             st.markdown('<div class="pop-title" style="margin-top:18px">Hızlı Filtreler</div>', unsafe_allow_html=True)
-            if st.button('⭐ Kararlı Çekirdek', use_container_width=True, key='preset_core_top'):
-                toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek'])
+            if st.button('⭐💎 Kararlı Çekirdek + Karlı / Value', use_container_width=True, key='preset_core_value_top'):
+                toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
                 st.rerun()
-            if st.button('💎 Karlı / Value', use_container_width=True, key='preset_val_top'):
-                toggle_leagues(KARLI_LIG_PRESETLERI['value'])
-                st.rerun()
+            st.markdown(
+                "<div class='league-chip-note' style='margin:6px 0 10px 0'>Çekirdek ligler ve value ligleri tek filtreyle birlikte seçer.</div>",
+                unsafe_allow_html=True
+            )
             if st.button('🌍 Hepsini Aç', use_container_width=True, key='preset_all_top'):
                 set_leagues(tum_lig_kodlari())
                 st.rerun()
