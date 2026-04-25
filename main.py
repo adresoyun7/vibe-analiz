@@ -1830,9 +1830,91 @@ def hesapla(b_df, m_row, tolerans):
 
 
 
+def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
+    """
+    Günün Top 10 listesini seçili hassasiyete bağlamaz.
+    Her maç için 0.00 - 0.10 arası toleransları dener ve maçın en iyi toleransını seçer.
+    API kullanmaz; sadece mevcut bülten + geçmiş veri üzerinden hesaplama yapar.
+    """
+    top_toleranslar = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
+    adaylar = []
+
+    if gecmis_df is None or bulten_df is None:
+        return []
+    if getattr(gecmis_df, "empty", True) or getattr(bulten_df, "empty", True):
+        return []
+
+    for _, m in bulten_df.iterrows():
+        en_iyi = None
+
+        for tol in top_toleranslar:
+            try:
+                t, b_det = hesapla(gecmis_df, m, tol)
+            except Exception:
+                continue
+
+            if t is None or t.get("belirsiz"):
+                continue
+            if t.get("ana_label") in ["Belirsiz Maç", "Tahmin Zayıf"]:
+                continue
+            if t.get("ana_odd") is None:
+                continue
+
+            ornek = int(t.get("ornek", 0) or 0)
+            guven = int(t.get("ana_p", 0) or 0)
+            if ornek < max(1, int(min_ornek or 1)):
+                continue
+            if guven < 50:
+                continue
+
+            tol_ceza = round(float(tol) * 100, 1)
+            dusuk_tol_bonus = 8 if tol <= 0.02 else 5 if tol <= 0.04 else 2 if tol <= 0.06 else 0
+            risk_ceza = 8 if t.get("risk_label") == "YÜKSEK" else 3 if t.get("risk_label") == "ORTA" else 0
+            fake_ceza = 5 if t.get("fake_drop") else 0
+
+            top10_skor = (
+                float(t.get("playable_score", guven) or 0)
+                + guven * 0.30
+                + min(ornek, 25) * 0.25
+                + dusuk_tol_bonus
+                - tol_ceza
+                - risk_ceza
+                - fake_ceza
+            )
+
+            aday = {
+                "m": m.to_dict(),
+                "t": t,
+                "b": b_det,
+                "top10_tol": round(float(tol), 2),
+                "top10_skor": round(top10_skor, 1),
+            }
+            aday["m"]["durum"] = mac_canli_durumu(aday["m"].get("zaman"))
+
+            if en_iyi is None or aday["top10_skor"] > en_iyi["top10_skor"]:
+                en_iyi = aday
+
+        if en_iyi:
+            adaylar.append(en_iyi)
+
+    adaylar.sort(
+        key=lambda x: (
+            x.get("top10_skor", 0),
+            x.get("t", {}).get("playable_score", 0),
+            x.get("t", {}).get("ana_p", 0),
+            x.get("t", {}).get("ornek", 0),
+        ),
+        reverse=True,
+    )
+    return adaylar[:limit]
+
+
+
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
+    ("detay_item", None),
+    ("top10_list", []),
     ("filtre", "tumu"),
     ("kupona", []),
     ("coupon_popup_open", False),
@@ -2488,20 +2570,26 @@ if analiz_btn:
             reverse=True
         )
         st.session_state.final_list = final
+        st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
         st.session_state.detay_idx = None
+        st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
         st.session_state.toplam_mac = len(final)
         st.rerun()
 
-if st.session_state.detay_idx is not None:
-    idx = st.session_state.detay_idx
-    item = st.session_state.final_list[idx]
+if st.session_state.detay_item is not None or st.session_state.detay_idx is not None:
+    if st.session_state.detay_item is not None:
+        item = st.session_state.detay_item
+    else:
+        idx = st.session_state.detay_idx
+        item = st.session_state.final_list[idx]
     m, t, b_det = item["m"], item["t"], item["b"]
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
 
     if st.button("← Geri", key="geri_btn"):
         st.session_state.detay_idx = None
+        st.session_state.detay_item = None
         st.rerun()
 
     st.markdown(
@@ -2800,22 +2888,23 @@ else:
     kombolu = [(idx, x) for idx, x in indexed_fl if x["t"].get("combo_var", False)]
 
     # ==========================================================
-    # EN IYI 10 MAC - SADE MOD
-    # API kullanmaz; mevcut analiz sonucunu puana gore siralar.
+    # GUNUN EN IYI 10 MACI - HASSASIYETTEN BAGIMSIZ
+    # API kullanmaz; analizde cekilen maclar uzerinden 0.00 - 0.10 arasi en iyi toleransi secer.
     # ==========================================================
-    en_iyi_10 = sorted(
-        [x for x in indexed_fl if int(x[1]["t"].get("ana_p", 0) or 0) >= 50],
-        key=lambda x: (
-            float(x[1]["t"].get("playable_score", 0) or 0),
-            int(x[1]["t"].get("ana_p", 0) or 0),
-            int(x[1]["t"].get("ornek", 0) or 0),
-        ),
-        reverse=True,
-    )[:10]
+    gunun_top10 = st.session_state.get("top10_list", [])
 
-    if en_iyi_10:
-        st.markdown("""<div class="list-heading">🔥 EN İYİ 10 MAÇ</div>""", unsafe_allow_html=True)
-        for sira, (idx, item) in enumerate(en_iyi_10, start=1):
+    if gunun_top10:
+        st.markdown("""<div class="list-heading">🔥 GÜNÜN EN İYİ 10 MAÇI</div>""", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style="font-size:0.86rem;color:#64748b;margin:-4px 0 12px 0;">
+                Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 ile denenir ve maçın en iyi toleransı seçilir.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        for sira, item in enumerate(gunun_top10, start=1):
             m = item["m"]
             t = item["t"]
             guven = int(t.get("ana_p", 0) or 0)
@@ -2832,31 +2921,47 @@ else:
             skor = f"{t.get('eg', '')}-{t.get('dg', '')}"
             oran = fmt_odd(t.get("ana_odd"))
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+            en_iyi_tol = float(item.get("top10_tol", t.get("kullanilan_tolerans", 0)) or 0)
+            top10_skor = item.get("top10_skor", "")
 
-            st.markdown(
-                f"""
-                <div style="background:#0f172a;border:1px solid #1f2a44;border-radius:14px;padding:14px 16px;margin-bottom:10px;color:#f8fafc;">
-                    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
-                        <div>
-                            <div style="font-size:0.82rem;color:#facc15;font-weight:800;">#{sira} · {escape(str(m.get('lig','')))} · {saat}</div>
-                            <div style="font-size:1.05rem;font-weight:800;margin-top:4px;">{escape(str(m.get('ev','')))} - {escape(str(m.get('dep','')))}</div>
+            kart_col, btn_col = st.columns([7, 1])
+            with kart_col:
+                st.markdown(
+                    f"""
+                    <div style="background:#0f172a;border:1px solid #1f2a44;border-radius:14px;padding:14px 16px;margin-bottom:10px;color:#f8fafc;">
+                        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+                            <div>
+                                <div style="font-size:0.82rem;color:#facc15;font-weight:800;">#{sira} · {escape(str(m.get('lig','')))} · {saat}</div>
+                                <div style="font-size:1.05rem;font-weight:800;margin-top:4px;">{escape(str(m.get('ev','')))} - {escape(str(m.get('dep','')))}</div>
+                            </div>
+                            <div style="text-align:right;min-width:120px;">
+                                <div style="font-size:0.70rem;color:#94a3b8;font-weight:700;">GÜVEN</div>
+                                <div style="font-size:1.05rem;font-weight:900;color:{renk};">%{guven} ({label})</div>
+                            </div>
                         </div>
-                        <div style="text-align:right;min-width:110px;">
-                            <div style="font-size:0.70rem;color:#94a3b8;font-weight:700;">GÜVEN</div>
-                            <div style="font-size:1.05rem;font-weight:900;color:{renk};">%{guven} ({label})</div>
+                        <div style="margin-top:9px;font-size:0.88rem;color:#e5e7eb;">
+                            Ana Tahmin: <b>{escape(str(t.get('ana_label','-')))}</b> ·
+                            Tahmini Skor: <b>{escape(str(skor))}</b> ·
+                            Örnek: <b>{int(t.get('ornek',0) or 0)}</b> ·
+                            Oran: <b>{escape(str(oran))}</b>
+                        </div>
+                        <div style="margin-top:7px;font-size:0.78rem;color:#9db2d1;">
+                            En iyi hassasiyet: <b style="color:#facc15;">{en_iyi_tol:.2f}</b> · Top 10 skor: <b>{top10_skor}</b>
                         </div>
                     </div>
-                    <div style="margin-top:9px;font-size:0.88rem;color:#e5e7eb;">
-                        Ana Tahmin: <b>{escape(str(t.get('ana_label','-')))}</b> ·
-                        Tahmini Skor: <b>{escape(str(skor))}</b> ·
-                        Örnek: <b>{int(t.get('ornek',0) or 0)}</b> ·
-                        Oran: <b>{escape(str(oran))}</b>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with btn_col:
+                st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+                btn_key = f"top10_detay_{sira}_{abs(hash(str(m.get('ev','')) + str(m.get('dep','')) + str(m.get('zaman',''))))}"
+                if st.button("Detay →", key=btn_key, use_container_width=True):
+                    st.session_state.detay_item = item
+                    st.session_state.detay_idx = None
+                    st.rerun()
         st.markdown("<br>", unsafe_allow_html=True)
+    else:
+        st.info("Günün Top 10 listesi için önce analizi başlatmalısın.")
 
     fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
@@ -2982,6 +3087,7 @@ else:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
                 st.session_state.detay_idx = real_i
+                st.session_state.detay_item = None
                 st.rerun()
             if st.button("+ Kupona", key=f"k_{real_i}_{i}", use_container_width=True):
                 coupon_item = {
