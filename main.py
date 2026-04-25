@@ -1,3 +1,4 @@
+
 import io
 import math
 from datetime import datetime, timedelta
@@ -6,8 +7,6 @@ from html import escape
 import pandas as pd
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
-import textwrap
 
 
 def parse_mac_datetime(value):
@@ -160,63 +159,699 @@ if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-:root{--navy:#101d3b;--blue:#2f7cff;--green:#20d787;--amber:#ffb020;--red:#ff4d5f;--bg:#eef2f8;--line:#dbe3f0;--text:#14213d;--muted:#7c8aa5;}
-html,body,[class*="css"]{font-family:Inter,Arial,sans-serif!important;background:var(--bg)!important;color:var(--text)!important;}
-.stApp{background:linear-gradient(180deg,#f8fbff 0%,#eef2f8 100%)!important;}
-.main .block-container{max-width:1180px;padding:18px 14px 36px!important;}
-section[data-testid="stSidebar"]{background:#111d3a!important;border-right:1px solid rgba(255,255,255,.08)!important;}
-section[data-testid="stSidebar"] *{color:#dbe7ff!important;}
-section[data-testid="stSidebar"] label{font-size:.78rem!important;color:#8fa3cb!important;text-transform:uppercase;letter-spacing:.08em;}
-section[data-testid="stSidebar"] .stButton>button{background:transparent!important;border:1px solid #41547c!important;border-radius:8px!important;color:#fff!important;height:34px!important;}
-section[data-testid="stSidebar"] [data-baseweb="select"]>div,
-section[data-testid="stSidebar"] [data-testid="stTextInputRootElement"]{background:#14264d!important;border-color:#263b66!important;color:#fff!important;}
-.stButton>button{border-radius:12px!important;border:1px solid #d8e1ef!important;background:#fff!important;color:#172443!important;font-weight:700!important;}
-.stButton>button:hover{border-color:#2f7cff!important;color:#2f7cff!important;}
-button[kind="primary"]{background:#111827!important;border-color:#111827!important;color:#fff!important;}
-.app-top{display:flex;align-items:center;justify-content:space-between;margin:0 0 16px;gap:12px;}
-.app-title{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;color:#071331;}
-.count-pill{background:#2f7cff;color:#fff;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:800;}
-.live-dot{width:7px;height:7px;border-radius:50%;background:#20d787;display:inline-block;margin-right:5px;}
-.sort-wrap{min-width:245px;}
-.match-card{background:#fff;border:1px solid #d8e1ef;border-radius:13px;margin:10px 0;padding:13px 15px;display:grid;grid-template-columns:64px 1.45fr 85px 72px 146px 100px;align-items:center;gap:12px;box-shadow:0 1px 0 rgba(20,33,61,.03);position:relative;overflow:hidden;}
-.match-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green);}
-.match-card.mid:before{background:var(--amber)}.match-card.low:before{background:var(--blue)}
-.m-time{font-size:16px;font-weight:800;color:#071331;line-height:1}.m-league{font-size:10px;color:#6f80a3;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.team-row{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#14213d;margin:2px 0}.team-icon{width:13px;height:9px;border-radius:2px;background:#192a56;display:inline-block}.pred-pill{display:inline-flex;align-items:center;justify-content:center;padding:6px 11px;border-radius:7px;border:1px solid #bcd2ff;background:#eff5ff;color:#1d64ff;font-weight:800;font-size:13px}.pred-pill.red{background:#fff1f1;border-color:#ffc7c7;color:#e11d48}.pred-pill.amber{background:#fff8e8;border-color:#ffd676;color:#a16207}.pred-pill.cyan{background:#ecfbff;border-color:#a8eaff;color:#0077a6}.conf{font-size:17px;font-weight:900;color:#20c878;line-height:1}.conf.mid{color:#ff9f00}.conf.low{color:#2271ff}.conf small{display:block;font-size:9px;color:#6f80a3;font-weight:500;margin-top:2px}.odds{display:flex;gap:6px}.odd-box{min-width:43px;background:#f4f7fc;border:1px solid #dbe5f4;border-radius:7px;text-align:center;padding:4px 5px}.odd-box span{display:block;font-size:9px;color:#8a98b6;line-height:1}.odd-box b{font-size:12px;color:#0b1d45}.detail-shell{background:#fff;border-radius:18px;overflow:hidden;border:1px solid #bfcbe3;box-shadow:0 22px 70px rgba(17,29,58,.35)}.detail-head{background:#111d3a;color:#fff;padding:18px 20px}.detail-topline{font-size:11px;color:#9eb0d0;font-weight:800}.detail-title{font-size:25px;font-weight:900;letter-spacing:-.02em}.detail-date{font-size:12px;color:#9eb0d0;margin-top:4px}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #e5ebf4}.metric{padding:14px;text-align:center;border-right:1px solid #e5ebf4}.metric:last-child{border-right:0}.metric-label{font-size:10px;color:#8997b4;text-transform:uppercase;font-weight:900;letter-spacing:.08em}.metric-val{font-size:24px;font-weight:900;color:#14213d;line-height:1.1}.metric-sub{font-size:11px;color:#6f80a3}.detail-body{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:18px}.panel-title{font-size:12px;color:#8997b4;text-transform:uppercase;font-weight:900;letter-spacing:.08em;margin-bottom:9px}.stat-row{display:flex;align-items:center;justify-content:space-between;background:#f6f8fc;border:1px solid #e2e8f2;border-radius:8px;padding:10px 12px;margin-bottom:7px;font-size:13px;font-weight:800;color:#263653}.stat-mini{display:flex;gap:12px;font-size:11px;color:#51627f}.odds-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.big-odd{border:1px solid #dce5f3;border-radius:9px;background:#f7f9fd;text-align:center;padding:13px 8px}.big-odd small{display:block;color:#8997b4;font-size:10px;text-transform:uppercase;font-weight:900}.big-odd b{font-size:23px;color:#2563eb}.combo-row{display:flex;justify-content:space-between;align-items:center;background:#f0f4fa;border:1px solid #d9e2ef;border-radius:8px;padding:12px;margin-bottom:8px;font-size:13px;font-weight:800}.why-box{background:#f6f8fc;border:1px solid #e2e8f2;border-radius:10px;padding:12px;font-size:12px;color:#40516e;line-height:1.55}.history-table{width:100%;border-collapse:collapse;font-size:11px}.history-table th{color:#8997b4;text-align:left;padding:5px}.history-table td{border-top:1px solid #e5ebf4;padding:5px;color:#263653;font-weight:700}.tag{border-radius:5px;padding:2px 6px;font-size:10px;font-weight:900}.tag.green{background:#dcfce7;color:#15803d}.tag.red{background:#fee2e2;color:#dc2626}.tag.gray{background:#e5e7eb;color:#374151}.side-logo{display:flex;align-items:center;gap:9px;margin:12px 0 18px}.logo-box{width:27px;height:27px;border-radius:7px;background:#3b82f6;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900}.side-brand{font-weight:900;color:#fff}.side-section{border-top:1px solid rgba(255,255,255,.12);padding-top:14px;margin-top:14px}.side-title{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:#8295bf;font-weight:900;margin-bottom:9px}.empty{background:#fff;border:1px solid #dbe3f0;border-radius:14px;padding:34px;text-align:center;color:#64748b}.legal-box{background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:10px 12px;color:#7c2d12;font-size:.8rem;margin:8px 0 14px}.stDialog div[role="dialog"]{max-width:980px!important;padding:0!important;border-radius:20px!important;background:transparent!important} 
-@media(max-width:900px){.match-card{grid-template-columns:55px 1fr 75px;}.odds,.match-card .detail-slot{display:none}.detail-body{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}}
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=DM+Sans:wght@400;500;600&display=swap');
 
-/* === DETAIL MODAL LIGHT STYLE FIX === */
-.stDialog div[role="dialog"]{max-width:980px!important;padding:0!important;border-radius:20px!important;background:transparent!important;}
-.detail-shell{background:#ffffff!important;border-radius:18px!important;overflow:hidden!important;border:1px solid #bfcbe3!important;box-shadow:0 24px 80px rgba(17,29,58,.35)!important;color:#14213d!important;}
-.detail-head{background:#111d3a!important;color:#fff!important;padding:18px 20px!important;}
-.detail-topline{font-size:11px!important;color:#9eb0d0!important;font-weight:800!important;}
-.detail-title{font-size:26px!important;font-weight:900!important;letter-spacing:-.02em!important;color:#fff!important;}
-.detail-date{font-size:12px!important;color:#9eb0d0!important;margin-top:4px!important;}
-.metric-grid{display:grid!important;grid-template-columns:repeat(4,1fr)!important;border-bottom:1px solid #e5ebf4!important;background:#fff!important;}
-.metric{padding:14px!important;text-align:center!important;border-right:1px solid #e5ebf4!important;}
-.metric:last-child{border-right:0!important;}
-.metric-label{font-size:10px!important;color:#8997b4!important;text-transform:uppercase!important;font-weight:900!important;letter-spacing:.08em!important;}
-.metric-val{font-size:24px!important;font-weight:900!important;color:#14213d!important;line-height:1.1!important;}
-.metric-sub{font-size:11px!important;color:#6f80a3!important;}
-.detail-body{display:grid!important;grid-template-columns:1fr 1fr!important;gap:18px!important;padding:18px!important;background:#fff!important;}
-.panel-title{font-size:12px!important;color:#8997b4!important;text-transform:uppercase!important;font-weight:900!important;letter-spacing:.08em!important;margin:14px 0 9px!important;}
-.stat-row{display:flex!important;align-items:center!important;justify-content:space-between!important;background:#f6f8fc!important;border:1px solid #e2e8f2!important;border-radius:8px!important;padding:10px 12px!important;margin-bottom:7px!important;font-size:13px!important;font-weight:800!important;color:#263653!important;}
-.stat-mini{display:flex!important;gap:12px!important;font-size:11px!important;color:#51627f!important;}
-.odds-grid{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:10px!important;}
-.big-odd{border:1px solid #dce5f3!important;border-radius:9px!important;background:#f7f9fd!important;text-align:center!important;padding:13px 8px!important;}
-.big-odd small{display:block!important;color:#8997b4!important;font-size:10px!important;text-transform:uppercase!important;font-weight:900!important;}
-.big-odd b{font-size:23px!important;color:#2563eb!important;}
-.combo-row{display:flex!important;justify-content:space-between!important;align-items:center!important;background:#f0f4fa!important;border:1px solid #d9e2ef!important;border-radius:8px!important;padding:12px!important;margin-bottom:8px!important;font-size:13px!important;font-weight:800!important;color:#263653!important;}
-.why-box{background:#f6f8fc!important;border:1px solid #e2e8f2!important;border-radius:10px!important;padding:12px!important;font-size:12px!important;color:#40516e!important;line-height:1.55!important;}
-.hist-head,.hist-row{display:grid!important;grid-template-columns:1.2fr 1.2fr .7fr .55fr .55fr .55fr!important;gap:6px!important;align-items:center!important;}
-.hist-head{color:#8997b4!important;font-size:10px!important;font-weight:900!important;letter-spacing:.05em!important;margin-bottom:4px!important;}
-.hist-row{border-top:1px solid #e5ebf4!important;padding:6px 0!important;font-size:11px!important;color:#263653!important;font-weight:700!important;}
-.tag{display:inline-block!important;border-radius:5px!important;padding:2px 6px!important;font-size:10px!important;font-weight:900!important;text-align:center!important;}
-.tag.green{background:#dcfce7!important;color:#15803d!important;}.tag.red{background:#fee2e2!important;color:#dc2626!important;}.tag.gray{background:#e5e7eb!important;color:#374151!important;}.tag.blue{background:#dbeafe!important;color:#2563eb!important;}.tag.amber{background:#fef3c7!important;color:#b45309!important;}
-@media(max-width:900px){.detail-body{grid-template-columns:1fr!important}.metric-grid{grid-template-columns:repeat(2,1fr)!important}.hist-head,.hist-row{grid-template-columns:1fr 1fr .6fr .5fr .5fr .5fr!important;font-size:10px!important}}
+html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif;
+    background: #f6f8fc;
+    color: #0f172a;
+}
+
+.stApp {
+    background: linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%);
+}
+section[data-testid="stSidebar"] {
+    background: #eef3fb !important;
+    border-right: 1px solid #d6e0ef;
+}
+section[data-testid="stSidebar"] label {
+    font-size: 0.82rem !important;
+    color: #4b5563 !important;
+}
+.main .block-container {
+    background: transparent;
+    padding-top: 1.2rem;
+    max-width: 1500px;
+}
+.top-header {
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    margin-bottom:1.1rem;
+}
+.top-header h2 {
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.9rem;
+    font-weight:700;
+    color:#0b1f3a;
+    margin:0;
+    letter-spacing:1px;
+}
+.top-header .sub {
+    font-size:0.88rem;
+    color:#64748b;
+    margin-top:3px;
+}
+.top-filters {
+    display:flex;
+    gap:10px;
+    margin:12px 0 18px 0;
+    flex-wrap:wrap;
+}
+.tf-chip {
+    background:#111926;
+    border:1px solid #1f2b3f;
+    color:#77b4ff;
+    padding:8px 14px;
+    border-radius:999px;
+    font-size:0.8rem;
+    font-weight:600;
+}
+.mac-badge {
+    background:#121826;
+    border:1px solid #22304a;
+    border-radius:12px;
+    padding:8px 18px;
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.5rem;
+    font-weight:700;
+    color:#27ae60;
+    text-align:center;
+    min-width:110px;
+}
+.mac-badge span {
+    color:#7b8291;
+    font-size:0.75rem;
+    display:block;
+    letter-spacing:1px;
+}
+.mac-kart {
+    background:#13151e;
+    border:1px solid #1e2130;
+    border-radius:16px;
+    padding:16px 18px;
+    margin-bottom:12px;
+    display:grid;
+    grid-template-columns:90px 1.6fr 190px 180px 180px;
+    gap:14px;
+    align-items:center;
+    transition:.2s ease;
+}
+.mac-kart:hover {
+    border-color:#2a3a52;
+    box-shadow:0 0 0 1px rgba(39,174,96,.12);
+}
+.mk-zaman { text-align:center; }
+.mk-star {
+    font-size:1rem;
+    color:#596073;
+    margin-bottom:4px;
+    display:block;
+}
+.mk-saat {
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.45rem;
+    font-weight:700;
+    color:#fff;
+    line-height:1;
+}
+.mk-lig {
+    font-size:0.68rem;
+    color:#8b94a8;
+    background:#1a1d26;
+    border-radius:5px;
+    padding:3px 8px;
+    margin-top:8px;
+    display:inline-block;
+}
+.mk-takimlar .mk-ev {
+    font-size:1.06rem;
+    font-weight:700;
+    color:#fff;
+    margin-bottom:8px;
+}
+.mk-takimlar .mk-dep {
+    font-size:1.02rem;
+    font-weight:600;
+    color:#c6cfdd;
+}
+.mk-mini {
+    font-size:0.75rem;
+    color:#8f98ab;
+    margin-top:8px;
+}
+.mk-label {
+    font-size:0.66rem;
+    color:#858ca0;
+    letter-spacing:1px;
+    text-transform:uppercase;
+    margin-bottom:5px;
+}
+.ana-pill {
+    background:#27ae60;
+    color:#fff;
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.08rem;
+    font-weight:700;
+    padding:5px 15px;
+    border-radius:7px;
+    display:inline-block;
+}
+.ana-pill.kirmizi { background:#c0392b; }
+.ana-pill.sari { background:#c9a227; color:#111; }
+.ana-pill.gri { background:#5d6779; color:#fff; }
+
+.guven-pct {
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.32rem;
+    font-weight:700;
+    color:#fff;
+}
+.guven-bar {
+    height:6px;
+    border-radius:6px;
+    background:#1e2130;
+    margin-top:5px;
+    overflow:hidden;
+}
+.guven-fill { height:100%; border-radius:6px; }
+
+.alt-pill {
+    background:#17304d;
+    color:#6ec1ff;
+    font-size:0.82rem;
+    font-weight:700;
+    padding:4px 10px;
+    border-radius:6px;
+    display:inline-block;
+    margin-bottom:8px;
+}
+.combo-pill {
+    background:#1e2130;
+    color:#f39c12;
+    font-size:0.8rem;
+    font-weight:700;
+    padding:4px 10px;
+    border-radius:6px;
+    display:inline-block;
+}
+.oran-row {
+    display:flex;
+    gap:12px;
+    align-items:center;
+}
+.oran-box { text-align:center; }
+.oran-box .ov {
+    font-size:0.65rem;
+    color:#687084;
+}
+.oran-box .val {
+    font-size:0.98rem;
+    font-weight:700;
+    color:#fff;
+}
+
+.hero-boxes {
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr;
+    gap:14px;
+    margin-bottom:14px;
+}
+.hbox {
+    border-radius:16px;
+    padding:20px 24px;
+    text-align:center;
+}
+.hbox.green {
+    background:linear-gradient(135deg,#153b25,#1b5636);
+    border:1px solid #1f8d53;
+}
+.hbox.blue {
+    background:linear-gradient(135deg,#102340,#173764);
+    border:1px solid #2c7be5;
+}
+.hbox.dark {
+    background:linear-gradient(135deg,#1a1d28,#232845);
+    border:1px solid #2c3152;
+}
+.hb-label {
+    font-size:0.68rem;
+    color:#aeb5c3;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    margin-bottom:10px;
+}
+.hb-val {
+    font-family:'Rajdhani',sans-serif;
+    font-size:2.35rem;
+    font-weight:700;
+    color:#fff;
+    line-height:1;
+}
+.hb-sub {
+    font-size:0.82rem;
+    color:#c0c7d3;
+    margin-top:7px;
+}
+.hb-badge {
+    display:inline-block;
+    margin-top:9px;
+    padding:4px 12px;
+    border-radius:999px;
+    font-size:0.74rem;
+    font-weight:700;
+}
+.badge-yuksek { background:#27ae60; color:#fff; }
+.badge-orta   { background:#e67e22; color:#fff; }
+.badge-dusuk  { background:#c0392b; color:#fff; }
+
+.tahmin-kart, .diger-kart, .neden-kart, .kupon-kart {
+    background:#13151e;
+    border:1px solid #1e2130;
+    border-radius:16px;
+    padding:18px 22px;
+}
+.tk-title {
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.05rem;
+    font-weight:700;
+    color:#fff;
+    letter-spacing:1px;
+    margin-bottom:14px;
+    text-transform:uppercase;
+}
+.tk-row, .diger-row {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:10px 0;
+    border-bottom:1px solid #1a1d26;
+}
+.tk-row:last-child, .diger-row:last-child { border-bottom:none; }
+.tk-key { font-size:0.84rem; color:#9098aa; }
+
+.risk-row {
+    background:#1a1d26;
+    border-radius:10px;
+    padding:10px 16px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-top:14px;
+}
+.rk {
+    font-size:0.8rem;
+    color:#8d95a8;
+    font-weight:700;
+    letter-spacing:1px;
+}
+.risk-pill {
+    padding:5px 18px;
+    border-radius:7px;
+    font-family:'Rajdhani',sans-serif;
+    font-size:1rem;
+    font-weight:700;
+}
+.risk-dusuk  { background:#27ae60; color:#fff; }
+.risk-orta   { background:#e67e22; color:#fff; }
+.risk-yuksek { background:#c0392b; color:#fff; }
+
+.diger-left {
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+.diger-icon {
+    font-size:1.05rem;
+    width:20px;
+    text-align:center;
+}
+.diger-name {
+    font-size:0.86rem;
+    font-weight:700;
+    color:#fff;
+}
+.diger-sub {
+    font-size:0.72rem;
+    color:#666;
+}
+.diger-badge {
+    padding:4px 12px;
+    border-radius:6px;
+    font-size:0.84rem;
+    font-weight:700;
+    font-family:'Rajdhani',sans-serif;
+}
+.db-green { background:#183925; color:#3ddb7c; }
+.db-gold  { background:#37290f; color:#f1c40f; }
+.db-red   { background:#391212; color:#ff6b6b; }
+.db-blue  { background:#17304d; color:#6ec1ff; }
+
+.surpriz-radar {
+    background:#2d0a0a;
+    border:1px solid #e74c3c;
+    border-radius:10px;
+    padding:12px 18px;
+    color:#ff6f6f;
+    font-weight:700;
+    font-size:0.9rem;
+    margin-bottom:12px;
+}
+.neden-item {
+    padding:8px 0;
+    border-bottom:1px solid #1a1d26;
+    color:#c7cfdd;
+    font-size:0.88rem;
+}
+.neden-item:last-child {
+    border-bottom:none;
+}
+
+.list-heading {
+    color:#0b1f3a !important;
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.85rem;
+    font-weight:800;
+    letter-spacing:.5px;
+    margin:8px 0 2px 0;
+}
+.stButton > button {
+    box-shadow:none;
+}
+.api-navy details {background: linear-gradient(90deg,#07111f 0%, #0a1830 100%);border:1px solid #233e67;border-radius:12px;padding:6px 10px;}
+.api-navy summary {color:#f8fbff;font-weight:700;}
+.api-navy [data-testid="stTextInputRootElement"] > div, .api-navy div[data-baseweb="input"] > div {background:#0d1a2f !important;border-color:#33598c !important;}
+.live-badge {display:inline-block;padding:4px 10px;border-radius:999px;font-size:0.72rem;font-weight:800;letter-spacing:.3px;}
+.detail-header-box {background: linear-gradient(90deg,#07111f 0%, #0a1830 100%);border:1px solid #223c63;border-radius:18px;padding:14px 18px;margin-bottom:12px;}
+.floating-coupon {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    width: 360px;
+    max-height: 70vh;
+    overflow-y: auto;
+    z-index: 9999;
+    background: linear-gradient(180deg,#07111f 0%, #0a1830 100%);
+    border: 1px solid #284977;
+    border-radius: 18px;
+    box-shadow: 0 18px 45px rgba(2,8,23,.45);
+    padding: 14px 16px;
+}
+.floating-coupon::-webkit-scrollbar {
+    width: 6px;
+}
+.floating-coupon::-webkit-scrollbar-thumb {
+    background: #facc15;
+    border-radius: 99px;
+}
+.floating-coupon-title {font-family:"Rajdhani",sans-serif;color:#f8fbff;font-size:1.2rem;font-weight:700;margin-bottom:8px;}
+.floating-coupon-sub {color:#9db2d1;font-size:.76rem;margin-bottom:10px;}
+.coupon-item {border:1px solid #223c63;background:#0b1628;border-radius:12px;padding:10px 12px;margin-bottom:8px;}
+.coupon-item-top {display:flex;align-items:center;justify-content:space-between;gap:10px;color:#f8fbff;font-size:.86rem;font-weight:700;}
+.coupon-item-sub {color:#8fa0ba;font-size:.74rem;margin-top:5px;}
+
+
+/* === LIGHT PAGE CONTRAST FIXES === */
+html, body, [class*="css"] {
+    background: #f6f8fc !important;
+    color: #0f172a !important;
+}
+.stApp {
+    background: linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%) !important;
+}
+.main .block-container {
+    background: transparent !important;
+}
+section[data-testid="stSidebar"] {
+    background: #eef3fb !important;
+    border-right: 1px solid #d6e0ef !important;
+}
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] * {
+    color: #334155 !important;
+}
+
+/* Top controls */
+.control-label, .section-kicker, .summary-note, .league-chip-note {
+    color: #64748b !important;
+}
+div[data-baseweb="popover"],
+div[data-testid="stPopover"] button,
+div[data-testid="stPopoverButton"] > button {
+    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
+    color: #f8fafc !important;
+}
+div[data-baseweb="select"] > div,
+div[data-testid="stNumberInput"] div[data-baseweb="input"] > div,
+div[data-testid="stTextInput"] div[data-baseweb="input"] > div,
+div[data-testid="stDateInput"] div[data-baseweb="input"] > div,
+div[data-testid="stNumberInputContainer"],
+div[data-testid="stTextInputRootElement"] {
+    background: #0f1b31 !important;
+    border-color: #284977 !important;
+    color: #f8fafc !important;
+}
+input, textarea {
+    color: #f8fafc !important;
+}
+.stSelectbox label, .stMultiSelect label, .stDateInput label, .stTextInput label, .stNumberInput label {
+    color: #64748b !important;
+}
+.stCheckbox label, .stRadio label {
+    color: #0f172a !important;
+}
+.stCheckbox label span, .stRadio label span {
+    color: #0f172a !important;
+}
+.stMultiSelect [data-baseweb="tag"] {
+    background: #ff5a52 !important;
+    color: white !important;
+}
+
+/* Buttons */
+.stButton > button {
+    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid #284977 !important;
+}
+.stButton > button:hover {
+    border-color: #facc15 !important;
+}
+button[kind="primary"], .st-emotion-cache * button[kind="primary"] {
+    color: #fff !important;
+}
+
+/* Cards remain dark */
+.mac-kart,
+.tahmin-kart, .diger-kart, .neden-kart, .kupon-kart,
+.combo-kart, .canli-kart, .strateji-kart, .oranlar-kart,
+.metrics-card, .control-card, .top-shell, .helper-bar,
+.rehber-box, .top-hero, .topbar-wrap {
+    color: #e5e7eb !important;
+}
+
+/* Detail screen white clash fixes */
+.diger-kart,
+.combo-kart,
+.canli-kart,
+.strateji-kart,
+.oranlar-kart,
+.tahmin-kart,
+.neden-kart,
+.kupon-kart {
+    background: linear-gradient(135deg,#0f172a,#111827) !important;
+    border: 1px solid #1f2a44 !important;
+    color: #e5e7eb !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+}
+.diger-kart *,
+.combo-kart *,
+.canli-kart *,
+.strateji-kart *,
+.oranlar-kart *,
+.tahmin-kart *,
+.neden-kart *,
+.kupon-kart * {
+    color: inherit;
+}
+.diger-row, .tk-row, .neden-item {
+    border-bottom: 1px solid #1f2a44 !important;
+}
+.tk-title, .diger-name, .panel-title, .list-heading {
+    color: #0b1f3a !important;
+}
+.kupon-kart .tk-title,
+.tahmin-kart .tk-title,
+.diger-kart .tk-title,
+.neden-kart .tk-title,
+.combo-kart .tk-title,
+.canli-kart .tk-title,
+.strateji-kart .tk-title,
+.oranlar-kart .tk-title {
+    color: #f8fafc !important;
+}
+.tk-key, .diger-sub, .mk-mini, .panel-date, .list-subheading {
+    color: #94a3b8 !important;
+}
+.diger-badge, .combo-badge {
+    background: #1e293b !important;
+    color: #facc15 !important;
+}
+.db-green { background:#183925 !important; color:#3ddb7c !important; }
+.db-gold  { background:#37290f !important; color:#f1c40f !important; }
+.db-red   { background:#391212 !important; color:#ff6b6b !important; }
+.db-blue  { background:#17304d !important; color:#6ec1ff !important; }
+
+/* Main titles on light background */
+.top-header h2, .list-heading {
+    color:#0b1f3a !important;
+}
+.top-header .sub, .panel-date, .summary-note, .list-subheading {
+    color:#64748b !important;
+}
+
+/* Remove subtitle if exists by hiding */
+.list-subheading {
+    display:none !important;
+}
+
+/* Header / detail title bars */
+.detail-title-bar, .detail-header-box {
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid #21334f !important;
+    border-radius: 14px !important;
+    padding: 10px 14px !important;
+}
+
+/* API expander */
+details, summary {
+    color: #f8fafc !important;
+}
+.streamlit-expanderHeader {
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid #21334f !important;
+    border-radius: 12px !important;
+}
+div[data-testid="stExpander"] {
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 100%) !important;
+    border: 1px solid #21334f !important;
+    border-radius: 12px !important;
+    padding: 4px 8px !important;
+}
+div[data-testid="stExpander"] * {
+    color: #f8fafc !important;
+}
+
+/* Small info texts under dark blocks */
+.metrics-card .sub,
+.hb-sub,
+.hb-label,
+.mk-label,
+.rk {
+    color: #cbd5e1 !important;
+}
+
+.detail-header-box * {
+    color: #f8fbff !important;
+    text-shadow: none !important;
+}
+.detail-header-box {
+    display:block !important;
+}
+
+/* Force white text in detail dark cards */
+.tahmin-kart, .diger-kart, .neden-kart, .kupon-kart,
+.tahmin-kart *, .diger-kart *, .neden-kart *, .kupon-kart * {
+    color: #f8fbff !important;
+}
+.tahmin-kart small,
+.diger-kart small,
+.neden-kart small {
+    color: #9db2d1 !important;
+}
+.tahmin-kart .tk-key,
+.diger-kart .tk-key,
+.neden-kart .tk-key,
+.diger-kart .diger-name,
+.diger-kart .diger-sub,
+.neden-kart .neden-item {
+    color: #f8fbff !important;
+}
+.tahmin-kart [style*="color:#666"],
+.diger-kart [style*="color:#666"],
+.neden-kart [style*="color:#666"] {
+    color: #9db2d1 !important;
+}
+
+/* Extra readability for historical-match section and dark boxes */
+.dark-white-text,
+.dark-white-text * {
+    color: #f8fbff !important;
+}
+
+/* Historical table title readability */
+.history-card {
+    background:#13151e !important;
+    border:1px solid #1e2130 !important;
+    border-radius:16px !important;
+    padding:16px 22px !important;
+    margin-bottom:0 !important;
+}
+.history-title {
+    color:#f8fbff !important;
+    font-family:'Rajdhani',sans-serif !important;
+    font-size:1.05rem !important;
+    font-weight:800 !important;
+    letter-spacing:1px !important;
+    margin-bottom:6px !important;
+    text-transform:uppercase !important;
+}
+.history-sub {
+    color:#e5e7eb !important;
+    font-size:0.82rem !important;
+    line-height:1.45 !important;
+}
+.ai-comment {
+    margin-top:10px;
+    padding:10px 12px;
+    background:#0b1628;
+    border:1px solid #1f2a44;
+    border-radius:10px;
+}
+.ai-comment-title {
+    color:#8fb3ff;
+    font-size:0.72rem;
+    font-weight:800;
+    letter-spacing:.5px;
+    margin-bottom:5px;
+}
+.ai-comment-text {
+    color:#f8fbff;
+    font-size:0.80rem;
+    line-height:1.45;
+}
+.coupon-actions {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid #223c63;
+}
+
+.ai-inline {
+    margin-top:10px;
+    padding:10px 12px;
+    background:#0b1628;
+    border:1px solid #1f2a44;
+    border-radius:12px;
+}
+.ai-line {
+    color:#f8fbff;
+    font-size:0.78rem;
+    line-height:1.45;
+    margin:3px 0;
+}
+.ai-line b {
+    color:#ffd24a !important;
+}
+.history-title {
+    color:#f8fbff !important;
+}
+.history-sub {
+    color:#f8fbff !important;
+}
 </style>
 """, unsafe_allow_html=True)
-
 
 api_key_panel()
 legal_sidebar_sections()
@@ -1195,35 +1830,6 @@ def hesapla(b_df, m_row, tolerans):
 
 
 
-
-
-def kombo_tahmini_oran(label, ana_odd=None):
-    """Kombo market için güvenli tahmini oran üretir.
-    Gerçek oran API'den gelmediğinde top10/kupon sisteminin çökmesini engeller.
-    """
-    if not label:
-        return None
-
-    try:
-        base = float(ana_odd) * 1.65 if ana_odd is not None else 2.20
-    except Exception:
-        base = 2.20
-
-    text = str(label)
-    if "KG Var" in text:
-        base += 0.35
-    if "KG Yok" in text:
-        base += 0.25
-    if "2.5 Üst" in text:
-        base += 0.35
-    if "2.5 Alt" in text:
-        base += 0.25
-    if "HT/FT" in text:
-        base += 1.20
-
-    return round(max(1.40, min(base, 8.50)), 2)
-
-
 def top10_market_adaylari(t):
     """
     Top 10 için gerçek multi-market aday havuzu.
@@ -1703,349 +2309,332 @@ def mac_durum_badge(mac_zamani):
 
 
 init_league_states()
-
-# =========================
-# YENİ UI — SOL FİLTRE + KART LİSTE + MODAL DETAY
-# =========================
-
-def selected_league_codes():
-    return [lig["kod"] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
+secili_kodlar = []
 
 
-def pred_class(label):
-    s = str(label)
-    if "MS 2" in s:
-        return "red"
-    if "2.5" in s or "Alt" in s or "Üst" in s:
-        return "amber"
-    if "KG" in s:
-        return "cyan"
-    return ""
-
-
-def conf_class(p):
-    p = int(p or 0)
-    if p >= 70:
-        return "", "Yüksek"
-    if p >= 55:
-        return "mid", "Orta"
-    return "low", "Düşük"
-
-
-def safe(v, default="-"):
-    return default if v is None or v == "" else v
-
-
-def render_history_table(b_det, max_rows=10):
-    """HTML table yerine div-grid kullanır; Streamlit'te <tr>/<td> kod olarak görünme sorununu engeller."""
-    if b_det is None or getattr(b_det, "empty", True):
-        return "<div class='why-box'>Benzer maç verisi bulunamadı.</div>"
-
-    cols_needed = ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR"]
-    for c in cols_needed:
-        if c not in b_det.columns:
-            return "<div class='why-box'>Geçmiş maç tablosu için gerekli kolonlar yok.</div>"
-
-    # b_det Date descending sıralı geldiği için en güncel/son 10 maç için head() kullanılır.
-    temp = b_det.head(max_rows).copy()
-    rows = []
-    for _, r in temp.iterrows():
-        try:
-            hg = int(r.get("FTHG", 0) or 0)
-            ag = int(r.get("FTAG", 0) or 0)
-        except Exception:
-            hg, ag = 0, 0
-        total_goals = hg + ag
-        ust = "Üst" if total_goals >= 3 else "Alt"
-        kg = "Var" if hg > 0 and ag > 0 else "Yok"
-        ms = {"H": "1", "D": "X", "A": "2"}.get(str(r.get("FTR", "")), "-")
-        ust_cls = "green" if ust == "Üst" else "gray"
-        kg_cls = "green" if kg == "Var" else "red"
-        ms_cls = "green" if ms == "1" else "red" if ms == "2" else "gray"
-        rows.append(f"""
-        <div class='hist-row'>
-          <div>{escape(str(r.get('HomeTeam',''))[:16])}</div>
-          <div>{escape(str(r.get('AwayTeam',''))[:16])}</div>
-          <div>{hg}-{ag}</div>
-          <div><span class='tag {ust_cls}'>{ust}</span></div>
-          <div><span class='tag {kg_cls}'>{kg}</span></div>
-          <div><span class='tag {ms_cls}'>{ms}</span></div>
-        </div>
-        """)
-
-    return f"""
-    <div class='hist-head'>
-      <div>EV</div><div>DEP</div><div>SKOR</div><div>2.5</div><div>KG</div><div>MS</div>
-    </div>
-    {''.join(rows)}
-    """
-
-
-def render_detail_html(item):
-    m, t, b_det = item["m"], item["t"], item.get("b")
-    ana = escape(str(safe(t.get("ana_label"))))
-    p = int(t.get("ana_p", 0) or 0)
-    eg, dg = int(t.get("eg", 0) or 0), int(t.get("dg", 0) or 0)
-    conf_cls, conf_text = conf_class(p)
-    nedenler = t.get("nedenler", []) or []
-    why = "".join([f"<div class='why-line'>• {escape(str(x))}</div>" for x in nedenler[:7]]) or "<div class='why-line'>• Model bu maçı mevcut oran ve geçmiş benzerlik üzerinden analiz etti.</div>"
-
-    stable_tols = t.get("stability_tols", []) or []
-    stable_count = int(t.get("stability_count", len(stable_tols)) or 0)
-    stable_text = ", ".join(stable_tols) if stable_tols else "Yok"
-    stable_label = f"{stable_count}/5"
-    stable_note = f"Bu maç aynı tahminle {stable_label} hassasiyet aralığında çıktı. Eşleşen hassasiyetler: {escape(stable_text)}."
-    why += f"<div class='why-line'>• {stable_note}</div>"
-
-    combo = escape(str(t.get("combo_label") or "Kombo önerisi zayıf"))
-    combo_p = int(t.get("combo_p", 0) or 0)
-    combo_level = escape(str(t.get("combo_level") or ("Güçlü" if combo_p >= 45 else "Deneysel")))
-    combo_odd = kombo_tahmini_oran(t.get("combo_label"), t.get("ana_odd")) if t.get("combo_label") else None
-
-    canli_label = escape(str(safe(t.get("canli_label"), "Canlı İzle")))
-    canli_p = int(t.get("canli_p", 0) or 0)
-    canli_strateji = escape(str(safe(t.get('canli_strateji'), 'İlk 10-15 dakikadaki tempo, şut ve baskı kontrol edilmeli.')))
-
-    history = render_history_table(b_det)
-    tarih = m["zaman"].strftime("%d %B %Y · %H:%M") if hasattr(m.get("zaman"), "strftime") else str(m.get("zaman", ""))
-    tarih = escape(tarih)
-    lig = escape(str(safe(m.get('lig'))))
-    ev = escape(str(safe(m.get('ev'))))
-    dep = escape(str(safe(m.get('dep'))))
-
-    avg_goal_txt = escape(str(t.get("goal_profile", "Dengeli")))
-    home_power = "-"
-    away_power = "-"
-    try:
-        home_power = f"{1 / float(m.get('h')) * 2:.2f}"
-        away_power = f"{1 / float(m.get('a')) * 2:.2f}"
-    except Exception:
-        pass
-
-    combo_odd_html = f"<b>@{fmt_odd(combo_odd)}</b>" if combo_odd else "<b>-</b>"
-
-    detail_css = """
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-      *{box-sizing:border-box} html,body{margin:0;padding:0;background:transparent;font-family:Inter,Arial,sans-serif;color:#102040;}
-      body{overflow-x:hidden;}
-      .detail-shell{width:100%;background:#fff;border:1px solid #c9d5ea;border-radius:18px;overflow:hidden;box-shadow:0 24px 80px rgba(17,29,58,.30);}
-      .detail-head{background:linear-gradient(135deg,#111d3a 0%,#091a43 100%);color:#fff;padding:22px 28px 24px;}
-      .detail-topline{font-size:12px;color:#b6c4df;font-weight:900;margin-bottom:6px;}
-      .detail-title{font-size:32px;line-height:1.1;font-weight:900;letter-spacing:-.03em;color:#fff;}
-      .detail-date{font-size:13px;color:#b6c4df;margin-top:8px;font-weight:700;}
-      .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #e4ebf6;background:#fff;}
-      .metric{padding:19px 12px;text-align:center;border-right:1px solid #e4ebf6;min-height:104px;display:flex;flex-direction:column;align-items:center;justify-content:center;}
-      .metric:last-child{border-right:0;}
-      .metric-label{font-size:11px;color:#7f90b0;text-transform:uppercase;font-weight:900;letter-spacing:.07em;}
-      .metric-val{font-size:28px;font-weight:900;color:#102040;line-height:1.12;margin-top:7px;}
-      .metric-val.blue{color:#1f74ff}.metric-val.green{color:#16c978}.metric-val.dark{color:#0f1d3d;}
-      .metric-sub{font-size:12px;color:#60708e;margin-top:5px;font-weight:700;}
-      .detail-body{display:grid;grid-template-columns:1fr 1fr;gap:30px;padding:26px 28px 20px;background:#fff;}
-      .panel-title{font-size:13px;color:#65799d;text-transform:uppercase;font-weight:900;letter-spacing:.075em;margin:0 0 13px;}
-      .panel-title.mt{margin-top:22px;}
-      .stat-row{display:flex;align-items:center;justify-content:space-between;background:#f8faff;border:1px solid #dce5f3;border-radius:10px;padding:14px 16px;margin-bottom:9px;font-size:15px;font-weight:900;color:#14264b;min-height:54px;}
-      .stat-mini{display:flex;gap:17px;align-items:center;font-size:12px;color:#53668a;text-align:center;}
-      .stat-mini b{display:block;color:#0f1d3d;font-size:13px;white-space:nowrap;}
-      .odds-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:18px;}
-      .big-odd{border:1px solid #dce5f3;border-radius:11px;background:#f9fbff;text-align:center;padding:18px 8px;min-height:94px;display:flex;flex-direction:column;justify-content:center;}
-      .big-odd small{display:block;color:#65799d;font-size:11px;text-transform:uppercase;font-weight:900;margin-bottom:8px;}
-      .big-odd b{font-size:30px;line-height:1;color:#1f74ff;font-weight:900;}
-      .market-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:4px 0 22px;}
-      .market-card{border-radius:11px;text-align:center;padding:14px 8px;border:1px solid #dce5f3;background:#f9fbff;}
-      .market-card.green{background:#eafaf3;border-color:#aeeacc;color:#087948}.market-card.amber{background:#fff8e8;border-color:#ffd676;color:#9a4b00}.market-card.cyan{background:#ecfbff;border-color:#a8eaff;color:#075985}
-      .market-card small{display:block;font-size:11px;font-weight:900;text-transform:uppercase;margin-bottom:5px}.market-card b{font-size:22px;font-weight:900;}
-      .combo-row{display:flex;justify-content:space-between;align-items:center;background:#f8faff;border:1px solid #dce5f3;border-radius:10px;padding:15px 16px;margin-bottom:10px;font-size:16px;font-weight:900;color:#14264b;}
-      .combo-left{display:flex;align-items:center;gap:12px}.tag{display:inline-flex;align-items:center;justify-content:center;border-radius:7px;padding:4px 8px;font-size:11px;font-weight:900;line-height:1}.tag.green{background:#dcfce7;color:#15803d}.tag.red{background:#fee2e2;color:#dc2626}.tag.gray{background:#eef1f6;color:#475569}.tag.blue{background:#dbeafe;color:#2563eb}.tag.amber{background:#fef3c7;color:#b45309}
-      .combo-row b{color:#1f74ff;font-size:20px;}
-      .why-box{background:#f8faff;border:1px solid #dce5f3;border-radius:10px;padding:14px 16px;font-size:13px;color:#344664;line-height:1.7;font-weight:700;}
-      .why-line{margin-bottom:2px;color:#344664}.why-line::first-letter{color:#1f74ff;}
-      .hist-head,.hist-row{display:grid;grid-template-columns:1.2fr 1.2fr .7fr .55fr .55fr .55fr;gap:8px;align-items:center;}
-      .hist-head{color:#65799d;font-size:11px;font-weight:900;letter-spacing:.05em;margin:4px 0 8px;text-transform:uppercase;}
-      .hist-row{border-top:1px solid #e5ebf4;padding:9px 0;font-size:13px;color:#14264b;font-weight:800;}
-      .stability-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 28px 22px;padding:14px 0;border-top:1px solid #e3eaf5;border-bottom:1px solid #e3eaf5;}
-      .stability-card{background:#f8faff;border:1px solid #dce5f3;border-radius:11px;padding:13px 14px;}
-      .stability-card small{display:block;color:#65799d;font-size:10px;text-transform:uppercase;font-weight:900;letter-spacing:.06em;margin-bottom:6px;}
-      .stability-card b{font-size:18px;color:#102040;font-weight:900;}
-      .stability-card .blue{color:#1f74ff}.stability-card .green{color:#16c978}.stability-card .muted{color:#53668a;font-size:13px;line-height:1.35;}
-      .footer-metrics{display:grid;grid-template-columns:repeat(4,1fr);border-top:0;margin:2px 28px 0;padding:20px 0 24px;}
-      .footer-metric{text-align:center;border-right:1px solid #e3eaf5;}.footer-metric:last-child{border-right:0}.footer-metric small{display:block;text-transform:uppercase;color:#102040;font-weight:900;font-size:12px;margin-bottom:8px}.footer-metric b{font-size:24px;color:#1f74ff;font-weight:900}.footer-metric b.green{color:#16c978}.footer-metric b.red{color:#dc2626}.footer-metric b.purple{color:#6d28d9}
-      .legal-box{margin:0 28px 18px;background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:13px 16px;color:#b45309;font-size:13px;line-height:1.55;font-weight:700;}
-      @media(max-width:850px){.detail-title{font-size:24px}.metric-grid{grid-template-columns:repeat(2,1fr)}.detail-body{grid-template-columns:1fr;padding:18px}.odds-grid,.market-grid{gap:10px}.stability-strip{grid-template-columns:1fr;margin:0 18px 16px}.footer-metrics{grid-template-columns:repeat(2,1fr);margin:0 18px}.hist-head,.hist-row{grid-template-columns:1fr 1fr .6fr .5fr .5fr .5fr;font-size:11px}.legal-box{margin:0 18px 18px}}
-    </style>
-    """
-
-    return f"""
-    <!doctype html>
-    <html>
-    <head>{detail_css}</head>
-    <body>
-    <div class='detail-shell'>
-      <div class='detail-head'>
-        <div class='detail-topline'>{lig}</div>
-        <div class='detail-title'>{ev} – {dep}</div>
-        <div class='detail-date'>{tarih}</div>
-      </div>
-
-      <div class='metric-grid'>
-        <div class='metric'><div class='metric-label'>Ana Tahmin</div><div class='metric-val blue'>{ana}</div><div class='metric-sub'>Model seçimi</div></div>
-        <div class='metric'><div class='metric-label'>Güven Skoru</div><div class='metric-val green'>{p}%</div><div class='metric-sub'>{conf_text} Güven</div></div>
-        <div class='metric'><div class='metric-label'>Tahmini Skor</div><div class='metric-val dark'>{eg} – {dg}</div><div class='metric-sub'>En olası skor</div></div>
-        <div class='metric'><div class='metric-label'>Benzer Maç</div><div class='metric-val dark'>{int(t.get('ornek',0) or 0)}</div><div class='metric-sub'>Analiz edildi</div></div>
-      </div>
-
-      <div class='detail-body'>
-        <div>
-          <div class='panel-title'>Maç Tahminleri</div>
-          <div class='stat-row'><span>Maç Sonucu</span><div class='stat-mini'><b>1<br>%{int(t.get('ms1_p',0) or 0)}</b><b>X<br>%{int(t.get('msx_p',0) or 0)}</b><b>2<br>%{int(t.get('ms2_p',0) or 0)}</b></div></div>
-          <div class='stat-row'><span>2.5 Üst/Alt</span><div class='stat-mini'><b>Üst<br>%{int(t.get('ms25_p',0) or 0)}</b><b>Alt<br>%{int(t.get('ms25a_p',0) or 0)}</b></div></div>
-          <div class='stat-row'><span>Karşılıklı Gol</span><div class='stat-mini'><b>Var<br>%{int(t.get('kg_var_p', t.get('kg_p',0)) or 0)}</b><b>Yok<br>%{int(t.get('kg_yok_p', 100-int(t.get('kg_p',0) or 0)) or 0)}</b></div></div>
-          <div class='stat-row'><span>İlk Yarı Sonucu</span><div class='stat-mini'><b>1<br>%{int(t.get('iy1_p',0) or 0)}</b><b>X<br>%{int(t.get('iyx_p',0) or 0)}</b><b>2<br>%{int(t.get('iy2_p',0) or 0)}</b></div></div>
-          <div class='stat-row'><span>İlk Yarı 0.5 Gol</span><div class='stat-mini'><b>Üst<br>%{int(t.get('iy05_p',0) or 0)}</b><b>Alt<br>%{int(t.get('iy05a_p',0) or 0)}</b></div></div>
-
-          <div class='panel-title mt'>Kombo Önerileri</div>
-          <div class='combo-row'><div class='combo-left'><span>{combo}</span><span class='tag green'>{combo_level}</span></div>{combo_odd_html}</div>
-          <div class='combo-row'><div class='combo-left'><span>{canli_label}</span><span class='tag blue'>Canlı</span></div><b>%{canli_p}</b></div>
-
-          <div class='panel-title mt'>Neden Bu Tahmin?</div>
-          <div class='why-box'>{why}</div>
-        </div>
-
-        <div>
-          <div class='panel-title'>Oranlar</div>
-          <div class='odds-grid'>
-            <div class='big-odd'><small>Ev Sahibi</small><b>{fmt_odd(m.get('h'))}</b></div>
-            <div class='big-odd'><small>Beraberlik</small><b style='color:#6d28d9'>{fmt_odd(m.get('b'))}</b></div>
-            <div class='big-odd'><small>Deplasman</small><b style='color:#dc2626'>{fmt_odd(m.get('a'))}</b></div>
-          </div>
-
-          <div class='market-grid'>
-            <div class='market-card green'><small>2.5 Üst</small><b>%{int(t.get('ms25_p',0) or 0)}</b></div>
-            <div class='market-card amber'><small>2.5 Alt</small><b>%{int(t.get('ms25a_p',0) or 0)}</b></div>
-            <div class='market-card cyan'><small>KG Var</small><b>%{int(t.get('kg_var_p', t.get('kg_p',0)) or 0)}</b></div>
-          </div>
-
-          <div class='panel-title'>Benzer Oranlı Geçmiş Maçlar (Son 10)</div>
-          {history}
-        </div>
-      </div>
-
-      <div class='stability-strip'>
-        <div class='stability-card'><small>Aynı Tahmin Hassasiyeti</small><b class='blue'>{stable_label}</b></div>
-        <div class='stability-card'><small>Çıktığı Hassasiyetler</small><b class='green'>{escape(stable_text)}</b></div>
-        <div class='stability-card'><small>Güven Hassasiyet Skoru</small><b>{t.get('playable_score', p)}</b><div class='muted'>Güven + örnek + hassasiyet uyumu</div></div>
-      </div>
-
-      <div class='footer-metrics'>
-        <div class='footer-metric'><small>Ev Sahibi Gücü</small><b>{home_power}</b></div>
-        <div class='footer-metric'><small>Beraberlik İhtimali</small><b class='purple'>%{int(t.get('msx_p',0) or 0)}</b></div>
-        <div class='footer-metric'><small>Deplasman Gücü</small><b class='red'>{away_power}</b></div>
-        <div class='footer-metric'><small>Maç Temposu</small><b class='green'>{avg_goal_txt}</b></div>
-      </div>
-
-      <div class='legal-box'>⚠️ Bu tahminler istatistiksel analiz ve yapay zekâ destekli tahminler sunar. Kesin kazanç garantisi verilmez.<br>Bahis oynamak risk içerir ve bağımlılık oluşturabilir.</div>
-    </div>
-    </body>
-    </html>
-    """
-
-
-try:
-    dialog_decorator = st.dialog
-except AttributeError:
-    dialog_decorator = st.experimental_dialog
-
-@dialog_decorator(" ", width="large")
-def mac_detay_modal():
-    item = st.session_state.get("detay_item")
-    if not item and st.session_state.get("detay_idx") is not None:
-        try:
-            item = st.session_state.final_list[st.session_state.detay_idx]
-        except Exception:
-            item = None
-    if not item:
-        st.warning("Detay bulunamadı.")
-        if st.button("Kapat"):
-            st.session_state.detay_item = None
-            st.session_state.detay_idx = None
-            st.rerun()
-        return
-    c1, c2 = st.columns([10,1])
-    with c2:
-        if st.button("×", key="close_detail_modal", use_container_width=True):
-            st.session_state.detay_item = None
-            st.session_state.detay_idx = None
-            st.rerun()
-    components.html(
-    textwrap.dedent(render_detail_html(item)),
-    height=1120,
-    scrolling=True
-)
-
-
-def clear_detail_state():
-    """Filtre/sıralama değişince eski detay modalının kendiliğinden açılmasını engeller."""
-    st.session_state.detay_item = None
-    st.session_state.detay_idx = None
-
-# Sidebar filtreleri
+# ÜST KONTROL BAR
 bugun = datetime.now().date()
-with st.sidebar:
-    st.markdown("<div class='side-logo'><div class='logo-box'>OA</div><div class='side-brand'>OddsAnaliz</div></div>", unsafe_allow_html=True)
-    if st.button("⇆", use_container_width=True, key="sidebar_fake_toggle"):
-        st.toast("Streamlit sidebar ok tuşuyla kapanır/açılır.")
-
-    st.markdown("<div class='side-section'><div class='side-title'>API</div></div>", unsafe_allow_html=True)
+st.markdown('<div class="api-navy">', unsafe_allow_html=True)
+with st.expander("🔑 API Ayarları", expanded=False):
     API_KEY = get_app_api_key()
     if API_KEY:
-        st.success("API key aktif ✅")
+        st.success("API key sistemde tanımlı ✅")
     else:
-        st.warning("API key gerekli")
+        st.error("ODDS_API_KEY Streamlit Secrets içinde tanımlı değil.")
+st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("<div class='side-section'><div class='side-title'>Tarih</div></div>", unsafe_allow_html=True)
-    if "date_mode" not in st.session_state:
-        st.session_state.date_mode = "Bugün"
-    if "special_date" not in st.session_state:
-        st.session_state.special_date = bugun
-    date_mode = st.radio("Tarih", ["Bugün", "Yarın", "2 gün sonra", "3 gün sonra", "Özel Tarih"], key="date_mode", label_visibility="collapsed", on_change=clear_detail_state)
-    if date_mode == "Özel Tarih":
-        st.date_input("Özel tarih", value=st.session_state.special_date, key="special_date", on_change=clear_detail_state)
-    secili_tarih = tarih_secimine_gore_date(date_mode, bugun, st.session_state.special_date)
+st.markdown("""
+<style>
+.top-shell {
+    background: linear-gradient(90deg,#07111f 0%, #0a1830 50%, #07111f 100%);
+    border:1px solid #21334f;
+    border-radius:20px;
+    padding:18px 18px 14px 18px;
+    margin-bottom:14px;
+    box-shadow:0 16px 32px rgba(0,0,0,.34);
+}
+.brand-row {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:12px;
+}
+.brand-title {
+    display:flex;
+    align-items:center;
+    gap:12px;
+}
+.brand-logo {
+    width:42px;
+    height:42px;
+    border-radius:12px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(135deg,#ffd24a,#f4b400);
+    color:#111;
+    font-size:1.3rem;
+    font-weight:900;
+    box-shadow:0 10px 24px rgba(244,180,0,.18);
+}
+.brand-text {
+    font-family:'Rajdhani',sans-serif;
+    font-size:2rem;
+    font-weight:700;
+    line-height:1;
+    color:#ecf3ff;
+}
+.brand-text span { color:#ffd24a; }
+.control-card {
+    background:linear-gradient(180deg,rgba(255,255,255,.04) 0%, rgba(255,255,255,.025) 100%);
+    border:1px solid #233654;
+    border-radius:16px;
+    padding:12px 14px;
+    height:100%;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+}
+.control-label {
+    font-size:0.68rem;
+    color:#8ea2c7;
+    text-transform:uppercase;
+    letter-spacing:1px;
+    margin-bottom:6px;
+}
+.league-trigger {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    color:#f6fbff;
+    font-weight:700;
+    font-size:1rem;
+}
+.league-sub {
+    font-size:0.82rem;
+    color:#ffd24a;
+    margin-top:4px;
+    font-weight:700;
+}
+.helper-bar {
+    background:linear-gradient(90deg,#0b1b33 0%, #0c213f 50%, #0b1b33 100%);
+    border:1px solid #22416d;
+    border-radius:14px;
+    padding:12px 16px;
+    margin-bottom:16px;
+}
+.summary-note {
+    font-size:0.76rem;
+    color:#90a3c0;
+    margin-top:8px;
+}
+.pop-title {
+    font-family:'Rajdhani',sans-serif;
+    font-size:1.05rem;
+    font-weight:700;
+    color:#f4f7fb;
+    margin-bottom:10px;
+}
+.preset-green button {
+    border-color:#1f6f4d !important;
+}
+.preset-blue button {
+    border-color:#1f4f85 !important;
+}
+.preset-red button {
+    border-color:#7b2b34 !important;
+}
+.league-chip-note {
+    font-size:0.78rem;
+    color:#8ea2c7;
+}
 
-    st.markdown("<div class='side-section'><div class='side-title'>Ligler</div></div>", unsafe_allow_html=True)
-    lig_arama = st.text_input("Lig ara", placeholder="Bundesliga, MLS...", label_visibility="collapsed", on_change=clear_detail_state)
-    lc1, lc2 = st.columns(2)
-    with lc1:
-        if st.button("Tümü", use_container_width=True):
-            clear_detail_state(); set_leagues(tum_lig_kodlari()); st.rerun()
-    with lc2:
-        if st.button("Temizle", use_container_width=True):
-            clear_detail_state(); clear_leagues(); st.rerun()
-    if st.button("Çekirdek + Value", use_container_width=True):
-        clear_detail_state(); toggle_leagues(KARLI_LIG_PRESETLERI.get("cekirdek_value", tum_lig_kodlari())); st.rerun()
-    lig_box = st.container(height=250, border=False)
-    with lig_box:
-        for lig in filtrelenmis_lig_listesi(lig_arama):
-            st.checkbox(lig["label"], key=f"cb_{lig['kod']}", on_change=clear_detail_state)
+/* Sarı scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #f6c90e #0f1a2d;
+}
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+*::-webkit-scrollbar-track {
+    background: #0f1a2d;
+    border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg,#ffd24a 0%, #f6c90e 100%);
+    border-radius: 999px;
+    border: 2px solid #0f1a2d;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg,#ffe27a 0%, #ffd24a 100%);
+}
 
-    st.markdown("<div class='side-section'><div class='side-title'>Güven Skoru</div></div>", unsafe_allow_html=True)
-    guven_filtreleri = st.multiselect("Güven", ["Yüksek (70%+)", "Orta (50–70%)", "Düşük (<50%)"], default=["Yüksek (70%+)", "Orta (50–70%)"], label_visibility="collapsed", on_change=clear_detail_state)
+/* popover ve input tonları */
+div[data-baseweb="popover"] {
+    border: 1px solid #243f68 !important;
+    border-radius: 18px !important;
+    background: linear-gradient(180deg,#07111f 0%, #09172a 100%) !important;
+}
 
-    st.markdown("<div class='side-section'><div class='side-title'>Tahmin Tipi</div></div>", unsafe_allow_html=True)
-    tip_ms = st.checkbox("MS1 / MS2 / X", value=True, on_change=clear_detail_state)
-    tip_ou = st.checkbox("2.5 Üst/Alt", value=True, on_change=clear_detail_state)
-    tip_kg = st.checkbox("KG Var/Yok", value=True, on_change=clear_detail_state)
+div[data-testid="stPopover"] button,
+div[data-testid="stPopoverButton"] > button {
+    background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
+    border: 1px solid #284977 !important;
+    color: #f7fbff !important;
+    min-height: 54px !important;
+    border-radius: 12px !important;
+}
 
-    st.markdown("<div class='side-section'><div class='side-title'>Analiz Ayarları</div></div>", unsafe_allow_html=True)
-    yillar = st.multiselect("Sezonlar", ['2122','2223','2324','2425','2526'], default=['2122','2223','2324','2425','2526'], on_change=clear_detail_state)
-    min_ornek = st.number_input("Min. örnek", min_value=1, value=1, on_change=clear_detail_state)
-    TOLERANS = st.slider("Oran hassasiyeti", 0.00, 0.30, 0.08, step=0.01, on_change=clear_detail_state)
-    canli_filtre = st.selectbox("Canlı", ["Tümü", "Canlı", "Başlamamış", "Bitti"], on_change=clear_detail_state)
-    analiz_btn = st.button("▶ ANALİZİ BAŞLAT", use_container_width=True, type="primary")
+div[data-baseweb="select"] > div,
+div[data-testid="stNumberInput"] div[data-baseweb="input"] > div,
+div[data-testid="stTextInput"] div[data-baseweb="input"] > div,
+div[data-testid="stDateInput"] div[data-baseweb="input"] > div {
+    background: #101a2c !important;
+    border-color: #284977 !important;
+}
+
+.stMultiSelect [data-baseweb="tag"] {
+    background: #ff5a52 !important;
+    color: white !important;
+}
+
+.stSlider [data-baseweb="slider"] [role="slider"] {
+    background: #ffd24a !important;
+    border: 2px solid #ffe27a !important;
+}
+.stSlider [data-baseweb="slider"] > div > div:nth-child(1) {
+    background: #ffd24a !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+def selected_league_codes():
+    return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
+
+if 'date_mode' not in st.session_state:
+    st.session_state['date_mode'] = 'Bugün'
+if 'special_date' not in st.session_state:
+    st.session_state['special_date'] = bugun
+
+st.markdown("""
+<div class="top-shell">
+  <div class="brand-row">
+    <div class="brand-title">
+      <div class="brand-logo">⚡</div>
+      <div class="brand-text">VIBE <span>PRO</span> EXPERT</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+bar1, bar2, bar3, bar4, bar5, bar6 = st.columns([2.6, 2.0, 1.4, 1.8, 1.8, 2.1], gap='small')
+
+with bar1:
+    st.markdown('<div class="control-card">', unsafe_allow_html=True)
+    st.markdown('<div class="control-label">Tarih ve Lig Seçimi</div>', unsafe_allow_html=True)
+    secili_tarih = tarih_secimine_gore_date(
+        st.session_state.get('date_mode', 'Bugün'),
+        bugun,
+        st.session_state.get('special_date', bugun)
+    )
+    popover_title = f"⚽ Tarih ve Lig Seçimi · {len(selected_league_codes())} lig seçili · {format_tr_date(secili_tarih)}"
+    with st.popover(popover_title, use_container_width=True):
+        left_col, right_col = st.columns([1.0, 3.2], gap='medium')
+        with left_col:
+            st.markdown('<div class="pop-title">Tarih Seçimi</div>', unsafe_allow_html=True)
+            date_mode = st.radio(
+                'Tarih modu',
+                options=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'],
+                index=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
+                key='date_mode',
+                label_visibility='collapsed'
+            )
+            if date_mode == 'Özel Tarih':
+                st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date')
+
+            st.markdown('<div class="pop-title" style="margin-top:18px">Hızlı Filtreler</div>', unsafe_allow_html=True)
+            if st.button('⭐💎 Kararlı Çekirdek + Karlı / Value', use_container_width=True, key='preset_core_value_top'):
+                toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
+                st.rerun()
+            st.markdown(
+                "<div class='league-chip-note' style='margin:6px 0 10px 0'>Çekirdek ligler ve value ligleri tek filtreyle birlikte seçer.</div>",
+                unsafe_allow_html=True
+            )
+            if st.button('🌍 Hepsini Aç', use_container_width=True, key='preset_all_top'):
+                set_leagues(tum_lig_kodlari())
+                st.rerun()
+            if st.button('🧹 Temizle', use_container_width=True, key='preset_clear_top'):
+                clear_leagues()
+                st.rerun()
+
+        with right_col:
+            st.markdown('<div class="pop-title">Lig Seçimi</div>', unsafe_allow_html=True)
+            lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_popover', label_visibility='collapsed')
+            filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
+            st.markdown(f"<div class='league-chip-note'>Gösterilen lig: <b>{len(filtreli_ligler)}</b></div>", unsafe_allow_html=True)
+            lig_box = st.container(height=360, border=True)
+            with lig_box:
+                lcol1, lcol2 = st.columns(2)
+                for i, lig in enumerate(filtreli_ligler):
+                    hedef_col = lcol1 if i % 2 == 0 else lcol2
+                    with hedef_col:
+                        st.checkbox(lig['label'], key=f"cb_{lig['kod']}")
+            st.markdown(f"<div style='font-size:0.9rem;color:#ffd24a;font-weight:700;margin-top:8px'>{len(selected_league_codes())} lig seçili</div>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with bar2:
+    st.markdown('<div class="control-card">', unsafe_allow_html=True)
+    st.markdown('<div class="control-label">Sezonlar</div>', unsafe_allow_html=True)
+    yillar = st.multiselect(
+        'Sezonlar',
+        options=['2122', '2223', '2324', '2425', '2526'],
+        default=['2122', '2223', '2324', '2425', '2526'],
+        label_visibility='collapsed',
+        key='top_seasons'
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with bar3:
+    st.markdown('<div class="control-card">', unsafe_allow_html=True)
+    st.markdown('<div class="control-label">Min. Örnek Sayısı</div>', unsafe_allow_html=True)
+    min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, label_visibility='collapsed', key='top_min_ornek')
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with bar4:
+    st.markdown('<div class="control-card">', unsafe_allow_html=True)
+    st.markdown('<div class="control-label">Oran Hassasiyeti</div>', unsafe_allow_html=True)
+    TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, label_visibility='collapsed', key='top_tol')
+    st.markdown(f"<div style='margin-top:-6px;color:#ffd24a;font-weight:700'>{TOLERANS:.2f}</div>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with bar5:
+    st.markdown('<div class="control-card">', unsafe_allow_html=True)
+    st.markdown('<div class="control-label">Oynanılabilir / Canlı</div>', unsafe_allow_html=True)
+    oynanabilir_esik = st.selectbox(
+        'Oynanılabilir eşik',
+        options=[0, 55, 60, 65, 70, 75],
+        index=2,
+        format_func=lambda x: 'Tümü' if x == 0 else f'Güven ≥ %{x}',
+        label_visibility='collapsed',
+        key='oynanabilir_esik'
+    )
+    canli_filtre = st.selectbox(
+        'Canlı filtre',
+        options=['Tümü', 'Canlı', 'Başlamamış', 'Bitti'],
+        index=0,
+        label_visibility='collapsed',
+        key='canli_filtre'
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 secili_kodlar = selected_league_codes()
+with bar6:
+    st.markdown('<div class="control-card">', unsafe_allow_html=True)
+    st.markdown('<div class="control-label">Analiz</div>', unsafe_allow_html=True)
+    analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
+    if st.button('🎫 Kuponlarım', use_container_width=True, key='toggle_coupon_popup'):
+        st.session_state.coupon_popup_open = True
+        st.rerun()
+    if 'son_analiz' in st.session_state:
+        st.markdown(
+            f"<div class='summary-note'>Son analiz: {st.session_state.son_analiz}<br>Toplam maç: {st.session_state.get('toplam_mac',0)}</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# Analiz çalıştır
+rehber = tolerans_rehberi(TOLERANS)
+st.markdown(f"""
+<div class="helper-bar">
+  <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+    <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase">Tolerans Rehberi</div>
+    <div style="font-size:0.88rem;color:#fff">Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b></div>
+    <div style="font-size:0.88rem;color:#c7cfdd">Dinamik min maç: <b>{rehber['onerilen_min_mac']}</b></div>
+    <div style="font-size:0.84rem;color:#8fa0ba">{rehber['yorum']}</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
 if analiz_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
@@ -2055,88 +2644,686 @@ if analiz_btn:
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
-            final = []
-            stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
-            if not bulten.empty and not gecmis.empty:
-                for _, m in bulten.iterrows():
-                    t, b_det = hesapla(gecmis, m, TOLERANS)
-                    if t is None or len(b_det) < min_ornek:
+
+        final = []
+        stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
+        if not bulten.empty and not gecmis.empty:
+            for _, m in bulten.iterrows():
+                t, b_det = hesapla(gecmis, m, TOLERANS)
+                if t is None:
+                    continue
+                if len(b_det) < min_ornek:
+                    continue
+
+                stable_hits = []
+                for stab_tol in stability_tols:
+                    stab_t, stab_b = hesapla(gecmis, m, stab_tol)
+                    if stab_t is None:
                         continue
-                    stable_hits = []
-                    for stab_tol in stability_tols:
-                        stab_t, stab_b = hesapla(gecmis, m, stab_tol)
-                        if stab_t and stab_t.get("ana_label") == t.get("ana_label") and stab_t.get("ornek",0) >= max(min_ornek, stab_t.get("onerilen_min_mac",1)):
-                            stable_hits.append(f"{stab_tol:.2f}")
-                    t["stability_tols"] = stable_hits
-                    t["stability_count"] = len(stable_hits)
-                    t["playable_score"] = round(t.get("playable_score", t.get("ana_p",0)) + min(5, len(stable_hits)), 1)
-                    m_dict = m.to_dict()
-                    m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
-                    if canli_filtre != "Tümü" and m_dict["durum"] != canli_filtre:
-                        continue
-                    final.append({"m": m_dict, "t": t, "b": b_det})
-            final = sorted(final, key=lambda x: (x["t"].get("playable_score",0), x["t"].get("ana_p",0), x["t"].get("ornek",0)), reverse=True)
-            st.session_state.final_list = final
-            st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10) if not bulten.empty and not gecmis.empty else []
-            st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
-            st.session_state.toplam_mac = len(final)
-            st.session_state.detay_item = None
-            st.session_state.detay_idx = None
+                    if (
+                        stab_t["ana_label"] == t["ana_label"]
+                        and stab_t["ana_label"] not in ["Belirsiz Maç", "Tahmin Zayıf"]
+                        and stab_t["ornek"] >= max(min_ornek, stab_t["onerilen_min_mac"])
+                    ):
+                        stable_hits.append(f"{stab_tol:.2f}")
+
+                t["stability_tols"] = stable_hits
+                t["stability_count"] = len(stable_hits)
+                t["stability_text"] = " · ".join(stable_hits)
+                early_hits = [x for x in stable_hits if float(x) <= 0.05]
+                normal_hits = [x for x in stable_hits if float(x) > 0.05]
+                t["stability_early_tols"] = early_hits
+                t["stability_late_tols"] = normal_hits
+                t["stability_early_text"] = " · ".join(early_hits)
+                t["stability_late_text"] = " · ".join(normal_hits)
+
+                t["score"] = round(
+                    t["score"]
+                    + min(7, t["stability_count"] * 1.4)
+                    + min(4, len(early_hits) * 1.4)
+                    + (2 if f"{TOLERANS:.2f}" in stable_hits else 0),
+                    1
+                )
+                t["playable_score"] = round(
+                    t.get("playable_score", t.get("ana_p", 0))
+                    + min(5, t["stability_count"] * 1.0)
+                    + min(4, len(early_hits) * 1.2),
+                    1
+                )
+
+                if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
+                    continue
+                m_dict = m.to_dict()
+                m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
+                final.append({"m": m_dict, "t": t, "b": b_det})
+
+        final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0), x["t"].get("ornek", 0)), reverse=True)
+        final = sorted(
+            final,
+            key=lambda x: (
+                x["t"].get("playable_score", 0),
+                x["t"].get("ana_p", 0),
+                x["t"].get("score", 0),
+                x["t"].get("ornek", 0),
+            ),
+            reverse=True,
+        )
+        final = sorted(
+            final,
+            key=lambda x: (
+                x.get("t", {}).get("playable_score", 0),
+                x.get("t", {}).get("ana_p", 0),
+            ),
+            reverse=True
+        )
+        st.session_state.final_list = final
+        st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
+        st.session_state.detay_idx = None
+        st.session_state.detay_item = None
+        st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
+        st.session_state.toplam_mac = len(final)
         st.rerun()
 
-# Ana liste filtre/sıralama
-fl = st.session_state.get("final_list", [])
-filtered = []
-for item in fl:
-    t = item["t"]
-    p = int(t.get("ana_p",0) or 0)
-    label = str(t.get("ana_label", ""))
-    ok_guven = ((p >= 70 and "Yüksek (70%+)" in guven_filtreleri) or (50 <= p < 70 and "Orta (50–70%)" in guven_filtreleri) or (p < 50 and "Düşük (<50%)" in guven_filtreleri))
-    ok_tip = ((label.startswith("MS") or "Beraberlik" in label) and tip_ms) or (("2.5" in label or "Alt" in label or "Üst" in label) and tip_ou) or ("KG" in label and tip_kg)
-    if ok_guven and ok_tip:
-        filtered.append(item)
+if st.session_state.detay_item is not None or st.session_state.detay_idx is not None:
+    if st.session_state.detay_item is not None:
+        item = st.session_state.detay_item
+    else:
+        idx = st.session_state.detay_idx
+        item = st.session_state.final_list[idx]
+    m, t, b_det = item["m"], item["t"], item["b"]
 
-st.markdown("<div class='app-top'><div class='app-title'>Anlık Maç Tahminleri <span class='count-pill'>%d Maç</span> <span style='font-size:12px;color:#20b970'><span class='live-dot'></span>Canlı</span></div><div class='sort-wrap'></div></div>" % len(filtered), unsafe_allow_html=True)
-sort_col1, sort_col2 = st.columns([3,1])
-with sort_col2:
-    siralama = st.selectbox("Sıralama", ["Güven: Yüksek → Düşük", "Saat: Yakın → Uzak", "Oran: Yüksek → Düşük"], label_visibility="collapsed", on_change=clear_detail_state)
-if siralama.startswith("Güven"):
-    filtered.sort(key=lambda x: x["t"].get("ana_p",0), reverse=True)
-elif siralama.startswith("Saat"):
-    filtered.sort(key=lambda x: x["m"].get("zaman"))
-else:
-    filtered.sort(key=lambda x: float(x["t"].get("ana_odd") or max(x["m"].get("h",0), x["m"].get("b",0), x["m"].get("a",0))), reverse=True)
+    durum_color, durum_text = mac_durum_badge(m["zaman"])
 
-if not fl:
-    st.markdown("<div class='empty'><b>Analizi Başlatın</b><br>Sol bardan API, tarih ve ligleri seçip analizi başlat.</div>", unsafe_allow_html=True)
-elif not filtered:
-    st.markdown("<div class='empty'><b>Filtreye uygun maç yok.</b><br>Sol bardaki güven/tahmin tipi filtrelerini genişlet.</div>", unsafe_allow_html=True)
+    if st.button("← Geri", key="geri_btn"):
+        st.session_state.detay_idx = None
+        st.session_state.detay_item = None
+        st.rerun()
 
-for i, item in enumerate(filtered):
-    m, t = item["m"], item["t"]
-    p = int(t.get("ana_p",0) or 0)
-    conf_cls, _ = conf_class(p)
-    card_cls = "mid" if 55 <= p < 70 else "low" if p < 55 else ""
-    pred_cls = pred_class(t.get("ana_label", ""))
+    st.markdown(
+        f"""
+        <div class="detail-header-box">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <div>
+              <div style="font-family:Rajdhani,sans-serif;font-size:2rem;font-weight:700;color:#f8fbff;letter-spacing:1px;line-height:1.1">
+                {m['ev'].upper()} – {m['dep'].upper()}
+              </div>
+              <div style="font-size:0.92rem;color:#9db2d1;margin-top:8px">
+                {m['lig']} &nbsp;·&nbsp; {format_tr_date(m['zaman'].date())} &nbsp;·&nbsp; {m['zaman'].strftime('%H:%M')}
+              </div>
+            </div>
+            <div style="text-align:right">
+              <span class="live-badge" style="background:{durum_color};color:white">{durum_text}</span><br>
+              <span style="font-size:0.82rem;color:#9db2d1;display:inline-block;margin-top:8px">📊 {int(t['ornek'])} örnek</span>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
+
     st.markdown(f"""
-    <div class='match-card {card_cls}'>
-      <div><div class='m-time'>{m['zaman'].strftime('%H:%M') if hasattr(m.get('zaman'),'strftime') else ''}</div><div class='m-league'>{str(m.get('lig',''))[:12]}</div></div>
-      <div><div class='team-row'><span class='team-icon'></span>{safe(m.get('ev'))}</div><div class='team-row'><span class='team-icon' style='opacity:.75'></span>{safe(m.get('dep'))}</div></div>
-      <div><span class='pred-pill {pred_cls}'>{safe(t.get('ana_label'))}</span></div>
-      <div><div class='conf {conf_cls}'>{p}%<small>Güven</small></div></div>
-      <div class='odds'><div class='odd-box'><span>1</span><b>{fmt_odd(m.get('h'))}</b></div><div class='odd-box'><span>X</span><b>{fmt_odd(m.get('b'))}</b></div><div class='odd-box'><span>2</span><b>{fmt_odd(m.get('a'))}</b></div></div>
-      <div class='detail-slot'></div>
+    <div class="hero-boxes">
+      <div class="hbox green">
+        <div class="hb-label">ANA TAHMİN</div>
+        <div class="hb-val">{t['ana_label']}</div>
+        <div class="hb-sub">Maç Sonucu: {ms_label_long}</div>
+        {"<div style='margin-top:8px;font-size:0.76rem;color:#ff8b8b'>⚠️ Model bu maçı net ayıramadı</div>" if t.get("belirsiz") else ""}
+      </div>
+      <div class="hbox blue">
+        <div class="hb-label">GÜVEN SKORU</div>
+        <div class="hb-val">{int(t['ana_p'])}%</div>
+        <div><span class="hb-badge {t['guven_badge_cls']}">{t['guven_badge_lbl']}</span></div>
+      </div>
+      <div class="hbox dark">
+        <div class="hb-label">TAHMİNİ SKOR</div>
+        <div class="hb-val">{t['eg']} – {t['dg']}</div>
+        <div class="hb-sub">En Olası Skor</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
-    # Butonu kartın hemen altına koyuyoruz; Streamlit native buton olduğu için sorunsuz çalışır.
-    _, bcol = st.columns([6,1])
-    with bcol:
-        if st.button("Detay →", key=f"new_detail_{i}_{abs(hash(str(m.get('ev'))+str(m.get('dep'))+str(m.get('zaman'))))}", use_container_width=True):
-            st.session_state.detay_item = item
-            st.session_state.detay_idx = None
+
+    st.markdown(f"""
+    <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:14px 18px;margin-bottom:14px">
+      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between">
+        <div style="font-size:0.82rem;color:#c7cfdd">Kullanılan tolerans: <b>{t['kullanilan_tolerans']:.2f}</b> · Önerilen: <b>{t['onerilen_tolerans']}</b></div>
+        <div style="font-size:0.82rem;color:#c7cfdd">Örnek: <b>{int(t['ornek'])}</b> · Dinamik min maç: <b>{t['onerilen_min_mac']}</b></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
+        <span style="background:{t.get('ornek_renk', '#44506b')};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t.get('ornek_durum', 'Standart')}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">{t['tolerans_yorumu']}</span>
+        <span style="font-size:0.78rem;color:#77b4ff">Tavsiye: {t['tolerans_tavsiyesi']}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">Güven çarpanı: {t['guven_carpani']}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">Maç tipi: {t['match_type']}</span>
+        <span style="font-size:0.78rem;color:#8f98ab">Gol profili: {t['goal_profile']}</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if t["flip_p"] >= 0.12:
+        st.markdown(f"""
+        <div class="surpriz-radar">
+        🔥 SÜRPRİZ RADARI — %{int(t['flip_p']*100)} ihtimalle HT/FT sürprizi (1/2 - 2/1) tespit edildi!
+        </div>""", unsafe_allow_html=True)
+
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown(f"""
+        <div class="tahmin-kart">
+          <div class="tk-title">MAÇ TAHMİNLERİ</div>
+
+          <div class="tk-row">
+            <span class="tk-key">🏆 Maç Sonucu <small style="color:#8fa0ba">MS 1/X/2</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{int(t['ms1_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{int(t['msx_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#e74c3c">%{int(t['ms2_p'])}</div></div>
+            </div>
+          </div>
+
+          <div class="tk-row">
+            <span class="tk-key">⚽ 2.5 Üst/Alt <small style="color:#8fa0ba">Toplam Gol</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Üst</div><div style="font-weight:700;color:#27ae60">%{int(t['ms25_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Alt</div><div style="font-weight:700;color:#e74c3c">%{int(t['ms25a_p'])}</div></div>
+            </div>
+          </div>
+
+          <div class="tk-row">
+            <span class="tk-key">🤝 Karşılıklı Gol <small style="color:#8fa0ba">KG Var / Yok</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Var</div><div style="font-weight:700;color:#27ae60">%{int(t['kg_var_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Yok</div><div style="font-weight:700;color:#e74c3c">%{int(t['kg_yok_p'])}</div></div>
+            </div>
+          </div>
+
+          <div class="tk-row">
+            <span class="tk-key">⏱ İlk Yarı Sonucu <small style="color:#8fa0ba">İY 1/X/2</small></span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">1</div><div style="font-weight:700;color:#27ae60">%{int(t['iy1_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">X</div><div style="font-weight:700;color:#f1c40f">%{int(t['iyx_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">2</div><div style="font-weight:700;color:#e74c3c">%{int(t['iy2_p'])}</div></div>
+            </div>
+          </div>
+
+          <div class="tk-row">
+            <span class="tk-key">⏱ İlk Yarı 0.5 Üst/Alt</span>
+            <div style="display:flex;gap:18px">
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Üst</div><div style="font-weight:700;color:#27ae60">%{int(t['iy05_p'])}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#666">Alt</div><div style="font-weight:700;color:#e74c3c">%{int(t['iy05a_p'])}</div></div>
+            </div>
+          </div>
+
+          <div class="risk-row">
+            <span class="rk">RİSK SEVİYESİ</span>
+            <span class="risk-pill {t['risk_cls']}">{t['risk_label']}</span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with right:
+        ms35a = 100 - int(t["ms35_p"])
+        ms35_cls = "db-green" if t["ms35_p"] >= 50 else "db-gold"
+        ms35_lbl = f"Üst %{int(t['ms35_p'])}" if t["ms35_p"] >= 50 else f"Alt %{ms35a}"
+
+        kg_cls = "db-green" if t["kg_var_p"] >= 50 else "db-red"
+        kg_lbl = f"Var %{int(t['kg_var_p'])}" if t["kg_var_p"] >= 50 else f"Yok %{int(t['kg_yok_p'])}"
+
+        iy_cls = "db-green" if t["iy05_p"] >= 50 else "db-red"
+        iy_lbl = f"Üst %{int(t['iy05_p'])}" if t["iy05_p"] >= 50 else f"Alt %{int(t['iy05a_p'])}"
+
+        htft_cls = "db-green" if t["htft_p"] >= 40 else "db-gold"
+        combo_cls = "db-gold" if t.get("combo_var", False) else "db-red"
+        combo_text = t.get("combo_label", "")
+        combo_row = ""
+        if combo_text:
+            combo_row = f"""
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">{t.get('combo_level', 'Destekli')}</div></div></div>
+            <span class="diger-badge {combo_cls}">{combo_text} %{int(t.get('combo_p', 0))}</span>
+          </div>"""
+
+        st.markdown(f"""
+        <div class="diger-kart">
+          <div class="tk-title">DİĞER ÖNERİLER</div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🔁</span><div><div class="diger-name">HT/FT</div><div class="diger-sub">1. Yarı / Maç Sonu</div></div></div>
+            <span class="diger-badge {htft_cls}">{t['htft_mod']} %{int(t['htft_p'])}</span>
+          </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">⚽</span><div><div class="diger-name">Toplam Gol 3.5</div><div class="diger-sub">Tahmini Gol Sayısı</div></div></div>
+            <span class="diger-badge {ms35_cls}">{ms35_lbl}</span>
+          </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">⏱</span><div><div class="diger-name">İlk Yarı / 0.5 Üst</div><div class="diger-sub">İlk Yarı Toplam Gol</div></div></div>
+            <span class="diger-badge {iy_cls}">{iy_lbl}</span>
+          </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🤝</span><div><div class="diger-name">Karşılıklı Gol</div><div class="diger-sub">KG Var / Yok</div></div></div>
+            <span class="diger-badge {kg_cls}">{kg_lbl}</span>
+          </div>
+
+          {combo_row}
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🧩</span><div><div class="diger-name">En Uyumlu Senaryo</div><div class="diger-sub">Model özeti</div></div></div>
+            <span class="diger-badge db-blue">{t.get('scenario_label', '')}</span>
+          </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">📍</span><div><div class="diger-name">Canlı Tercih</div><div class="diger-sub">{t['canli_label']}</div></div></div>
+            <span class="diger-badge db-green">%{int(t['canli_p'])}</span>
+          </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">⚡</span><div><div class="diger-name">Canlı Strateji</div><div class="diger-sub">İlk 10-20 dakika</div></div></div>
+            <span class="diger-badge db-blue">İzle</span>
+          </div>
+
+          <div style="font-size:0.78rem;color:#c7d2e3;line-height:1.5;padding:10px 12px 8px 12px;border:1px solid #1f2a44;background:#0b1628;border-radius:10px;margin-top:8px">
+            {t.get('canli_strateji', '')}
+          </div>
+
+          <div class="risk-row" style="margin-top:14px">
+            <span class="rk">ORANLAR</span>
+            <div style="display:flex;gap:16px">
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div></div>
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    neden_html = "".join([f'<div class="neden-item">• {x}</div>' for x in t["nedenler"]])
+    st.markdown(f"""
+    <div class="neden-kart" style="margin-bottom:14px">
+      <div class="tk-title">NEDEN BU TAHMİN?</div>
+      {neden_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="history-card">
+      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
+      <div class="history-sub" style="color:#f8fbff !important">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    bd = b_det.head(10)
+    dt = pd.DataFrame()
+    dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
+    dt["Ev Sahibi"] = bd["HomeTeam"]
+    dt["Deplasman"] = bd["AwayTeam"]
+    dt["İY Sonuç"] = bd["HTHG"].astype(int).astype(str) + "-" + bd["HTAG"].astype(int).astype(str)
+    dt["MS Sonuç"] = bd["FTHG"].astype(int).astype(str) + "-" + bd["FTAG"].astype(int).astype(str)
+    dt["2.5 GOL"] = (bd["FTHG"] + bd["FTAG"] >= 3).map({True: "Üst", False: "Alt"})
+    dt["KG"] = ((bd["FTHG"] > 0) & (bd["FTAG"] > 0)).map({True: "Var", False: "Yok"})
+    dt["HT/FT"] = bd["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + bd["FTR"].replace({"H": "1", "A": "2", "D": "X"})
+
+    def color_cell(val):
+        v = str(val)
+        if v in ["Üst", "Var", "1/1", "2/2"]:
+            return "background-color:#183925;color:#3ddb7c;font-weight:700"
+        if v in ["Alt", "Yok"]:
+            return "background-color:#391212;color:#ff6b6b;font-weight:700"
+        if "1/2" in v or "2/1" in v or "X/1" in v or "1/X" in v or "X/2" in v or "2/X" in v:
+            return "background-color:#37290f;color:#f1c40f;font-weight:700"
+        return ""
+
+    st.dataframe(
+        dt.style.map(color_cell, subset=["2.5 GOL", "KG", "HT/FT"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.stop()
+
+fl = st.session_state.final_list
+
+hc1, hc2 = st.columns([6, 1])
+with hc1:
+    st.markdown(f"""
+    <div class="top-header">
+      <div>
+        <h2>ANA MAÇ EKRANI</h2>
+        <div class="sub">{format_tr_date(secili_tarih)}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="top-filters">
+      <div class="tf-chip">📅 Kartlı görünüm</div>
+      <div class="tf-chip">🎯 Detaylı tahmin ekranı</div>
+      <div class="tf-chip">🔥 Smart filter</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with hc2:
+    if fl:
+        st.markdown(f"""<div class="mac-badge" style="margin-top:8px">{len(fl)}<span>MAÇ BULUNDU</span></div>""", unsafe_allow_html=True)
+
+
+# ==========================================================
+# SADE ANALIZ PANELI
+# Auto kupon builder ve 30 gunluk kasa plani kaldirildi.
+# ==========================================================
+st.markdown("<br>", unsafe_allow_html=True)
+st.info("🧠 Sade mod aktif: Auto kupon builder ve 30 günlük kasa planı kaldırıldı. Tolerans değişiminde sadece analiz yenilenir; yeni API çağrısı için tekrar maç yüklemen gerekir.")
+
+if not fl:
+    st.markdown("""
+    <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
+      <div style="font-size:2rem;margin-bottom:12px">⚡</div>
+      <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
+      <div style="font-size:0.9rem;color:#666;margin-top:6px">API ayarlarını açıp anahtarını gir, sonra üst bardan tarih ve lig seçip ANALİZİ BAŞLAT butonuna bas.</div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    indexed_fl = list(enumerate(fl))
+    yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
+    orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
+    kombolu = [(idx, x) for idx, x in indexed_fl if x["t"].get("combo_var", False)]
+
+    # ==========================================================
+    # GUNUN EN IYI 10 MACI - HASSASIYETTEN BAGIMSIZ
+    # API kullanmaz; analizde cekilen maclar uzerinden 0.00 - 0.10 arasi en iyi toleransi secer.
+    # ==========================================================
+    gunun_top10 = st.session_state.get("top10_list", [])
+
+    if gunun_top10:
+        with st.expander("🔥 Günün En İyi 10 Maçı", expanded=False):
+            st.markdown(
+                """
+                <div style="font-size:0.86rem;color:#64748b;margin:0 0 12px 0;">
+                    Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 ile denenir.
+                    MS, Alt/Üst, KG, İlk Yarı ve Kombo adayları arasından en güçlü market seçilir.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            for sira, item in enumerate(gunun_top10, start=1):
+                m = item["m"]
+                t = item["t"]
+                guven = int(t.get("top10_market_guven", t.get("ana_p", 0)) or 0)
+                if guven >= 70:
+                    renk = "#22c55e"
+                    label = "Yüksek"
+                elif guven >= 55:
+                    renk = "#f59e0b"
+                    label = "Orta"
+                else:
+                    renk = "#ef4444"
+                    label = "Düşük"
+
+                market_label = t.get("top10_market_label", t.get("ana_label", "-"))
+                market_tip = t.get("top10_market_tip", "Market")
+                skor = f"{t.get('eg', '')}-{t.get('dg', '')}"
+                oran_raw = t.get("top10_market_oran", t.get("ana_odd"))
+                oran = fmt_odd(oran_raw)
+                if not oran:
+                    oran = "—"
+                saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+                en_iyi_tol = float(item.get("top10_tol", t.get("kullanilan_tolerans", 0)) or 0)
+                top10_skor = item.get("top10_skor", "")
+
+                kart_col, btn_col = st.columns([7, 1])
+                with kart_col:
+                    st.markdown(
+                        f"""
+                        <div style="background:#0f172a;border:1px solid #1f2a44;border-radius:14px;padding:14px 16px;margin-bottom:10px;color:#f8fafc;">
+                            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+                                <div>
+                                    <div style="font-size:0.82rem;color:#facc15;font-weight:800;">#{sira} · {escape(str(m.get('lig','')))} · {saat}</div>
+                                    <div style="font-size:1.05rem;font-weight:800;margin-top:4px;">{escape(str(m.get('ev','')))} - {escape(str(m.get('dep','')))}</div>
+                                </div>
+                                <div style="text-align:right;min-width:130px;">
+                                    <div style="font-size:0.70rem;color:#94a3b8;font-weight:700;">GÜVEN</div>
+                                    <div style="font-size:1.05rem;font-weight:900;color:{renk};">%{guven} ({label})</div>
+                                </div>
+                            </div>
+                            <div style="margin-top:9px;font-size:0.88rem;color:#e5e7eb;">
+                                Market: <b>{escape(str(market_label))}</b> <span style="color:#94a3b8;">({escape(str(market_tip))})</span> ·
+                                Tahmini Skor: <b>{escape(str(skor))}</b> ·
+                                Örnek: <b>{int(t.get('ornek',0) or 0)}</b> ·
+                                Oran: <b>{escape(str(oran))}</b>
+                            </div>
+                            <div style="margin-top:7px;font-size:0.78rem;color:#9db2d1;">
+                                En iyi hassasiyet: <b style="color:#facc15;">{en_iyi_tol:.2f}</b> · Top 10 skor: <b>{top10_skor}</b>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with btn_col:
+                    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+                    btn_key = f"top10_detay_{sira}_{abs(hash(str(m.get('ev','')) + str(m.get('dep','')) + str(m.get('zaman',''))))}"
+                    if st.button("Detay →", key=btn_key, use_container_width=True):
+                        st.session_state.detay_item = item
+                        st.session_state.detay_idx = None
+                        st.rerun()
+            st.markdown("<br>", unsafe_allow_html=True)
+    else:
+        st.info("Günün Top 10 listesi için önce analizi başlatmalısın.")
+
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    with fc1:
+        if st.button(f"Tümü {len(fl)}", use_container_width=True, key="f1"):
+            st.session_state.filtre = "tumu"
+            st.rerun()
+    with fc2:
+        if st.button(f"🔥 Yüksek Güven {len(yuksek)}", use_container_width=True, key="f2"):
+            st.session_state.filtre = "yuksek"
+            st.rerun()
+    with fc3:
+        if st.button(f"🟡 Orta Güven {len(orta)}", use_container_width=True, key="f3"):
+            st.session_state.filtre = "orta"
+            st.rerun()
+    with fc4:
+        if st.button(f"🎯 Güçlü Kombo {len(kombolu)}", use_container_width=True, key="f4"):
+            st.session_state.filtre = "kombo"
             st.rerun()
 
-if st.session_state.get("detay_item") is not None or st.session_state.get("detay_idx") is not None:
-    mac_detay_modal()
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    filtre = st.session_state.filtre
+    if filtre == "yuksek":
+        goster = sorted(yuksek, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
+    elif filtre == "orta":
+        goster = sorted(orta, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
+    elif filtre == "kombo":
+        goster = sorted(kombolu, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
+    else:
+        goster = indexed_fl
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""<div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>""", unsafe_allow_html=True)
+
+    for i, (real_i, item) in enumerate(goster):
+        m, t = item["m"], item["t"]
+        gc, _, _ = guven_renk(t["ana_p"])
+
+        pill_cls = ""
+        if "MS 2" in t["ana_label"]:
+            pill_cls = "kirmizi"
+        elif "Beraberlik" in t["ana_label"] or "2.5" in t["ana_label"]:
+            pill_cls = "sari"
+        elif "Zayıf" in t["ana_label"]:
+            pill_cls = "gri"
+
+        combo_text = t.get("combo_label", "")
+        skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
+        ai_comment_html = ""
+        durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
+        belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
+        combo_html = ''
+        skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
+        if combo_text:
+            combo_level = t.get("combo_level", "")
+            level_text = f' · {combo_level}' if combo_level else ''
+            combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
+        stability_html = ""
+        if t.get("stability_early_text"):
+            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>'
+        if t.get("stability_late_text"):
+            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>'
+        if not stability_html:
+            stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
+
+        alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
+
+        kc, bc = st.columns([9, 1.4])
+        with kc:
+            card_html = f"""
+            <div class="mac-kart">
+              <div class="mk-zaman">
+                <span class="mk-star">☆</span>
+                <div style="margin-bottom:6px"><span class="live-badge" style="background:{durum_bg};color:white">{durum_lbl}</span></div>
+                <div class="mk-saat">{m['zaman'].strftime('%H:%M')}</div>
+                <div class="mk-lig">{m['lig'][:14]}</div>
+              </div>
+
+              <div class="mk-takimlar">
+                <div class="mk-ev">⬜ {m['ev']}</div>
+                <div class="mk-dep">🟦 {m['dep']}</div>
+                <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
+                {belirsiz_html}
+                {ai_comment_html}
+              </div>
+
+              <div>
+                <div class="mk-label">ANA TAHMİN</div>
+                <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
+                {skor_html}
+                <div style="margin-top:10px">
+                  <div class="mk-label">GÜVEN</div>
+                  <div class="guven-pct">{int(t['ana_p'])}%</div>
+                  <div class="guven-bar"><div class="guven-fill" style="width:{int(t['ana_p'])}%;background:{gc}"></div></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="mk-label">ALTERNATİF</div>
+                {alt_html}
+                {combo_html}
+              </div>
+
+              <div>
+                <div class="mk-label">ORANLAR</div>
+                <div class="oran-row">
+                  <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
+                  <div style="color:#2a2a2a">/</div>
+                  <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
+                  <div style="color:#2a2a2a">/</div>
+                  <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
+                </div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
+                {stability_html}
+              </div>
+            </div>
+            """
+            st.markdown(card_html, unsafe_allow_html=True)
+        with bc:
+            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+            if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
+                st.session_state.detay_idx = real_i
+                st.session_state.detay_item = None
+                st.rerun()
+            if st.button("+ Kupona", key=f"k_{real_i}_{i}", use_container_width=True):
+                coupon_item = {
+                    "ev": m["ev"],
+                    "dep": m["dep"],
+                    "lig": m["lig"],
+                    "zaman_iso": m["zaman"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "zaman_text": m["zaman"].strftime("%d.%m %H:%M"),
+                    "tahmin": t["ana_label"],
+                    "guven": int(t["ana_p"]),
+                }
+                mevcutlar = set()
+                for x in st.session_state.kupona:
+                    if isinstance(x, dict):
+                        mevcutlar.add((x.get("ev", ""), x.get("dep", ""), x.get("tahmin", "")))
+                    else:
+                        raw_text = str(x)
+                        ev, dep, tahmin = raw_text, "", ""
+                        if " — " in raw_text:
+                            match_text, tahmin = raw_text.split(" — ", 1)
+                            if " vs " in match_text:
+                                ev, dep = [p.strip() for p in match_text.split(" vs ", 1)]
+                            else:
+                                ev = match_text.strip()
+                        mevcutlar.add((ev, dep, tahmin.strip()))
+                if (coupon_item["ev"], coupon_item["dep"], coupon_item["tahmin"]) not in mevcutlar:
+                    st.session_state.kupona.append(coupon_item)
+                    st.session_state.coupon_popup_open = True
+                st.rerun()
+
+    # Kuponlarım: dialog/modal yerine normal, engellemeyen panel.
+    # Boşken arama sırasında "Henüz kupona maç eklemedin" uyarısı göstermez.
+    if st.session_state.get("coupon_popup_open") and st.session_state.get("kupona"):
+        normalized_kupona = []
+        for k in st.session_state.kupona:
+            if isinstance(k, dict):
+                normalized_kupona.append(k)
+            else:
+                raw_text = str(k)
+                item = {"ev": raw_text, "dep": "", "lig": "-", "zaman_iso": "", "zaman_text": "-", "tahmin": "-", "guven": 0}
+                if " — " in raw_text:
+                    match_text, tahmin_text = raw_text.split(" — ", 1)
+                    item["tahmin"] = tahmin_text.strip()
+                    if " vs " in match_text:
+                        ev, dep = match_text.split(" vs ", 1)
+                        item["ev"] = ev.strip()
+                        item["dep"] = dep.strip()
+                    else:
+                        item["ev"] = match_text.strip()
+                normalized_kupona.append(item)
+        st.session_state.kupona = normalized_kupona
+
+        with st.container(border=True):
+            st.markdown("### 🎫 Kuponlarım")
+            for del_i, item in enumerate(list(st.session_state.kupona)):
+                mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
+                durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
+                mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
+                alt_satir = (
+                    f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
+                    f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}"
+                    if item.get("guven", 0)
+                    else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
+                )
+                c1, c2 = st.columns([8, 1])
+                with c1:
+                    st.markdown(f"**{mac_ad}**  \n{alt_satir}  \n`{durum}`")
+                with c2:
+                    if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
+                        st.session_state.kupona.pop(del_i)
+                        if not st.session_state.kupona:
+                            st.session_state.coupon_popup_open = False
+                        st.rerun()
+
+            b1, b2 = st.columns([1, 1])
+            with b1:
+                if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_panel", use_container_width=True):
+                    st.session_state.kupona = []
+                    st.session_state.coupon_popup_open = False
+                    st.rerun()
+            with b2:
+                if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
+                    st.session_state.coupon_popup_open = False
+                    st.rerun()
 
 legal_footer()
