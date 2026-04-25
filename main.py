@@ -1163,6 +1163,35 @@ def hesapla(b_df, m_row, tolerans):
 
 
 
+
+
+def kombo_tahmini_oran(label, ana_odd=None):
+    """Kombo market için güvenli tahmini oran üretir.
+    Gerçek oran API'den gelmediğinde top10/kupon sisteminin çökmesini engeller.
+    """
+    if not label:
+        return None
+
+    try:
+        base = float(ana_odd) * 1.65 if ana_odd is not None else 2.20
+    except Exception:
+        base = 2.20
+
+    text = str(label)
+    if "KG Var" in text:
+        base += 0.35
+    if "KG Yok" in text:
+        base += 0.25
+    if "2.5 Üst" in text:
+        base += 0.35
+    if "2.5 Alt" in text:
+        base += 0.25
+    if "HT/FT" in text:
+        base += 1.20
+
+    return round(max(1.40, min(base, 8.50)), 2)
+
+
 def top10_market_adaylari(t):
     """
     Top 10 için gerçek multi-market aday havuzu.
