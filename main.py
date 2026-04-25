@@ -183,6 +183,36 @@ button[kind="primary"]{background:#111827!important;border-color:#111827!importa
 .match-card.mid:before{background:var(--amber)}.match-card.low:before{background:var(--blue)}
 .m-time{font-size:16px;font-weight:800;color:#071331;line-height:1}.m-league{font-size:10px;color:#6f80a3;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.team-row{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#14213d;margin:2px 0}.team-icon{width:13px;height:9px;border-radius:2px;background:#192a56;display:inline-block}.pred-pill{display:inline-flex;align-items:center;justify-content:center;padding:6px 11px;border-radius:7px;border:1px solid #bcd2ff;background:#eff5ff;color:#1d64ff;font-weight:800;font-size:13px}.pred-pill.red{background:#fff1f1;border-color:#ffc7c7;color:#e11d48}.pred-pill.amber{background:#fff8e8;border-color:#ffd676;color:#a16207}.pred-pill.cyan{background:#ecfbff;border-color:#a8eaff;color:#0077a6}.conf{font-size:17px;font-weight:900;color:#20c878;line-height:1}.conf.mid{color:#ff9f00}.conf.low{color:#2271ff}.conf small{display:block;font-size:9px;color:#6f80a3;font-weight:500;margin-top:2px}.odds{display:flex;gap:6px}.odd-box{min-width:43px;background:#f4f7fc;border:1px solid #dbe5f4;border-radius:7px;text-align:center;padding:4px 5px}.odd-box span{display:block;font-size:9px;color:#8a98b6;line-height:1}.odd-box b{font-size:12px;color:#0b1d45}.detail-shell{background:#fff;border-radius:18px;overflow:hidden;border:1px solid #bfcbe3;box-shadow:0 22px 70px rgba(17,29,58,.35)}.detail-head{background:#111d3a;color:#fff;padding:18px 20px}.detail-topline{font-size:11px;color:#9eb0d0;font-weight:800}.detail-title{font-size:25px;font-weight:900;letter-spacing:-.02em}.detail-date{font-size:12px;color:#9eb0d0;margin-top:4px}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #e5ebf4}.metric{padding:14px;text-align:center;border-right:1px solid #e5ebf4}.metric:last-child{border-right:0}.metric-label{font-size:10px;color:#8997b4;text-transform:uppercase;font-weight:900;letter-spacing:.08em}.metric-val{font-size:24px;font-weight:900;color:#14213d;line-height:1.1}.metric-sub{font-size:11px;color:#6f80a3}.detail-body{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:18px}.panel-title{font-size:12px;color:#8997b4;text-transform:uppercase;font-weight:900;letter-spacing:.08em;margin-bottom:9px}.stat-row{display:flex;align-items:center;justify-content:space-between;background:#f6f8fc;border:1px solid #e2e8f2;border-radius:8px;padding:10px 12px;margin-bottom:7px;font-size:13px;font-weight:800;color:#263653}.stat-mini{display:flex;gap:12px;font-size:11px;color:#51627f}.odds-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.big-odd{border:1px solid #dce5f3;border-radius:9px;background:#f7f9fd;text-align:center;padding:13px 8px}.big-odd small{display:block;color:#8997b4;font-size:10px;text-transform:uppercase;font-weight:900}.big-odd b{font-size:23px;color:#2563eb}.combo-row{display:flex;justify-content:space-between;align-items:center;background:#f0f4fa;border:1px solid #d9e2ef;border-radius:8px;padding:12px;margin-bottom:8px;font-size:13px;font-weight:800}.why-box{background:#f6f8fc;border:1px solid #e2e8f2;border-radius:10px;padding:12px;font-size:12px;color:#40516e;line-height:1.55}.history-table{width:100%;border-collapse:collapse;font-size:11px}.history-table th{color:#8997b4;text-align:left;padding:5px}.history-table td{border-top:1px solid #e5ebf4;padding:5px;color:#263653;font-weight:700}.tag{border-radius:5px;padding:2px 6px;font-size:10px;font-weight:900}.tag.green{background:#dcfce7;color:#15803d}.tag.red{background:#fee2e2;color:#dc2626}.tag.gray{background:#e5e7eb;color:#374151}.side-logo{display:flex;align-items:center;gap:9px;margin:12px 0 18px}.logo-box{width:27px;height:27px;border-radius:7px;background:#3b82f6;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900}.side-brand{font-weight:900;color:#fff}.side-section{border-top:1px solid rgba(255,255,255,.12);padding-top:14px;margin-top:14px}.side-title{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:#8295bf;font-weight:900;margin-bottom:9px}.empty{background:#fff;border:1px solid #dbe3f0;border-radius:14px;padding:34px;text-align:center;color:#64748b}.legal-box{background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:10px 12px;color:#7c2d12;font-size:.8rem;margin:8px 0 14px}.stDialog div[role="dialog"]{max-width:980px!important;padding:0!important;border-radius:20px!important;background:transparent!important} 
 @media(max-width:900px){.match-card{grid-template-columns:55px 1fr 75px;}.odds,.match-card .detail-slot{display:none}.detail-body{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}}
+
+/* === DETAIL MODAL LIGHT STYLE FIX === */
+.stDialog div[role="dialog"]{max-width:980px!important;padding:0!important;border-radius:20px!important;background:transparent!important;}
+.detail-shell{background:#ffffff!important;border-radius:18px!important;overflow:hidden!important;border:1px solid #bfcbe3!important;box-shadow:0 24px 80px rgba(17,29,58,.35)!important;color:#14213d!important;}
+.detail-head{background:#111d3a!important;color:#fff!important;padding:18px 20px!important;}
+.detail-topline{font-size:11px!important;color:#9eb0d0!important;font-weight:800!important;}
+.detail-title{font-size:26px!important;font-weight:900!important;letter-spacing:-.02em!important;color:#fff!important;}
+.detail-date{font-size:12px!important;color:#9eb0d0!important;margin-top:4px!important;}
+.metric-grid{display:grid!important;grid-template-columns:repeat(4,1fr)!important;border-bottom:1px solid #e5ebf4!important;background:#fff!important;}
+.metric{padding:14px!important;text-align:center!important;border-right:1px solid #e5ebf4!important;}
+.metric:last-child{border-right:0!important;}
+.metric-label{font-size:10px!important;color:#8997b4!important;text-transform:uppercase!important;font-weight:900!important;letter-spacing:.08em!important;}
+.metric-val{font-size:24px!important;font-weight:900!important;color:#14213d!important;line-height:1.1!important;}
+.metric-sub{font-size:11px!important;color:#6f80a3!important;}
+.detail-body{display:grid!important;grid-template-columns:1fr 1fr!important;gap:18px!important;padding:18px!important;background:#fff!important;}
+.panel-title{font-size:12px!important;color:#8997b4!important;text-transform:uppercase!important;font-weight:900!important;letter-spacing:.08em!important;margin:14px 0 9px!important;}
+.stat-row{display:flex!important;align-items:center!important;justify-content:space-between!important;background:#f6f8fc!important;border:1px solid #e2e8f2!important;border-radius:8px!important;padding:10px 12px!important;margin-bottom:7px!important;font-size:13px!important;font-weight:800!important;color:#263653!important;}
+.stat-mini{display:flex!important;gap:12px!important;font-size:11px!important;color:#51627f!important;}
+.odds-grid{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:10px!important;}
+.big-odd{border:1px solid #dce5f3!important;border-radius:9px!important;background:#f7f9fd!important;text-align:center!important;padding:13px 8px!important;}
+.big-odd small{display:block!important;color:#8997b4!important;font-size:10px!important;text-transform:uppercase!important;font-weight:900!important;}
+.big-odd b{font-size:23px!important;color:#2563eb!important;}
+.combo-row{display:flex!important;justify-content:space-between!important;align-items:center!important;background:#f0f4fa!important;border:1px solid #d9e2ef!important;border-radius:8px!important;padding:12px!important;margin-bottom:8px!important;font-size:13px!important;font-weight:800!important;color:#263653!important;}
+.why-box{background:#f6f8fc!important;border:1px solid #e2e8f2!important;border-radius:10px!important;padding:12px!important;font-size:12px!important;color:#40516e!important;line-height:1.55!important;}
+.hist-head,.hist-row{display:grid!important;grid-template-columns:1.2fr 1.2fr .7fr .55fr .55fr .55fr!important;gap:6px!important;align-items:center!important;}
+.hist-head{color:#8997b4!important;font-size:10px!important;font-weight:900!important;letter-spacing:.05em!important;margin-bottom:4px!important;}
+.hist-row{border-top:1px solid #e5ebf4!important;padding:6px 0!important;font-size:11px!important;color:#263653!important;font-weight:700!important;}
+.tag{display:inline-block!important;border-radius:5px!important;padding:2px 6px!important;font-size:10px!important;font-weight:900!important;text-align:center!important;}
+.tag.green{background:#dcfce7!important;color:#15803d!important;}.tag.red{background:#fee2e2!important;color:#dc2626!important;}.tag.gray{background:#e5e7eb!important;color:#374151!important;}.tag.blue{background:#dbeafe!important;color:#2563eb!important;}.tag.amber{background:#fef3c7!important;color:#b45309!important;}
+@media(max-width:900px){.detail-body{grid-template-columns:1fr!important}.metric-grid{grid-template-columns:repeat(2,1fr)!important}.hist-head,.hist-row{grid-template-columns:1fr 1fr .6fr .5fr .5fr .5fr!important;font-size:10px!important}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1759,61 +1789,84 @@ def safe(v, default="-"):
 
 
 def render_history_table(b_det, max_rows=8):
+    """HTML table yerine div-grid kullanır; Streamlit'te <tr>/<td> kod olarak görünme sorununu engeller."""
     if b_det is None or getattr(b_det, "empty", True):
         return "<div class='why-box'>Benzer maç verisi bulunamadı.</div>"
-    rows = []
+
     cols_needed = ["HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR"]
     for c in cols_needed:
         if c not in b_det.columns:
             return "<div class='why-box'>Geçmiş maç tablosu için gerekli kolonlar yok.</div>"
+
     temp = b_det.tail(max_rows).copy()
+    rows = []
     for _, r in temp.iterrows():
-        tg = int(r.get("FTHG", 0) or 0) + int(r.get("FTAG", 0) or 0)
-        ust = "Üst" if tg >= 3 else "Alt"
-        kg = "Var" if int(r.get("FTHG", 0) or 0) > 0 and int(r.get("FTAG", 0) or 0) > 0 else "Yok"
+        try:
+            hg = int(r.get("FTHG", 0) or 0)
+            ag = int(r.get("FTAG", 0) or 0)
+        except Exception:
+            hg, ag = 0, 0
+        total_goals = hg + ag
+        ust = "Üst" if total_goals >= 3 else "Alt"
+        kg = "Var" if hg > 0 and ag > 0 else "Yok"
         ms = {"H": "1", "D": "X", "A": "2"}.get(str(r.get("FTR", "")), "-")
+        ust_cls = "green" if ust == "Üst" else "gray"
+        kg_cls = "green" if kg == "Var" else "red"
+        ms_cls = "green" if ms == "1" else "red" if ms == "2" else "gray"
         rows.append(f"""
-        <tr>
-          <td>{str(r.get('HomeTeam',''))[:16]}</td><td>{str(r.get('AwayTeam',''))[:16]}</td>
-          <td>{int(r.get('FTHG',0))}-{int(r.get('FTAG',0))}</td>
-          <td><span class='tag {'green' if ust=='Üst' else 'gray'}'>{ust}</span></td>
-          <td><span class='tag {'green' if kg=='Var' else 'red'}'>{kg}</span></td>
-          <td><span class='tag {'green' if ms=='1' else 'red' if ms=='2' else 'gray'}'>{ms}</span></td>
-        </tr>
+        <div class='hist-row'>
+          <div>{escape(str(r.get('HomeTeam',''))[:16])}</div>
+          <div>{escape(str(r.get('AwayTeam',''))[:16])}</div>
+          <div>{hg}-{ag}</div>
+          <div><span class='tag {ust_cls}'>{ust}</span></div>
+          <div><span class='tag {kg_cls}'>{kg}</span></div>
+          <div><span class='tag {ms_cls}'>{ms}</span></div>
+        </div>
         """)
-    return """
-    <table class='history-table'>
-      <thead><tr><th>EV</th><th>DEP</th><th>SKOR</th><th>2.5</th><th>KG</th><th>MS</th></tr></thead>
-      <tbody>%s</tbody>
-    </table>
-    """ % "".join(rows)
+
+    return f"""
+    <div class='hist-head'>
+      <div>EV</div><div>DEP</div><div>SKOR</div><div>2.5</div><div>KG</div><div>MS</div>
+    </div>
+    {''.join(rows)}
+    """
 
 
 def render_detail_html(item):
     m, t, b_det = item["m"], item["t"], item.get("b")
-    ana = safe(t.get("ana_label"))
+    ana = escape(str(safe(t.get("ana_label"))))
     p = int(t.get("ana_p", 0) or 0)
     eg, dg = int(t.get("eg", 0) or 0), int(t.get("dg", 0) or 0)
     conf_cls, conf_text = conf_class(p)
     nedenler = t.get("nedenler", []) or []
-    why = "".join([f"<div>• {x}</div>" for x in nedenler[:6]]) or "<div>• Model bu maçı mevcut oran ve geçmiş benzerlik üzerinden analiz etti.</div>"
-    combo = t.get("combo_label") or "Kombo önerisi zayıf"
+    why = "".join([f"<div>• {escape(str(x))}</div>" for x in nedenler[:7]]) or "<div>• Model bu maçı mevcut oran ve geçmiş benzerlik üzerinden analiz etti.</div>"
+    combo = escape(str(t.get("combo_label") or "Kombo önerisi zayıf"))
     combo_p = int(t.get("combo_p", 0) or 0)
+    canli_label = escape(str(safe(t.get("canli_label"), "Canlı İzle")))
+    canli_p = int(t.get("canli_p", 0) or 0)
     history = render_history_table(b_det)
     tarih = m["zaman"].strftime("%d %B %Y · %H:%M") if hasattr(m.get("zaman"), "strftime") else str(m.get("zaman", ""))
+    tarih = escape(tarih)
+    lig = escape(str(safe(m.get('lig'))))
+    ev = escape(str(safe(m.get('ev'))))
+    dep = escape(str(safe(m.get('dep'))))
+    canli_strateji = escape(str(safe(t.get('canli_strateji'), 'İlk 10-15 dakikadaki tempo, şut ve baskı kontrol edilmeli.')))
+
     return f"""
     <div class='detail-shell'>
       <div class='detail-head'>
-        <div class='detail-topline'>{safe(m.get('lig'))}</div>
-        <div class='detail-title'>{safe(m.get('ev'))} – {safe(m.get('dep'))}</div>
+        <div class='detail-topline'>{lig}</div>
+        <div class='detail-title'>{ev} – {dep}</div>
         <div class='detail-date'>{tarih}</div>
       </div>
+
       <div class='metric-grid'>
         <div class='metric'><div class='metric-label'>Ana Tahmin</div><div class='metric-val' style='color:#2f7cff'>{ana}</div><div class='metric-sub'>Model seçimi</div></div>
         <div class='metric'><div class='metric-label'>Güven Skoru</div><div class='metric-val' style='color:#20c878'>{p}%</div><div class='metric-sub'>{conf_text} Güven</div></div>
         <div class='metric'><div class='metric-label'>Tahmini Skor</div><div class='metric-val'>{eg} – {dg}</div><div class='metric-sub'>En olası skor</div></div>
         <div class='metric'><div class='metric-label'>Benzer Maç</div><div class='metric-val'>{int(t.get('ornek',0) or 0)}</div><div class='metric-sub'>Analiz edildi</div></div>
       </div>
+
       <div class='detail-body'>
         <div>
           <div class='panel-title'>Maç Tahminleri</div>
@@ -1821,12 +1874,16 @@ def render_detail_html(item):
           <div class='stat-row'><span>2.5 Üst/Alt</span><div class='stat-mini'><b>Üst %{int(t.get('ms25_p',0) or 0)}</b><b>Alt %{int(t.get('ms25a_p',0) or 0)}</b></div></div>
           <div class='stat-row'><span>Karşılıklı Gol</span><div class='stat-mini'><b>Var %{int(t.get('kg_var_p', t.get('kg_p',0)) or 0)}</b><b>Yok %{int(t.get('kg_yok_p', 100-int(t.get('kg_p',0) or 0)) or 0)}</b></div></div>
           <div class='stat-row'><span>İlk Yarı Sonucu</span><div class='stat-mini'><b>1 %{int(t.get('iy1_p',0) or 0)}</b><b>X %{int(t.get('iyx_p',0) or 0)}</b><b>2 %{int(t.get('iy2_p',0) or 0)}</b></div></div>
-          <div class='panel-title' style='margin-top:16px'>Kombo Önerileri</div>
-          <div class='combo-row'><span>{combo}</span><span>@ %{combo_p}</span></div>
-          <div class='combo-row'><span>{safe(t.get('canli_label'),'Canlı İzle')}</span><span>%{int(t.get('canli_p',0) or 0)}</span></div>
-          <div class='panel-title' style='margin-top:16px'>Neden Bu Tahmin?</div>
+          <div class='stat-row'><span>İlk Yarı 0.5 Gol</span><div class='stat-mini'><b>Üst %{int(t.get('iy05_p',0) or 0)}</b><b>Alt %{int(t.get('iy05a_p',0) or 0)}</b></div></div>
+
+          <div class='panel-title'>Kombo Önerileri</div>
+          <div class='combo-row'><span>{combo}</span><span><span class='tag green'>%{combo_p}</span></span></div>
+          <div class='combo-row'><span>{canli_label}</span><span><span class='tag blue'>%{canli_p}</span></span></div>
+
+          <div class='panel-title'>Neden Bu Tahmin?</div>
           <div class='why-box'>{why}</div>
         </div>
+
         <div>
           <div class='panel-title'>Oranlar</div>
           <div class='odds-grid'>
@@ -1834,10 +1891,12 @@ def render_detail_html(item):
             <div class='big-odd'><small>Beraberlik</small><b style='color:#6d4bd8'>{fmt_odd(m.get('b'))}</b></div>
             <div class='big-odd'><small>Deplasman</small><b style='color:#dc2626'>{fmt_odd(m.get('a'))}</b></div>
           </div>
-          <div class='panel-title' style='margin-top:16px'>Benzer Oranlı Geçmiş Maçlar</div>
+
+          <div class='panel-title'>Benzer Oranlı Geçmiş Maçlar</div>
           {history}
-          <div class='panel-title' style='margin-top:16px'>Canlı Plan</div>
-          <div class='why-box'>{safe(t.get('canli_strateji'),'İlk 10-15 dakikadaki tempo, şut ve baskı kontrol edilmeli.')}</div>
+
+          <div class='panel-title'>Canlı Plan</div>
+          <div class='why-box'>{canli_strateji}</div>
         </div>
       </div>
     </div>
