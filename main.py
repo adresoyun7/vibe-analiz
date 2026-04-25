@@ -1787,20 +1787,86 @@ def render_detail_html(item):
     eg, dg = int(t.get("eg", 0) or 0), int(t.get("dg", 0) or 0)
     conf_cls, conf_text = conf_class(p)
     nedenler = t.get("nedenler", []) or []
-    why = "".join([f"<div>• {escape(str(x))}</div>" for x in nedenler[:7]]) or "<div>• Model bu maçı mevcut oran ve geçmiş benzerlik üzerinden analiz etti.</div>"
+    why = "".join([f"<div class='why-line'>• {escape(str(x))}</div>" for x in nedenler[:7]]) or "<div class='why-line'>• Model bu maçı mevcut oran ve geçmiş benzerlik üzerinden analiz etti.</div>"
+
     combo = escape(str(t.get("combo_label") or "Kombo önerisi zayıf"))
     combo_p = int(t.get("combo_p", 0) or 0)
+    combo_level = escape(str(t.get("combo_level") or ("Güçlü" if combo_p >= 45 else "Deneysel")))
+    combo_odd = kombo_tahmini_oran(t.get("combo_label"), t.get("ana_odd")) if t.get("combo_label") else None
+
     canli_label = escape(str(safe(t.get("canli_label"), "Canlı İzle")))
     canli_p = int(t.get("canli_p", 0) or 0)
+    canli_strateji = escape(str(safe(t.get('canli_strateji'), 'İlk 10-15 dakikadaki tempo, şut ve baskı kontrol edilmeli.')))
+
     history = render_history_table(b_det)
     tarih = m["zaman"].strftime("%d %B %Y · %H:%M") if hasattr(m.get("zaman"), "strftime") else str(m.get("zaman", ""))
     tarih = escape(tarih)
     lig = escape(str(safe(m.get('lig'))))
     ev = escape(str(safe(m.get('ev'))))
     dep = escape(str(safe(m.get('dep'))))
-    canli_strateji = escape(str(safe(t.get('canli_strateji'), 'İlk 10-15 dakikadaki tempo, şut ve baskı kontrol edilmeli.')))
+
+    avg_goal_txt = escape(str(t.get("goal_profile", "Dengeli")))
+    home_power = "-"
+    away_power = "-"
+    try:
+        home_power = f"{1 / float(m.get('h')) * 2:.2f}"
+        away_power = f"{1 / float(m.get('a')) * 2:.2f}"
+    except Exception:
+        pass
+
+    combo_odd_html = f"<b>@{fmt_odd(combo_odd)}</b>" if combo_odd else "<b>-</b>"
+
+    detail_css = """
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+      *{box-sizing:border-box} html,body{margin:0;padding:0;background:transparent;font-family:Inter,Arial,sans-serif;color:#102040;}
+      body{overflow-x:hidden;}
+      .detail-shell{width:100%;background:#fff;border:1px solid #c9d5ea;border-radius:18px;overflow:hidden;box-shadow:0 24px 80px rgba(17,29,58,.30);}
+      .detail-head{background:linear-gradient(135deg,#111d3a 0%,#091a43 100%);color:#fff;padding:22px 28px 24px;}
+      .detail-topline{font-size:12px;color:#b6c4df;font-weight:900;margin-bottom:6px;}
+      .detail-title{font-size:32px;line-height:1.1;font-weight:900;letter-spacing:-.03em;color:#fff;}
+      .detail-date{font-size:13px;color:#b6c4df;margin-top:8px;font-weight:700;}
+      .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #e4ebf6;background:#fff;}
+      .metric{padding:19px 12px;text-align:center;border-right:1px solid #e4ebf6;min-height:104px;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+      .metric:last-child{border-right:0;}
+      .metric-label{font-size:11px;color:#7f90b0;text-transform:uppercase;font-weight:900;letter-spacing:.07em;}
+      .metric-val{font-size:28px;font-weight:900;color:#102040;line-height:1.12;margin-top:7px;}
+      .metric-val.blue{color:#1f74ff}.metric-val.green{color:#16c978}.metric-val.dark{color:#0f1d3d;}
+      .metric-sub{font-size:12px;color:#60708e;margin-top:5px;font-weight:700;}
+      .detail-body{display:grid;grid-template-columns:1fr 1fr;gap:30px;padding:26px 28px 20px;background:#fff;}
+      .panel-title{font-size:13px;color:#65799d;text-transform:uppercase;font-weight:900;letter-spacing:.075em;margin:0 0 13px;}
+      .panel-title.mt{margin-top:22px;}
+      .stat-row{display:flex;align-items:center;justify-content:space-between;background:#f8faff;border:1px solid #dce5f3;border-radius:10px;padding:14px 16px;margin-bottom:9px;font-size:15px;font-weight:900;color:#14264b;min-height:54px;}
+      .stat-mini{display:flex;gap:17px;align-items:center;font-size:12px;color:#53668a;text-align:center;}
+      .stat-mini b{display:block;color:#0f1d3d;font-size:13px;white-space:nowrap;}
+      .odds-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:18px;}
+      .big-odd{border:1px solid #dce5f3;border-radius:11px;background:#f9fbff;text-align:center;padding:18px 8px;min-height:94px;display:flex;flex-direction:column;justify-content:center;}
+      .big-odd small{display:block;color:#65799d;font-size:11px;text-transform:uppercase;font-weight:900;margin-bottom:8px;}
+      .big-odd b{font-size:30px;line-height:1;color:#1f74ff;font-weight:900;}
+      .market-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:4px 0 22px;}
+      .market-card{border-radius:11px;text-align:center;padding:14px 8px;border:1px solid #dce5f3;background:#f9fbff;}
+      .market-card.green{background:#eafaf3;border-color:#aeeacc;color:#087948}.market-card.amber{background:#fff8e8;border-color:#ffd676;color:#9a4b00}.market-card.cyan{background:#ecfbff;border-color:#a8eaff;color:#075985}
+      .market-card small{display:block;font-size:11px;font-weight:900;text-transform:uppercase;margin-bottom:5px}.market-card b{font-size:22px;font-weight:900;}
+      .combo-row{display:flex;justify-content:space-between;align-items:center;background:#f8faff;border:1px solid #dce5f3;border-radius:10px;padding:15px 16px;margin-bottom:10px;font-size:16px;font-weight:900;color:#14264b;}
+      .combo-left{display:flex;align-items:center;gap:12px}.tag{display:inline-flex;align-items:center;justify-content:center;border-radius:7px;padding:4px 8px;font-size:11px;font-weight:900;line-height:1}.tag.green{background:#dcfce7;color:#15803d}.tag.red{background:#fee2e2;color:#dc2626}.tag.gray{background:#eef1f6;color:#475569}.tag.blue{background:#dbeafe;color:#2563eb}.tag.amber{background:#fef3c7;color:#b45309}
+      .combo-row b{color:#1f74ff;font-size:20px;}
+      .why-box{background:#f8faff;border:1px solid #dce5f3;border-radius:10px;padding:14px 16px;font-size:13px;color:#344664;line-height:1.7;font-weight:700;}
+      .why-line{margin-bottom:2px;color:#344664}.why-line::first-letter{color:#1f74ff;}
+      .hist-head,.hist-row{display:grid;grid-template-columns:1.2fr 1.2fr .7fr .55fr .55fr .55fr;gap:8px;align-items:center;}
+      .hist-head{color:#65799d;font-size:11px;font-weight:900;letter-spacing:.05em;margin:4px 0 8px;text-transform:uppercase;}
+      .hist-row{border-top:1px solid #e5ebf4;padding:9px 0;font-size:13px;color:#14264b;font-weight:800;}
+      .footer-metrics{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #e3eaf5;margin:2px 28px 0;padding:20px 0 24px;}
+      .footer-metric{text-align:center;border-right:1px solid #e3eaf5;}.footer-metric:last-child{border-right:0}.footer-metric small{display:block;text-transform:uppercase;color:#102040;font-weight:900;font-size:12px;margin-bottom:8px}.footer-metric b{font-size:24px;color:#1f74ff;font-weight:900}.footer-metric b.green{color:#16c978}.footer-metric b.red{color:#dc2626}.footer-metric b.purple{color:#6d28d9}
+      .legal-box{margin:0 28px 18px;background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:13px 16px;color:#b45309;font-size:13px;line-height:1.55;font-weight:700;}
+      @media(max-width:850px){.detail-title{font-size:24px}.metric-grid{grid-template-columns:repeat(2,1fr)}.detail-body{grid-template-columns:1fr;padding:18px}.odds-grid,.market-grid{gap:10px}.footer-metrics{grid-template-columns:repeat(2,1fr);margin:0 18px}.hist-head,.hist-row{grid-template-columns:1fr 1fr .6fr .5fr .5fr .5fr;font-size:11px}.legal-box{margin:0 18px 18px}}
+    </style>
+    """
 
     return f"""
+    <!doctype html>
+    <html>
+    <head>{detail_css}</head>
+    <body>
     <div class='detail-shell'>
       <div class='detail-head'>
         <div class='detail-topline'>{lig}</div>
@@ -1809,26 +1875,26 @@ def render_detail_html(item):
       </div>
 
       <div class='metric-grid'>
-        <div class='metric'><div class='metric-label'>Ana Tahmin</div><div class='metric-val' style='color:#2f7cff'>{ana}</div><div class='metric-sub'>Model seçimi</div></div>
-        <div class='metric'><div class='metric-label'>Güven Skoru</div><div class='metric-val' style='color:#20c878'>{p}%</div><div class='metric-sub'>{conf_text} Güven</div></div>
-        <div class='metric'><div class='metric-label'>Tahmini Skor</div><div class='metric-val'>{eg} – {dg}</div><div class='metric-sub'>En olası skor</div></div>
-        <div class='metric'><div class='metric-label'>Benzer Maç</div><div class='metric-val'>{int(t.get('ornek',0) or 0)}</div><div class='metric-sub'>Analiz edildi</div></div>
+        <div class='metric'><div class='metric-label'>Ana Tahmin</div><div class='metric-val blue'>{ana}</div><div class='metric-sub'>Model seçimi</div></div>
+        <div class='metric'><div class='metric-label'>Güven Skoru</div><div class='metric-val green'>{p}%</div><div class='metric-sub'>{conf_text} Güven</div></div>
+        <div class='metric'><div class='metric-label'>Tahmini Skor</div><div class='metric-val dark'>{eg} – {dg}</div><div class='metric-sub'>En olası skor</div></div>
+        <div class='metric'><div class='metric-label'>Benzer Maç</div><div class='metric-val dark'>{int(t.get('ornek',0) or 0)}</div><div class='metric-sub'>Analiz edildi</div></div>
       </div>
 
       <div class='detail-body'>
         <div>
           <div class='panel-title'>Maç Tahminleri</div>
-          <div class='stat-row'><span>Maç Sonucu</span><div class='stat-mini'><b>1 %{int(t.get('ms1_p',0) or 0)}</b><b>X %{int(t.get('msx_p',0) or 0)}</b><b>2 %{int(t.get('ms2_p',0) or 0)}</b></div></div>
-          <div class='stat-row'><span>2.5 Üst/Alt</span><div class='stat-mini'><b>Üst %{int(t.get('ms25_p',0) or 0)}</b><b>Alt %{int(t.get('ms25a_p',0) or 0)}</b></div></div>
-          <div class='stat-row'><span>Karşılıklı Gol</span><div class='stat-mini'><b>Var %{int(t.get('kg_var_p', t.get('kg_p',0)) or 0)}</b><b>Yok %{int(t.get('kg_yok_p', 100-int(t.get('kg_p',0) or 0)) or 0)}</b></div></div>
-          <div class='stat-row'><span>İlk Yarı Sonucu</span><div class='stat-mini'><b>1 %{int(t.get('iy1_p',0) or 0)}</b><b>X %{int(t.get('iyx_p',0) or 0)}</b><b>2 %{int(t.get('iy2_p',0) or 0)}</b></div></div>
-          <div class='stat-row'><span>İlk Yarı 0.5 Gol</span><div class='stat-mini'><b>Üst %{int(t.get('iy05_p',0) or 0)}</b><b>Alt %{int(t.get('iy05a_p',0) or 0)}</b></div></div>
+          <div class='stat-row'><span>Maç Sonucu</span><div class='stat-mini'><b>1<br>%{int(t.get('ms1_p',0) or 0)}</b><b>X<br>%{int(t.get('msx_p',0) or 0)}</b><b>2<br>%{int(t.get('ms2_p',0) or 0)}</b></div></div>
+          <div class='stat-row'><span>2.5 Üst/Alt</span><div class='stat-mini'><b>Üst<br>%{int(t.get('ms25_p',0) or 0)}</b><b>Alt<br>%{int(t.get('ms25a_p',0) or 0)}</b></div></div>
+          <div class='stat-row'><span>Karşılıklı Gol</span><div class='stat-mini'><b>Var<br>%{int(t.get('kg_var_p', t.get('kg_p',0)) or 0)}</b><b>Yok<br>%{int(t.get('kg_yok_p', 100-int(t.get('kg_p',0) or 0)) or 0)}</b></div></div>
+          <div class='stat-row'><span>İlk Yarı Sonucu</span><div class='stat-mini'><b>1<br>%{int(t.get('iy1_p',0) or 0)}</b><b>X<br>%{int(t.get('iyx_p',0) or 0)}</b><b>2<br>%{int(t.get('iy2_p',0) or 0)}</b></div></div>
+          <div class='stat-row'><span>İlk Yarı 0.5 Gol</span><div class='stat-mini'><b>Üst<br>%{int(t.get('iy05_p',0) or 0)}</b><b>Alt<br>%{int(t.get('iy05a_p',0) or 0)}</b></div></div>
 
-          <div class='panel-title'>Kombo Önerileri</div>
-          <div class='combo-row'><span>{combo}</span><span><span class='tag green'>%{combo_p}</span></span></div>
-          <div class='combo-row'><span>{canli_label}</span><span><span class='tag blue'>%{canli_p}</span></span></div>
+          <div class='panel-title mt'>Kombo Önerileri</div>
+          <div class='combo-row'><div class='combo-left'><span>{combo}</span><span class='tag green'>{combo_level}</span></div>{combo_odd_html}</div>
+          <div class='combo-row'><div class='combo-left'><span>{canli_label}</span><span class='tag blue'>Canlı</span></div><b>%{canli_p}</b></div>
 
-          <div class='panel-title'>Neden Bu Tahmin?</div>
+          <div class='panel-title mt'>Neden Bu Tahmin?</div>
           <div class='why-box'>{why}</div>
         </div>
 
@@ -1836,18 +1902,32 @@ def render_detail_html(item):
           <div class='panel-title'>Oranlar</div>
           <div class='odds-grid'>
             <div class='big-odd'><small>Ev Sahibi</small><b>{fmt_odd(m.get('h'))}</b></div>
-            <div class='big-odd'><small>Beraberlik</small><b style='color:#6d4bd8'>{fmt_odd(m.get('b'))}</b></div>
+            <div class='big-odd'><small>Beraberlik</small><b style='color:#6d28d9'>{fmt_odd(m.get('b'))}</b></div>
             <div class='big-odd'><small>Deplasman</small><b style='color:#dc2626'>{fmt_odd(m.get('a'))}</b></div>
           </div>
 
-          <div class='panel-title'>Benzer Oranlı Geçmiş Maçlar</div>
-          {history}
+          <div class='market-grid'>
+            <div class='market-card green'><small>2.5 Üst</small><b>%{int(t.get('ms25_p',0) or 0)}</b></div>
+            <div class='market-card amber'><small>2.5 Alt</small><b>%{int(t.get('ms25a_p',0) or 0)}</b></div>
+            <div class='market-card cyan'><small>KG Var</small><b>%{int(t.get('kg_var_p', t.get('kg_p',0)) or 0)}</b></div>
+          </div>
 
-          <div class='panel-title'>Canlı Plan</div>
-          <div class='why-box'>{canli_strateji}</div>
+          <div class='panel-title'>Benzer Oranlı Geçmiş Maçlar (Son 10)</div>
+          {history}
         </div>
       </div>
+
+      <div class='footer-metrics'>
+        <div class='footer-metric'><small>Ev Sahibi Gücü</small><b>{home_power}</b></div>
+        <div class='footer-metric'><small>Beraberlik İhtimali</small><b class='purple'>%{int(t.get('msx_p',0) or 0)}</b></div>
+        <div class='footer-metric'><small>Deplasman Gücü</small><b class='red'>{away_power}</b></div>
+        <div class='footer-metric'><small>Maç Temposu</small><b class='green'>{avg_goal_txt}</b></div>
+      </div>
+
+      <div class='legal-box'>⚠️ Bu tahminler istatistiksel analiz ve yapay zekâ destekli tahminler sunar. Kesin kazanç garantisi verilmez.<br>Bahis oynamak risk içerir ve bağımlılık oluşturabilir.</div>
     </div>
+    </body>
+    </html>
     """
 
 
@@ -1879,7 +1959,7 @@ def mac_detay_modal():
             st.rerun()
     components.html(
     textwrap.dedent(render_detail_html(item)),
-    height=800,
+    height=1040,
     scrolling=True
 )
 
