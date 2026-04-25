@@ -878,7 +878,6 @@ div[data-testid="stDialog"] div[role="dialog"]::-webkit-scrollbar-thumb {
 </style>
 """, unsafe_allow_html=True)
 
-api_key_panel()
 legal_notice_top()
 
 
@@ -2338,14 +2337,7 @@ secili_kodlar = []
 
 # ÜST KONTROL BAR
 bugun = datetime.now().date()
-st.markdown('<div class="api-navy">', unsafe_allow_html=True)
-with st.expander("🔑 API Ayarları", expanded=False):
-    API_KEY = get_app_api_key()
-    if API_KEY:
-        st.success("API key sistemde tanımlı ✅")
-    else:
-        st.error("ODDS_API_KEY Streamlit Secrets içinde tanımlı değil.")
-st.markdown('</div>', unsafe_allow_html=True)
+API_KEY = get_app_api_key()
 
 st.markdown("""
 <style>
@@ -2513,6 +2505,10 @@ div[data-testid="stDateInput"] div[data-baseweb="input"] > div {
 </style>
 """, unsafe_allow_html=True)
 
+def clear_detail_on_filter_change():
+    st.session_state.detay_idx = None
+    st.session_state.detay_item = None
+
 def selected_league_codes():
     return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
 
@@ -2521,20 +2517,34 @@ if 'date_mode' not in st.session_state:
 if 'special_date' not in st.session_state:
     st.session_state['special_date'] = bugun
 
-st.markdown("""
-<div class="top-shell">
-  <div class="brand-row">
-    <div class="brand-title">
-      <div class="brand-logo">⚡</div>
-      <div class="brand-text">VIBE <span>PRO</span> EXPERT</div>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
 with st.sidebar:
+    st.markdown("""
+    <div style="display:flex;align-items:center;gap:10px;margin:4px 0 14px 0;padding:10px 8px;border-radius:14px;background:linear-gradient(90deg,#07111f 0%,#0a1830 100%);border:1px solid #21334f;">
+      <div class="brand-logo" style="width:36px;height:36px;font-size:1.1rem">⚡</div>
+      <div class="brand-text" style="font-size:1.35rem">VIBE <span>PRO</span></div>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("---")
+    with st.expander("🔑 API Key", expanded=False):
+        current_key = st.session_state.get("user_api_key", "")
+        api_key_input = st.text_input("ODDS API KEY", value=current_key, placeholder="API key gir...", type="password", key="api_key_input_sidebar_clean")
+        a1, a2 = st.columns(2)
+        with a1:
+            if st.button("Kaydet", use_container_width=True, key="save_api_key_sidebar_clean"):
+                st.session_state["user_api_key"] = api_key_input.strip()
+                st.success("API Key kaydedildi ✅")
+                st.rerun()
+        with a2:
+            if st.button("Temizle", use_container_width=True, key="clear_api_key_sidebar_clean"):
+                st.session_state.pop("user_api_key", None)
+                st.success("API Key temizlendi")
+                st.rerun()
+        if get_app_api_key():
+            st.success("API key aktif ✅")
+        else:
+            st.warning("Maçları çekmek için API key girmen gerekiyor.")
     st.markdown("### ⚙️ Analiz Filtreleri")
 
     secili_tarih = tarih_secimine_gore_date(
@@ -2549,9 +2559,10 @@ with st.sidebar:
             options=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'],
             index=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
             key='date_mode',
+            on_change=clear_detail_on_filter_change,
         )
         if st.session_state.get('date_mode') == 'Özel Tarih':
-            st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date')
+            st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date', on_change=clear_detail_on_filter_change)
 
         secili_tarih = tarih_secimine_gore_date(
             st.session_state.get('date_mode', 'Bugün'),
@@ -2574,24 +2585,25 @@ with st.sidebar:
             toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
             st.rerun()
 
-        lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar')
+        lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar', on_change=clear_detail_on_filter_change)
         filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
         st.caption(f"Gösterilen lig: {len(filtreli_ligler)} · Seçili lig: {len(selected_league_codes())}")
 
         lig_box = st.container(height=360, border=True)
         with lig_box:
             for lig in filtreli_ligler:
-                st.checkbox(lig['label'], key=f"cb_{lig['kod']}")
+                st.checkbox(lig['label'], key=f"cb_{lig['kod']}", on_change=clear_detail_on_filter_change)
 
     with st.expander("🧪 Sezon ve Veri Ayarları", expanded=True):
         yillar = st.multiselect(
             'Sezonlar',
             options=['2122', '2223', '2324', '2425', '2526'],
             default=['2122', '2223', '2324', '2425', '2526'],
-            key='top_seasons'
+            key='top_seasons',
+            on_change=clear_detail_on_filter_change,
         )
-        min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, key='top_min_ornek')
-        TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, key='top_tol')
+        min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, key='top_min_ornek', on_change=clear_detail_on_filter_change)
+        TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, key='top_tol', on_change=clear_detail_on_filter_change)
         st.markdown(f"<div style='color:#ffd24a;font-weight:800'>Hassasiyet: {TOLERANS:.2f}</div>", unsafe_allow_html=True)
 
     with st.expander("🎯 Oynanılabilir / Canlı", expanded=True):
@@ -2600,13 +2612,15 @@ with st.sidebar:
             options=[0, 55, 60, 65, 70, 75],
             index=2,
             format_func=lambda x: 'Tümü' if x == 0 else f'Güven ≥ %{x}',
-            key='oynanabilir_esik'
+            key='oynanabilir_esik',
+            on_change=clear_detail_on_filter_change,
         )
         canli_filtre = st.selectbox(
             'Canlı filtre',
             options=['Tümü', 'Canlı', 'Başlamamış', 'Bitti'],
             index=0,
-            key='canli_filtre'
+            key='canli_filtre',
+            on_change=clear_detail_on_filter_change,
         )
 
     secili_kodlar = selected_league_codes()
@@ -2624,17 +2638,6 @@ with st.sidebar:
 
 legal_sidebar_sections()
 
-rehber = tolerans_rehberi(TOLERANS)
-st.markdown(f"""
-<div class="helper-bar">
-  <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
-    <div style="font-size:0.72rem;color:#8ea2c7;letter-spacing:1px;text-transform:uppercase">Tolerans Rehberi</div>
-    <div style="font-size:0.88rem;color:#fff">Önerilen tolerans: <b>{rehber['onerilen_tolerans']}</b></div>
-    <div style="font-size:0.88rem;color:#c7cfdd">Dinamik min maç: <b>{rehber['onerilen_min_mac']}</b></div>
-    <div style="font-size:0.84rem;color:#8fa0ba">{rehber['yorum']}</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
 
 if analiz_btn:
     if not API_KEY or not secili_kodlar:
@@ -3029,14 +3032,13 @@ with hc2:
 # Auto kupon builder ve 30 gunluk kasa plani kaldirildi.
 # ==========================================================
 st.markdown("<br>", unsafe_allow_html=True)
-st.info("🧠 Sade mod aktif: Auto kupon builder ve 30 günlük kasa planı kaldırıldı. Tolerans değişiminde sadece analiz yenilenir; yeni API çağrısı için tekrar maç yüklemen gerekir.")
 
 if not fl:
     st.markdown("""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
       <div style="font-size:2rem;margin-bottom:12px">⚡</div>
       <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
-      <div style="font-size:0.9rem;color:#666;margin-top:6px">API ayarlarını açıp anahtarını gir, sonra üst bardan tarih ve lig seçip ANALİZİ BAŞLAT butonuna bas.</div>
+      <div style="font-size:0.9rem;color:#666;margin-top:6px">Sol menüden API key ve filtreleri ayarla, sonra ANALİZİ BAŞLAT butonuna bas.</div>
     </div>
     """, unsafe_allow_html=True)
 else:
