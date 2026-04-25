@@ -1956,6 +1956,21 @@ def top10_market_adaylari(t):
     return adaylar
 
 
+
+def mac_key(m):
+    """Aynı maçı tekilleştirmek için güvenli key üretir."""
+    try:
+        if hasattr(m, "to_dict"):
+            m = m.to_dict()
+    except Exception:
+        pass
+    try:
+        zaman = m.get("zaman", "")
+        if hasattr(zaman, "strftime"):
+            zaman = zaman.strftime("%Y-%m-%d %H:%M")
+        return f"{m.get(lig,)}::{m.get(ev,)}::{m.get(dep,)}::{zaman}"
+    except Exception:
+        return str(m)
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     """
     Günün Top 10 listesini seçili hassasiyete bağlamaz.
