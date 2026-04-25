@@ -1831,19 +1831,51 @@ def hesapla(b_df, m_row, tolerans):
 
 
 def top10_market_adaylari(t):
-    """Bir maç için MS / Alt-Üst / KG / İY / Kombo adaylarını üretir."""
+    """
+    Top 10 için gerçek multi-market aday havuzu.
+    Sadece MS'e kilitlenmez; MS / Alt-Üst / KG / İlk Yarı / Kombo marketlerini aynı havuza alır.
+    Non-MS marketlere bilinçli bonus verir ki Top 10 sadece MS1-MS2 dolmasın.
+    """
     adaylar = []
 
-    def add(label, guven, tip, oran=None, bonus=0, min_guven=55):
+    def safe_int(v, default=0):
         try:
-            guven = int(round(float(guven or 0)))
+            return int(round(float(v or 0)))
         except Exception:
-            guven = 0
+            return default
+
+    def infer_tip(label):
+        label = str(label or "")
+        if label.startswith("MS") or label == "Beraberlik":
+            return "MS"
+        if "KG" in label:
+            return "KG"
+        if "Üst" in label or "Alt" in label or "2.5" in label or "1.5" in label or "3.5" in label:
+            return "Alt/Üst"
+        if "İY" in label:
+            return "İlk Yarı"
+        if "HT/FT" in label:
+            return "HT/FT"
+        if "+" in label:
+            return "Kombo"
+        return "Market"
+
+    def add(label, guven, tip=None, oran=None, bonus=0, min_guven=50):
         label = str(label or "").strip()
+        guven = safe_int(guven)
         if not label or label in ["Belirsiz Maç", "Tahmin Zayıf", "None", "-"]:
             return
         if guven < min_guven:
             return
+        tip = tip or infer_tip(label)
+
+        # Aynı label tekrar eklenirse en yüksek güvenli olanı tut.
+        for a in adaylar:
+            if a["label"] == label and a["tip"] == tip:
+                if guven + bonus > a["guven"] + a["bonus"]:
+                    a.update({"guven": guven, "oran": oran, "bonus": bonus})
+                return
+
         adaylar.append({
             "label": label,
             "guven": guven,
@@ -1852,44 +1884,51 @@ def top10_market_adaylari(t):
             "bonus": bonus,
         })
 
-    # MS marketi
-    ms_label = t.get("ms_side") or t.get("ana_label")
-    add(ms_label, t.get("ms_p", t.get("ana_p", 0)), "MS", t.get("ana_odd") if ms_label == t.get("ana_label") else None, bonus=2, min_guven=52)
+    # Ana tahmin hangi market olursa olsun havuza girsin.
+    ana_label = t.get("ana_label")
+    ana_tip = infer_tip(ana_label)
+    ana_bonus = {"MS": -4, "Alt/Üst": 16, "KG": 14, "İlk Yarı": 7, "Kombo": 10, "HT/FT": 8}.get(ana_tip, 0)
+    add(ana_label, t.get("ana_p", 0), ana_tip, t.get("ana_odd"), bonus=ana_bonus, min_guven=50)
 
-    # 2.5 Alt/Üst marketi
-    ust25 = int(t.get("ms25_p", 0) or 0)
-    alt25 = int(t.get("ms25a_p", 0) or 0)
-    if max(ust25, alt25) > 0:
-        if ust25 >= alt25:
-            add("2.5 Üst", ust25, "Alt/Üst", None, bonus=8, min_guven=56)
-        else:
-            add("2.5 Alt", alt25, "Alt/Üst", None, bonus=8, min_guven=56)
+    # Alternatif/uyumlu tahmin havuza girsin.
+    alt_label = t.get("alt_label")
+    alt_tip = infer_tip(alt_label)
+    alt_bonus = {"Alt/Üst": 15, "KG": 13, "MS": -2}.get(alt_tip, 5)
+    add(alt_label, t.get("alt_p", 0), alt_tip, None, bonus=alt_bonus, min_guven=50)
 
-    # Ek gol marketleri
-    add("1.5 Üst", t.get("ms15_p", 0), "Alt/Üst", None, bonus=4, min_guven=62)
-    add("3.5 Üst", t.get("ms35_p", 0), "Alt/Üst", None, bonus=4, min_guven=58)
+    # MS marketleri: tek başına çok basmasın diye bonus düşük/negatif.
+    add("MS 1", t.get("ms1_p", 0), "MS", None, bonus=-6, min_guven=52)
+    add("Beraberlik", t.get("msx_p", 0), "MS", None, bonus=-4, min_guven=52)
+    add("MS 2", t.get("ms2_p", 0), "MS", None, bonus=-6, min_guven=52)
 
-    # KG marketi
-    kg_var = int(t.get("kg_var_p", t.get("kg_p", 0)) or 0)
-    kg_yok = int(t.get("kg_yok_p", 0) or 0)
-    if max(kg_var, kg_yok) > 0:
-        if kg_var >= kg_yok:
-            add("KG Var", kg_var, "KG", None, bonus=7, min_guven=56)
-        else:
-            add("KG Yok", kg_yok, "KG", None, bonus=7, min_guven=56)
+    # Alt / Üst marketleri.
+    add("2.5 Üst", t.get("ms25_p", 0), "Alt/Üst", None, bonus=18, min_guven=50)
+    add("2.5 Alt", t.get("ms25a_p", 0), "Alt/Üst", None, bonus=18, min_guven=50)
+    add("1.5 Üst", t.get("ms15_p", 0), "Alt/Üst", None, bonus=10, min_guven=58)
+    add("3.5 Üst", t.get("ms35_p", 0), "Alt/Üst", None, bonus=9, min_guven=54)
 
-    # İlk yarı marketleri
-    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=3, min_guven=62)
-    add("İY 0.5 Alt", t.get("iy05a_p", 0), "İlk Yarı", None, bonus=2, min_guven=62)
-    add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=2, min_guven=56)
+    # KG marketleri.
+    add("KG Var", t.get("kg_var_p", t.get("kg_p", 0)), "KG", None, bonus=16, min_guven=50)
+    add("KG Yok", t.get("kg_yok_p", 0), "KG", None, bonus=16, min_guven=50)
 
-    # Kombo / senaryo marketi
+    # İlk yarı marketleri.
+    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=7, min_guven=56)
+    add("İY 0.5 Alt", t.get("iy05a_p", 0), "İlk Yarı", None, bonus=6, min_guven=56)
+    add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=5, min_guven=52)
+
+    # Kombo / HT-FT.
     if t.get("combo_var") and t.get("combo_label"):
-        add(t.get("combo_label"), t.get("combo_p", 0), "Kombo", kombo_tahmini_oran(t.get("combo_label"), t.get("ana_odd")), bonus=6, min_guven=45)
+        add(
+            t.get("combo_label"),
+            t.get("combo_p", 0),
+            "Kombo",
+            kombo_tahmini_oran(t.get("combo_label"), t.get("ana_odd")),
+            bonus=12,
+            min_guven=42,
+        )
 
-    # HT/FT varsa ayrı aday
-    if t.get("htft_mod"):
-        add(f"HT/FT {t.get('htft_mod')}", t.get("htft_p", 0), "HT/FT", None, bonus=4, min_guven=45)
+    if t.get("htft_mod") and str(t.get("htft_mod")) not in ["", "-"]:
+        add(f"HT/FT {t.get('htft_mod')}", t.get("htft_p", 0), "HT/FT", None, bonus=8, min_guven=42)
 
     return adaylar
 
@@ -1984,7 +2023,35 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
         ),
         reverse=True,
     )
-    return adaylar[:limit]
+
+    # Top 10 sadece MS1/MS2 dolmasın diye küçük çeşitlilik kuralı.
+    # Uygun non-MS aday varsa MS marketleri maksimum 4 adetle sınırlarız.
+    secilen = []
+    ms_sayisi = 0
+    max_ms = 4
+
+    for item in adaylar:
+        tip = str(item.get("t", {}).get("top10_market_tip", ""))
+        if tip == "MS" and ms_sayisi >= max_ms:
+            continue
+        secilen.append(item)
+        if tip == "MS":
+            ms_sayisi += 1
+        if len(secilen) >= limit:
+            break
+
+    # Eğer yeterli aday dolmadıysa kalanları sıralamadan tamamla.
+    if len(secilen) < limit:
+        used = {mac_key(x.get("m", {})) + str(x.get("t", {}).get("top10_market_label", "")) for x in secilen}
+        for item in adaylar:
+            k = mac_key(item.get("m", {})) + str(item.get("t", {}).get("top10_market_label", ""))
+            if k in used:
+                continue
+            secilen.append(item)
+            if len(secilen) >= limit:
+                break
+
+    return secilen[:limit]
 
 
 
