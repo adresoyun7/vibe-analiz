@@ -1790,6 +1790,13 @@ def render_detail_html(item):
     nedenler = t.get("nedenler", []) or []
     why = "".join([f"<div class='why-line'>• {escape(str(x))}</div>" for x in nedenler[:7]]) or "<div class='why-line'>• Model bu maçı mevcut oran ve geçmiş benzerlik üzerinden analiz etti.</div>"
 
+    stable_tols = t.get("stability_tols", []) or []
+    stable_count = int(t.get("stability_count", len(stable_tols)) or 0)
+    stable_text = ", ".join(stable_tols) if stable_tols else "Yok"
+    stable_label = f"{stable_count}/5"
+    stable_note = f"Bu maç aynı tahminle {stable_label} hassasiyet aralığında çıktı. Eşleşen hassasiyetler: {escape(stable_text)}."
+    why += f"<div class='why-line'>• {stable_note}</div>"
+
     combo = escape(str(t.get("combo_label") or "Kombo önerisi zayıf"))
     combo_p = int(t.get("combo_p", 0) or 0)
     combo_level = escape(str(t.get("combo_level") or ("Güçlü" if combo_p >= 45 else "Deneysel")))
@@ -1856,10 +1863,15 @@ def render_detail_html(item):
       .hist-head,.hist-row{display:grid;grid-template-columns:1.2fr 1.2fr .7fr .55fr .55fr .55fr;gap:8px;align-items:center;}
       .hist-head{color:#65799d;font-size:11px;font-weight:900;letter-spacing:.05em;margin:4px 0 8px;text-transform:uppercase;}
       .hist-row{border-top:1px solid #e5ebf4;padding:9px 0;font-size:13px;color:#14264b;font-weight:800;}
-      .footer-metrics{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #e3eaf5;margin:2px 28px 0;padding:20px 0 24px;}
+      .stability-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 28px 22px;padding:14px 0;border-top:1px solid #e3eaf5;border-bottom:1px solid #e3eaf5;}
+      .stability-card{background:#f8faff;border:1px solid #dce5f3;border-radius:11px;padding:13px 14px;}
+      .stability-card small{display:block;color:#65799d;font-size:10px;text-transform:uppercase;font-weight:900;letter-spacing:.06em;margin-bottom:6px;}
+      .stability-card b{font-size:18px;color:#102040;font-weight:900;}
+      .stability-card .blue{color:#1f74ff}.stability-card .green{color:#16c978}.stability-card .muted{color:#53668a;font-size:13px;line-height:1.35;}
+      .footer-metrics{display:grid;grid-template-columns:repeat(4,1fr);border-top:0;margin:2px 28px 0;padding:20px 0 24px;}
       .footer-metric{text-align:center;border-right:1px solid #e3eaf5;}.footer-metric:last-child{border-right:0}.footer-metric small{display:block;text-transform:uppercase;color:#102040;font-weight:900;font-size:12px;margin-bottom:8px}.footer-metric b{font-size:24px;color:#1f74ff;font-weight:900}.footer-metric b.green{color:#16c978}.footer-metric b.red{color:#dc2626}.footer-metric b.purple{color:#6d28d9}
       .legal-box{margin:0 28px 18px;background:#fff7ed;border:1px solid #fdba74;border-radius:12px;padding:13px 16px;color:#b45309;font-size:13px;line-height:1.55;font-weight:700;}
-      @media(max-width:850px){.detail-title{font-size:24px}.metric-grid{grid-template-columns:repeat(2,1fr)}.detail-body{grid-template-columns:1fr;padding:18px}.odds-grid,.market-grid{gap:10px}.footer-metrics{grid-template-columns:repeat(2,1fr);margin:0 18px}.hist-head,.hist-row{grid-template-columns:1fr 1fr .6fr .5fr .5fr .5fr;font-size:11px}.legal-box{margin:0 18px 18px}}
+      @media(max-width:850px){.detail-title{font-size:24px}.metric-grid{grid-template-columns:repeat(2,1fr)}.detail-body{grid-template-columns:1fr;padding:18px}.odds-grid,.market-grid{gap:10px}.stability-strip{grid-template-columns:1fr;margin:0 18px 16px}.footer-metrics{grid-template-columns:repeat(2,1fr);margin:0 18px}.hist-head,.hist-row{grid-template-columns:1fr 1fr .6fr .5fr .5fr .5fr;font-size:11px}.legal-box{margin:0 18px 18px}}
     </style>
     """
 
@@ -1916,6 +1928,12 @@ def render_detail_html(item):
           <div class='panel-title'>Benzer Oranlı Geçmiş Maçlar (Son 10)</div>
           {history}
         </div>
+      </div>
+
+      <div class='stability-strip'>
+        <div class='stability-card'><small>Aynı Tahmin Hassasiyeti</small><b class='blue'>{stable_label}</b></div>
+        <div class='stability-card'><small>Çıktığı Hassasiyetler</small><b class='green'>{escape(stable_text)}</b></div>
+        <div class='stability-card'><small>Güven Hassasiyet Skoru</small><b>{t.get('playable_score', p)}</b><div class='muted'>Güven + örnek + hassasiyet uyumu</div></div>
       </div>
 
       <div class='footer-metrics'>
