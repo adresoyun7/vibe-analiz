@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 18
+APP_SCHEMA_VERSION = 19
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2779,8 +2779,8 @@ with hc2:
 
 
 # ==========================================================
-# AI KUPON BUILDER + 30 GUNLUK KASA TAKIBI
-# Bu panel final_list bos olsa bile gorunur; bulten/gecmis hafizada varsa calisir.
+# SADE ANALIZ PANELI
+# Auto kupon builder ve 30 gunluk kasa plani kaldirildi.
 # ==========================================================
 st.markdown("<br>", unsafe_allow_html=True)
 st.info("🧠 Sade mod aktif: Auto kupon builder ve 30 günlük kasa planı kaldırıldı. Tolerans değişiminde sadece analiz yenilenir; yeni API çağrısı için tekrar maç yüklemen gerekir.")
@@ -2798,6 +2798,65 @@ else:
     yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
     orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
     kombolu = [(idx, x) for idx, x in indexed_fl if x["t"].get("combo_var", False)]
+
+    # ==========================================================
+    # EN IYI 10 MAC - SADE MOD
+    # API kullanmaz; mevcut analiz sonucunu puana gore siralar.
+    # ==========================================================
+    en_iyi_10 = sorted(
+        [x for x in indexed_fl if int(x[1]["t"].get("ana_p", 0) or 0) >= 50],
+        key=lambda x: (
+            float(x[1]["t"].get("playable_score", 0) or 0),
+            int(x[1]["t"].get("ana_p", 0) or 0),
+            int(x[1]["t"].get("ornek", 0) or 0),
+        ),
+        reverse=True,
+    )[:10]
+
+    if en_iyi_10:
+        st.markdown("""<div class="list-heading">🔥 EN İYİ 10 MAÇ</div>""", unsafe_allow_html=True)
+        for sira, (idx, item) in enumerate(en_iyi_10, start=1):
+            m = item["m"]
+            t = item["t"]
+            guven = int(t.get("ana_p", 0) or 0)
+            if guven >= 70:
+                renk = "#22c55e"
+                label = "Yüksek"
+            elif guven >= 55:
+                renk = "#f59e0b"
+                label = "Orta"
+            else:
+                renk = "#ef4444"
+                label = "Düşük"
+
+            skor = f"{t.get('eg', '')}-{t.get('dg', '')}"
+            oran = fmt_odd(t.get("ana_odd"))
+            saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+
+            st.markdown(
+                f"""
+                <div style="background:#0f172a;border:1px solid #1f2a44;border-radius:14px;padding:14px 16px;margin-bottom:10px;color:#f8fafc;">
+                    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+                        <div>
+                            <div style="font-size:0.82rem;color:#facc15;font-weight:800;">#{sira} · {escape(str(m.get('lig','')))} · {saat}</div>
+                            <div style="font-size:1.05rem;font-weight:800;margin-top:4px;">{escape(str(m.get('ev','')))} - {escape(str(m.get('dep','')))}</div>
+                        </div>
+                        <div style="text-align:right;min-width:110px;">
+                            <div style="font-size:0.70rem;color:#94a3b8;font-weight:700;">GÜVEN</div>
+                            <div style="font-size:1.05rem;font-weight:900;color:{renk};">%{guven} ({label})</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:9px;font-size:0.88rem;color:#e5e7eb;">
+                        Ana Tahmin: <b>{escape(str(t.get('ana_label','-')))}</b> ·
+                        Tahmini Skor: <b>{escape(str(skor))}</b> ·
+                        Örnek: <b>{int(t.get('ornek',0) or 0)}</b> ·
+                        Oran: <b>{escape(str(oran))}</b>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.markdown("<br>", unsafe_allow_html=True)
 
     fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
@@ -2819,18 +2878,7 @@ else:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        if st.button("🏆 Günün En Favori 3'lü Kuponu", use_container_width=True, key="top3_bestfav_btn"):
-            st.session_state.kupona = build_top3_coupon(indexed_fl, mode="best_favorites")
-            st.session_state.coupon_popup_open = True
-            st.rerun()
-    with cc2:
-        if st.button("🎯 Günün En Yüksek Oranlı 3 Favorisi", use_container_width=True, key="top3_highfav_btn"):
-            st.session_state.kupona = build_top3_coupon(indexed_fl, mode="high_favorites")
-            st.session_state.coupon_popup_open = True
-            st.rerun()
-
+    st.markdown("<br>", unsafe_allow_html=True)
 
     filtre = st.session_state.filtre
     if filtre == "yuksek":
