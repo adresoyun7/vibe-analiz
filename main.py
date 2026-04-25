@@ -850,238 +850,6 @@ div[data-testid="stExpander"] * {
 .history-sub {
     color:#f8fbff !important;
 }
-
-/* === NEW HOMEPAGE UI OVERRIDE - keeps analysis engine untouched === */
-.home-hero {
-    background: linear-gradient(135deg,#07111f 0%,#0b1628 48%,#0d1b32 100%);
-    border: 1px solid #223c63;
-    border-radius: 22px;
-    padding: 18px 20px;
-    margin: 10px 0 14px 0;
-    box-shadow: 0 18px 42px rgba(2,8,23,.28);
-}
-.home-hero-top {
-    display:flex;
-    justify-content:space-between;
-    gap:16px;
-    flex-wrap:wrap;
-    align-items:center;
-}
-.home-kicker {
-    font-size:.72rem;
-    font-weight:900;
-    letter-spacing:.24em;
-    color:#facc15;
-    text-transform:uppercase;
-}
-.home-title {
-    font-family:Rajdhani,sans-serif;
-    color:#f8fafc;
-    font-size:2.15rem;
-    line-height:1;
-    font-weight:900;
-    margin-top:4px;
-}
-.home-date {
-    color:#94a3b8;
-    font-size:.86rem;
-    margin-top:6px;
-}
-.home-actions-note {
-    background:rgba(250,204,21,.1);
-    border:1px solid rgba(250,204,21,.25);
-    color:#fde68a;
-    padding:9px 12px;
-    border-radius:12px;
-    font-size:.78rem;
-    font-weight:800;
-}
-.home-stat-grid {
-    display:grid;
-    grid-template-columns:repeat(3,minmax(0,1fr));
-    gap:12px;
-    margin:12px 0 14px 0;
-}
-.home-stat {
-    background:#0b111c;
-    border:1px solid #20314f;
-    border-radius:16px;
-    padding:16px 18px;
-    box-shadow:0 10px 26px rgba(2,8,23,.18);
-}
-.home-stat.green { background:linear-gradient(135deg,#123a26,#14532d); }
-.home-stat.blue { background:linear-gradient(135deg,#0d274f,#12325f); }
-.home-stat.dark { background:linear-gradient(135deg,#111827,#1b2136); }
-.home-stat-label {
-    font-size:.62rem;
-    color:#cbd5e1;
-    font-weight:900;
-    letter-spacing:.20em;
-    text-transform:uppercase;
-}
-.home-stat-val {
-    font-family:Rajdhani,sans-serif;
-    font-size:2.35rem;
-    font-weight:900;
-    color:#fff;
-    line-height:1;
-    margin-top:8px;
-}
-.home-stat-sub {
-    color:#cbd5e1;
-    font-size:.78rem;
-    font-weight:700;
-    margin-top:6px;
-}
-.home-panel {
-    background:#0b111c;
-    border:1px solid #20314f;
-    border-radius:18px;
-    padding:16px;
-    margin-bottom:14px;
-    box-shadow:0 14px 32px rgba(2,8,23,.18);
-}
-.home-panel-head {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:12px;
-    flex-wrap:wrap;
-    margin-bottom:12px;
-}
-.home-panel-title {
-    color:#f8fafc;
-    font-size:.92rem;
-    font-weight:900;
-    letter-spacing:.16em;
-    text-transform:uppercase;
-}
-.home-panel-sub {
-    color:#94a3b8;
-    font-size:.78rem;
-    margin-top:4px;
-}
-.home-tag {
-    display:inline-flex;
-    align-items:center;
-    border-radius:999px;
-    padding:7px 11px;
-    background:rgba(250,204,21,.10);
-    border:1px solid rgba(250,204,21,.23);
-    color:#fde68a;
-    font-size:.72rem;
-    font-weight:900;
-    margin-right:6px;
-    margin-bottom:6px;
-}
-.home-match-card {
-    background:#111827;
-    border:1px solid rgba(255,255,255,.08);
-    border-radius:16px;
-    padding:13px 14px;
-    margin-bottom:9px;
-    display:grid;
-    grid-template-columns:86px 2fr 210px 100px 115px 150px;
-    gap:13px;
-    align-items:center;
-    transition:.16s ease;
-    box-shadow:0 8px 20px rgba(2,8,23,.16);
-}
-.home-match-card:hover {
-    background:#151f33;
-    border-color:rgba(250,204,21,.32);
-    transform:translateY(-1px);
-}
-.home-time {
-    text-align:center;
-    color:#fff;
-    font-family:Rajdhani,sans-serif;
-    font-size:1.45rem;
-    font-weight:900;
-}
-.home-small {
-    font-size:.65rem;
-    color:#64748b;
-    font-weight:800;
-    margin-top:2px;
-}
-.home-teams {
-    color:#fff;
-    font-weight:900;
-    font-size:.98rem;
-}
-.home-meta {
-    color:#94a3b8;
-    font-size:.70rem;
-    margin-top:5px;
-}
-.home-pick-pill {
-    display:inline-flex;
-    background:#facc15;
-    color:#111827;
-    padding:5px 10px;
-    border-radius:9px;
-    font-size:.76rem;
-    font-weight:900;
-    margin-right:4px;
-    margin-bottom:4px;
-}
-.home-alt-pill {
-    display:inline-flex;
-    border:1px solid rgba(255,255,255,.10);
-    background:#0b111c;
-    color:#e2e8f0;
-    padding:5px 10px;
-    border-radius:9px;
-    font-size:.72rem;
-    font-weight:900;
-    margin-bottom:4px;
-}
-.home-score-val {
-    color:#fff;
-    font-size:1.15rem;
-    font-weight:900;
-    text-align:center;
-}
-.home-yellow-val {
-    color:#facc15;
-    font-size:1.15rem;
-    font-weight:900;
-    text-align:center;
-}
-.home-progress {
-    width:70px;
-    height:6px;
-    border-radius:999px;
-    background:#263247;
-    overflow:hidden;
-    margin:4px auto 0 auto;
-}
-.home-progress-fill { height:100%; border-radius:999px; }
-.home-odds {
-    display:flex;
-    gap:7px;
-    align-items:center;
-    justify-content:center;
-}
-.home-odd-box {
-    text-align:center;
-    min-width:32px;
-}
-.home-odd-label {
-    font-size:.58rem;
-    color:#64748b;
-    font-weight:900;
-}
-.home-odd-val {
-    color:#fff;
-    font-weight:900;
-    font-size:.82rem;
-}
-@media (max-width: 1100px) {
-    .home-stat-grid { grid-template-columns:1fr; }
-    .home-match-card { grid-template-columns:1fr; }
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -3838,58 +3606,28 @@ if st.session_state.detay_idx is not None:
 
 fl = st.session_state.final_list
 
-avg_guven = 0
-if fl:
-    try:
-        avg_guven = int(round(sum([x["t"].get("ana_p", 0) for x in fl]) / max(len(fl), 1)))
-    except Exception:
-        avg_guven = 0
-
-st.markdown(f"""
-<div class="home-hero">
-  <div class="home-hero-top">
-    <div>
-      <div class="home-kicker">VIBE PRO EXPERT</div>
-      <div class="home-title">Ana Maç Ekranı</div>
-      <div class="home-date">{format_tr_date(secili_tarih)}</div>
+hc1, hc2 = st.columns([6, 1])
+with hc1:
+    st.markdown(f"""
+    <div class="top-header">
+      <div>
+        <h2>ANA MAÇ EKRANI</h2>
+        <div class="sub">{format_tr_date(secili_tarih)}</div>
+      </div>
     </div>
-    <div class="home-actions-note">Tahmin değil, veri destekli analiz.</div>
-  </div>
-</div>
+    """, unsafe_allow_html=True)
 
-<div class="home-stat-grid">
-  <div class="home-stat green">
-    <div class="home-stat-label">Toplam Maç</div>
-    <div class="home-stat-val">{len(fl)}</div>
-    <div class="home-stat-sub">Analiz edilen maç</div>
-  </div>
-  <div class="home-stat blue">
-    <div class="home-stat-label">Kuponda</div>
-    <div class="home-stat-val">{len(st.session_state.get('kupona', []))}</div>
-    <div class="home-stat-sub">Seçili maç</div>
-  </div>
-  <div class="home-stat dark">
-    <div class="home-stat-label">Ortalama Güven</div>
-    <div class="home-stat-val">%{avg_guven}</div>
-    <div class="home-stat-sub">AI güven ortalaması</div>
-  </div>
-</div>
+    st.markdown("""
+    <div class="top-filters">
+      <div class="tf-chip">📅 Kartlı görünüm</div>
+      <div class="tf-chip">🎯 Detaylı tahmin ekranı</div>
+      <div class="tf-chip">🔥 Smart filter</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-<div class="home-panel">
-  <div class="home-panel-head">
-    <div>
-      <div class="home-panel-title">Kontrol Özeti</div>
-      <div class="home-panel-sub">Tarih, lig, sezon ve tolerans ayarları üst bardan yönetilir.</div>
-    </div>
-    <div>
-      <span class="home-tag">📅 {st.session_state.get('date_mode', 'Bugün')}</span>
-      <span class="home-tag">⚽ {len(secili_kodlar)} lig</span>
-      <span class="home-tag">📚 {len(yillar)} sezon</span>
-      <span class="home-tag">🎚️ {TOLERANS:.2f}</span>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+with hc2:
+    if fl:
+        st.markdown(f"""<div class="mac-badge" style="margin-top:8px">{len(fl)}<span>MAÇ BULUNDU</span></div>""", unsafe_allow_html=True)
 
 
 # ==========================================================
@@ -4082,10 +3820,10 @@ with st.expander("🧠 AI Günlük Tarama + Auto Kupon Builder + 30 Günlük Kas
 
 if not fl:
     st.markdown("""
-    <div class="home-panel" style="text-align:center;padding:42px;margin-top:18px">
-      <div style="font-size:3rem;margin-bottom:12px">⚽</div>
-      <div style="font-family:Rajdhani,sans-serif;font-size:1.55rem;color:#fff;font-weight:900">Analiz bekleniyor</div>
-      <div style="font-size:0.92rem;color:#94a3b8;margin-top:6px">API key gir, tarih/lig seç ve “ANALİZİ BAŞLAT” butonuna bas.</div>
+    <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
+      <div style="font-size:2rem;margin-bottom:12px">⚡</div>
+      <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
+      <div style="font-size:0.9rem;color:#666;margin-top:6px">API ayarlarını açıp anahtarını gir, sonra üst bardan tarih ve lig seçip ANALİZİ BAŞLAT butonuna bas.</div>
     </div>
     """, unsafe_allow_html=True)
 else:
@@ -4138,17 +3876,7 @@ else:
         goster = indexed_fl
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="home-panel">
-      <div class="home-panel-head">
-        <div>
-          <div class="home-panel-title">Maç Listesi</div>
-          <div class="home-panel-sub">Puan + güvene göre sıralı · {len(goster)} maç gösteriliyor</div>
-        </div>
-        <div class="home-actions-note">Kart görünümü aktif</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("""<div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>""", unsafe_allow_html=True)
 
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
@@ -4186,47 +3914,51 @@ else:
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
-            <div class="home-match-card">
-              <div>
-                <div style="text-align:center;margin-bottom:6px"><span class="live-badge" style="background:{durum_bg};color:white">{durum_lbl}</span></div>
-                <div class="home-time">{m['zaman'].strftime('%H:%M')}</div>
-                <div class="home-small" style="text-align:center">Saat</div>
+            <div class="mac-kart">
+              <div class="mk-zaman">
+                <span class="mk-star">☆</span>
+                <div style="margin-bottom:6px"><span class="live-badge" style="background:{durum_bg};color:white">{durum_lbl}</span></div>
+                <div class="mk-saat">{m['zaman'].strftime('%H:%M')}</div>
+                <div class="mk-lig">{m['lig'][:14]}</div>
               </div>
 
-              <div>
-                <div class="home-teams">{m['ev']} - {m['dep']}</div>
-                <div class="home-meta">{m['lig']} · {t['match_type']} · {t['goal_profile']}</div>
-                <div class="home-meta">🎯 Tahmini skor: <b style="color:#f8fafc">{t.get("eg", 1)}-{t.get("dg", 1)}</b> · 📊 {int(t['ornek'])} örnek</div>
+              <div class="mk-takimlar">
+                <div class="mk-ev">⬜ {m['ev']}</div>
+                <div class="mk-dep">🟦 {m['dep']}</div>
+                <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
                 {belirsiz_html}
-                {stability_html}
+                {ai_comment_html}
               </div>
 
               <div>
-                <span class="home-pick-pill">{t['ana_label']}</span>
+                <div class="mk-label">ANA TAHMİN</div>
+                <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
+                {skor_html}
+                <div style="margin-top:10px">
+                  <div class="mk-label">GÜVEN</div>
+                  <div class="guven-pct">{int(t['ana_p'])}%</div>
+                  <div class="guven-bar"><div class="guven-fill" style="width:{int(t['ana_p'])}%;background:{gc}"></div></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="mk-label">ALTERNATİF</div>
                 {alt_html}
                 {combo_html}
               </div>
 
               <div>
-                <div class="home-score-val">%{int(t.get('playable_score', t['ana_p']))}</div>
-                <div class="home-small" style="text-align:center">Puan</div>
-              </div>
-
-              <div>
-                <div class="home-yellow-val">%{int(t['ana_p'])}</div>
-                <div class="home-progress"><div class="home-progress-fill" style="width:{int(t['ana_p'])}%;background:{gc}"></div></div>
-                <div class="home-small" style="text-align:center">Güven</div>
-              </div>
-
-              <div>
-                <div class="home-odds">
-                  <div class="home-odd-box"><div class="home-odd-label">1</div><div class="home-odd-val">{m['h']:.2f}</div></div>
-                  <div style="color:#64748b">/</div>
-                  <div class="home-odd-box"><div class="home-odd-label">X</div><div class="home-odd-val">{m['b']:.2f}</div></div>
-                  <div style="color:#64748b">/</div>
-                  <div class="home-odd-box"><div class="home-odd-label">2</div><div class="home-odd-val">{m['a']:.2f}</div></div>
+                <div class="mk-label">ORANLAR</div>
+                <div class="oran-row">
+                  <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
+                  <div style="color:#2a2a2a">/</div>
+                  <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
+                  <div style="color:#2a2a2a">/</div>
+                  <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div class="home-small" style="text-align:center;margin-top:6px">{t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
+                {stability_html}
               </div>
             </div>
             """
