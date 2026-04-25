@@ -850,11 +850,35 @@ div[data-testid="stExpander"] * {
 .history-sub {
     color:#f8fbff !important;
 }
+
+
+/* === DETAIL POPUP / MODAL === */
+div[data-testid="stDialog"] div[role="dialog"] {
+    width: min(1180px, 94vw) !important;
+    max-width: 94vw !important;
+    max-height: 92vh !important;
+    overflow-y: auto !important;
+    background: linear-gradient(180deg,#07111f 0%, #0a1830 100%) !important;
+    border: 1px solid #284977 !important;
+    border-radius: 22px !important;
+    box-shadow: 0 28px 80px rgba(2,8,23,.65) !important;
+    padding: 18px !important;
+}
+div[data-testid="stDialog"] div[role="dialog"] * {
+    color: inherit;
+}
+div[data-testid="stDialog"] div[role="dialog"]::-webkit-scrollbar {
+    width: 8px;
+}
+div[data-testid="stDialog"] div[role="dialog"]::-webkit-scrollbar-thumb {
+    background: #ffd24a;
+    border-radius: 99px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 api_key_panel()
-legal_sidebar_sections()
 legal_notice_top()
 
 
@@ -2508,120 +2532,97 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-bar1, bar2, bar3, bar4, bar5, bar6 = st.columns([2.6, 2.0, 1.4, 1.8, 1.8, 2.1], gap='small')
+# FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("### ⚙️ Analiz Filtreleri")
 
-with bar1:
-    st.markdown('<div class="control-card">', unsafe_allow_html=True)
-    st.markdown('<div class="control-label">Tarih ve Lig Seçimi</div>', unsafe_allow_html=True)
     secili_tarih = tarih_secimine_gore_date(
         st.session_state.get('date_mode', 'Bugün'),
         bugun,
         st.session_state.get('special_date', bugun)
     )
-    popover_title = f"⚽ Tarih ve Lig Seçimi · {len(selected_league_codes())} lig seçili · {format_tr_date(secili_tarih)}"
-    with st.popover(popover_title, use_container_width=True):
-        left_col, right_col = st.columns([1.0, 3.2], gap='medium')
-        with left_col:
-            st.markdown('<div class="pop-title">Tarih Seçimi</div>', unsafe_allow_html=True)
-            date_mode = st.radio(
-                'Tarih modu',
-                options=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'],
-                index=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
-                key='date_mode',
-                label_visibility='collapsed'
-            )
-            if date_mode == 'Özel Tarih':
-                st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date')
 
-            st.markdown('<div class="pop-title" style="margin-top:18px">Hızlı Filtreler</div>', unsafe_allow_html=True)
-            if st.button('⭐💎 Kararlı Çekirdek + Karlı / Value', use_container_width=True, key='preset_core_value_top'):
-                toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
-                st.rerun()
-            st.markdown(
-                "<div class='league-chip-note' style='margin:6px 0 10px 0'>Çekirdek ligler ve value ligleri tek filtreyle birlikte seçer.</div>",
-                unsafe_allow_html=True
-            )
-            if st.button('🌍 Hepsini Aç', use_container_width=True, key='preset_all_top'):
+    with st.expander("📅 Tarih ve Lig Seçimi", expanded=True):
+        st.radio(
+            'Tarih modu',
+            options=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'],
+            index=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
+            key='date_mode',
+        )
+        if st.session_state.get('date_mode') == 'Özel Tarih':
+            st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date')
+
+        secili_tarih = tarih_secimine_gore_date(
+            st.session_state.get('date_mode', 'Bugün'),
+            bugun,
+            st.session_state.get('special_date', bugun)
+        )
+        st.caption(f"Seçili tarih: {format_tr_date(secili_tarih)}")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button('🌍 Hepsini Aç', use_container_width=True, key='preset_all_sidebar'):
                 set_leagues(tum_lig_kodlari())
                 st.rerun()
-            if st.button('🧹 Temizle', use_container_width=True, key='preset_clear_top'):
+        with c2:
+            if st.button('🧹 Temizle', use_container_width=True, key='preset_clear_sidebar'):
                 clear_leagues()
                 st.rerun()
 
-        with right_col:
-            st.markdown('<div class="pop-title">Lig Seçimi</div>', unsafe_allow_html=True)
-            lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_popover', label_visibility='collapsed')
-            filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
-            st.markdown(f"<div class='league-chip-note'>Gösterilen lig: <b>{len(filtreli_ligler)}</b></div>", unsafe_allow_html=True)
-            lig_box = st.container(height=360, border=True)
-            with lig_box:
-                lcol1, lcol2 = st.columns(2)
-                for i, lig in enumerate(filtreli_ligler):
-                    hedef_col = lcol1 if i % 2 == 0 else lcol2
-                    with hedef_col:
-                        st.checkbox(lig['label'], key=f"cb_{lig['kod']}")
-            st.markdown(f"<div style='font-size:0.9rem;color:#ffd24a;font-weight:700;margin-top:8px'>{len(selected_league_codes())} lig seçili</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        if st.button('⭐💎 Kararlı Çekirdek + Karlı / Value', use_container_width=True, key='preset_core_value_sidebar'):
+            toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
+            st.rerun()
 
-with bar2:
-    st.markdown('<div class="control-card">', unsafe_allow_html=True)
-    st.markdown('<div class="control-label">Sezonlar</div>', unsafe_allow_html=True)
-    yillar = st.multiselect(
-        'Sezonlar',
-        options=['2122', '2223', '2324', '2425', '2526'],
-        default=['2122', '2223', '2324', '2425', '2526'],
-        label_visibility='collapsed',
-        key='top_seasons'
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+        lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar')
+        filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
+        st.caption(f"Gösterilen lig: {len(filtreli_ligler)} · Seçili lig: {len(selected_league_codes())}")
 
-with bar3:
-    st.markdown('<div class="control-card">', unsafe_allow_html=True)
-    st.markdown('<div class="control-label">Min. Örnek Sayısı</div>', unsafe_allow_html=True)
-    min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, label_visibility='collapsed', key='top_min_ornek')
-    st.markdown('</div>', unsafe_allow_html=True)
+        lig_box = st.container(height=360, border=True)
+        with lig_box:
+            for lig in filtreli_ligler:
+                st.checkbox(lig['label'], key=f"cb_{lig['kod']}")
 
-with bar4:
-    st.markdown('<div class="control-card">', unsafe_allow_html=True)
-    st.markdown('<div class="control-label">Oran Hassasiyeti</div>', unsafe_allow_html=True)
-    TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, label_visibility='collapsed', key='top_tol')
-    st.markdown(f"<div style='margin-top:-6px;color:#ffd24a;font-weight:700'>{TOLERANS:.2f}</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("🧪 Sezon ve Veri Ayarları", expanded=True):
+        yillar = st.multiselect(
+            'Sezonlar',
+            options=['2122', '2223', '2324', '2425', '2526'],
+            default=['2122', '2223', '2324', '2425', '2526'],
+            key='top_seasons'
+        )
+        min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, key='top_min_ornek')
+        TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, key='top_tol')
+        st.markdown(f"<div style='color:#ffd24a;font-weight:800'>Hassasiyet: {TOLERANS:.2f}</div>", unsafe_allow_html=True)
 
-with bar5:
-    st.markdown('<div class="control-card">', unsafe_allow_html=True)
-    st.markdown('<div class="control-label">Oynanılabilir / Canlı</div>', unsafe_allow_html=True)
-    oynanabilir_esik = st.selectbox(
-        'Oynanılabilir eşik',
-        options=[0, 55, 60, 65, 70, 75],
-        index=2,
-        format_func=lambda x: 'Tümü' if x == 0 else f'Güven ≥ %{x}',
-        label_visibility='collapsed',
-        key='oynanabilir_esik'
-    )
-    canli_filtre = st.selectbox(
-        'Canlı filtre',
-        options=['Tümü', 'Canlı', 'Başlamamış', 'Bitti'],
-        index=0,
-        label_visibility='collapsed',
-        key='canli_filtre'
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("🎯 Oynanılabilir / Canlı", expanded=True):
+        oynanabilir_esik = st.selectbox(
+            'Oynanılabilir eşik',
+            options=[0, 55, 60, 65, 70, 75],
+            index=2,
+            format_func=lambda x: 'Tümü' if x == 0 else f'Güven ≥ %{x}',
+            key='oynanabilir_esik'
+        )
+        canli_filtre = st.selectbox(
+            'Canlı filtre',
+            options=['Tümü', 'Canlı', 'Başlamamış', 'Bitti'],
+            index=0,
+            key='canli_filtre'
+        )
 
-secili_kodlar = selected_league_codes()
-with bar6:
-    st.markdown('<div class="control-card">', unsafe_allow_html=True)
-    st.markdown('<div class="control-label">Analiz</div>', unsafe_allow_html=True)
+    secili_kodlar = selected_league_codes()
     analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
+
     if st.button('🎫 Kuponlarım', use_container_width=True, key='toggle_coupon_popup'):
         st.session_state.coupon_popup_open = True
         st.rerun()
+
     if 'son_analiz' in st.session_state:
         st.markdown(
             f"<div class='summary-note'>Son analiz: {st.session_state.son_analiz}<br>Toplam maç: {st.session_state.get('toplam_mac',0)}</div>",
             unsafe_allow_html=True,
         )
-    st.markdown('</div>', unsafe_allow_html=True)
+
+legal_sidebar_sections()
 
 rehber = tolerans_rehberi(TOLERANS)
 st.markdown(f"""
@@ -2724,7 +2725,7 @@ if analiz_btn:
         st.session_state.toplam_mac = len(final)
         st.rerun()
 
-if st.session_state.detay_item is not None or st.session_state.detay_idx is not None:
+def detay_popup_icerigi():
     if st.session_state.detay_item is not None:
         item = st.session_state.detay_item
     else:
@@ -2734,7 +2735,7 @@ if st.session_state.detay_item is not None or st.session_state.detay_idx is not 
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
 
-    if st.button("← Geri", key="geri_btn"):
+    if st.button("✕ Kapat", key="close_detail_popup_btn", use_container_width=True):
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.rerun()
@@ -2985,7 +2986,17 @@ if st.session_state.detay_item is not None or st.session_state.detay_idx is not 
         hide_index=True,
     )
 
-    st.stop()
+
+if st.session_state.detay_item is not None or st.session_state.detay_idx is not None:
+    try:
+        @st.dialog("Maç Detayı", width="large")
+        def _detay_modal():
+            detay_popup_icerigi()
+        _detay_modal()
+    except Exception:
+        # Eski Streamlit sürümlerinde st.dialog yoksa detay yine sayfanın üstünde gösterilir.
+        with st.container(border=True):
+            detay_popup_icerigi()
 
 fl = st.session_state.final_list
 
