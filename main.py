@@ -1,4 +1,3 @@
-
 import io
 import math
 from datetime import datetime, timedelta
@@ -7,6 +6,8 @@ from html import escape
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
+import textwrap
 
 
 def parse_mac_datetime(value):
@@ -214,10 +215,6 @@ button[kind="primary"]{background:#111827!important;border-color:#111827!importa
 .tag.green{background:#dcfce7!important;color:#15803d!important;}.tag.red{background:#fee2e2!important;color:#dc2626!important;}.tag.gray{background:#e5e7eb!important;color:#374151!important;}.tag.blue{background:#dbeafe!important;color:#2563eb!important;}.tag.amber{background:#fef3c7!important;color:#b45309!important;}
 @media(max-width:900px){.detail-body{grid-template-columns:1fr!important}.metric-grid{grid-template-columns:repeat(2,1fr)!important}.hist-head,.hist-row{grid-template-columns:1fr 1fr .6fr .5fr .5fr .5fr!important;font-size:10px!important}}
 </style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<style>
 """, unsafe_allow_html=True)
 
 
@@ -1880,7 +1877,11 @@ def mac_detay_modal():
             st.session_state.detay_item = None
             st.session_state.detay_idx = None
             st.rerun()
-    st.markdown(render_detail_html(item), unsafe_allow_html=True)
+    components.html(
+    textwrap.dedent(render_detail_html(item)),
+    height=800,
+    scrolling=True
+)
 
 
 # Sidebar filtreleri
