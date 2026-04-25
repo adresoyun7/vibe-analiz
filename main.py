@@ -1952,7 +1952,6 @@ def top10_market_adaylari(t):
     # Alt / Üst marketleri.
     add("2.5 Üst", t.get("ms25_p", 0), "Alt/Üst", None, bonus=18, min_guven=50)
     add("2.5 Alt", t.get("ms25a_p", 0), "Alt/Üst", None, bonus=18, min_guven=50)
-    add("1.5 Üst", t.get("ms15_p", 0), "Alt/Üst", None, bonus=10, min_guven=58)
     add("3.5 Üst", t.get("ms35_p", 0), "Alt/Üst", None, bonus=9, min_guven=54)
 
     # KG marketleri.
@@ -1960,7 +1959,7 @@ def top10_market_adaylari(t):
     add("KG Yok", t.get("kg_yok_p", 0), "KG", None, bonus=16, min_guven=50)
 
     # İlk yarı marketleri.
-    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=7, min_guven=56)
+    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=12, min_guven=54)
     add("İY 0.5 Alt", t.get("iy05a_p", 0), "İlk Yarı", None, bonus=6, min_guven=56)
     add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=5, min_guven=52)
 
