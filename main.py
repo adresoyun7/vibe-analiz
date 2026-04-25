@@ -1853,6 +1853,31 @@ def hesapla(b_df, m_row, tolerans):
 
 
 
+
+def kombo_tahmini_oran(label, ana_odd=None):
+    """Top 10 Market içinde kombo marketler için yaklaşık oran üretir.
+    Gerçek bookmaker kombo oranı API'den gelmediği için sadece tahmini gösterim amaçlıdır.
+    """
+    if not label:
+        return None
+
+    label = str(label)
+    try:
+        base = float(ana_odd) if ana_odd else 1.60
+    except Exception:
+        base = 1.60
+
+    if label.startswith("HT/FT"):
+        return 4.50
+    if "KG Var" in label or "KG Yok" in label:
+        return round(base * 1.55, 2)
+    if "2.5 Üst" in label or "2.5 Alt" in label:
+        return round(base * 1.50, 2)
+    if "MS1" in label or "MS2" in label or "MSX" in label:
+        return round(base * 1.45, 2)
+    return round(base * 1.40, 2)
+
+
 def top10_market_adaylari(t):
     """
     Top 10 için gerçek multi-market aday havuzu.
@@ -2526,6 +2551,14 @@ with st.sidebar:
       <div class="brand-text" style="font-size:1.35rem">VIBE <span>PRO</span></div>
     </div>
     """, unsafe_allow_html=True)
+    sayfa_modu = st.radio(
+        "Görünüm",
+        ["Maç Analizi", "Top 10 Market"],
+        index=0,
+        key="sayfa_modu",
+        on_change=clear_detail_on_filter_change,
+    )
+
     st.markdown("---")
     with st.expander("🔑 API Key", expanded=False):
         current_key = st.session_state.get("user_api_key", "")
@@ -3053,8 +3086,9 @@ else:
     # ==========================================================
     gunun_top10 = st.session_state.get("top10_list", [])
 
-    if gunun_top10:
-        with st.expander("🔥 Günün En İyi 10 Maçı", expanded=False):
+    if st.session_state.get("sayfa_modu", "Maç Analizi") == "Top 10 Market":
+        if gunun_top10:
+            st.markdown("""<div class="list-heading">🔥 TOP 10 MARKET</div>""", unsafe_allow_html=True)
             st.markdown(
                 """
                 <div style="font-size:0.86rem;color:#64748b;margin:0 0 12px 0;">
@@ -3126,8 +3160,9 @@ else:
                         st.session_state.detay_idx = None
                         st.rerun()
             st.markdown("<br>", unsafe_allow_html=True)
-    else:
-        st.info("Günün Top 10 listesi için önce analizi başlatmalısın.")
+        else:
+            st.info("Top 10 Market listesi için önce analizi başlatmalısın.")
+        st.stop()
 
     fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
