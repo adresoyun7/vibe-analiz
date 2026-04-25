@@ -218,55 +218,6 @@ button[kind="primary"]{background:#111827!important;border-color:#111827!importa
 
 st.markdown("""
 <style>
-/* === RENEWED DETAIL MODAL OVERRIDES === */
-.stDialog div[role="dialog"]{
-    max-width:980px!important;
-    padding:0!important;
-    border-radius:20px!important;
-    background:transparent!important;
-}
-.detail-shell, .modal-box{
-    background:linear-gradient(135deg,#0f172a,#111827)!important;
-    border:1px solid #1f2a44!important;
-    border-radius:18px!important;
-    overflow:hidden!important;
-    color:#f8fbff!important;
-    box-shadow:0 22px 70px rgba(2,8,23,.55)!important;
-}
-.detail-head{
-    background:linear-gradient(135deg,#07111f,#10244b)!important;
-    color:#fff!important;
-    padding:18px 20px!important;
-}
-.detail-topline,.detail-date{color:#9db2d1!important;}
-.detail-title{color:#fff!important;}
-.metric-grid{border-bottom:1px solid #1f2a44!important;background:#0b1628!important;}
-.metric{border-right:1px solid #1f2a44!important;}
-.metric-label,.metric-sub,.panel-title{color:#9db2d1!important;}
-.metric-val{color:#f8fbff!important;}
-.detail-body{background:#0f172a!important;}
-.stat-row,.why-box,.combo-row,.big-odd{
-    background:#0b1628!important;
-    border:1px solid #1f2a44!important;
-    color:#f8fbff!important;
-    border-radius:10px!important;
-}
-.stat-row *,.why-box *,.combo-row *,.big-odd *{color:inherit!important;}
-.big-odd small{color:#9db2d1!important;}
-.big-odd b{color:#60a5fa!important;}
-.history-table{width:100%!important;border-collapse:collapse!important;margin-top:10px!important;}
-.history-table th{color:#9db2d1!important;text-align:left!important;padding:6px!important;}
-.history-table td{
-    padding:8px!important;
-    border-top:1px solid #1f2a44!important;
-    color:#f8fbff!important;
-    font-size:12px!important;
-}
-.tag{padding:3px 8px!important;border-radius:6px!important;font-weight:800!important;font-size:11px!important;}
-.tag.green{background:#183925!important;color:#3ddb7c!important;}
-.tag.red{background:#391212!important;color:#ff6b6b!important;}
-.tag.gray{background:#2a2f3a!important;color:#cbd5e1!important;}
-</style>
 """, unsafe_allow_html=True)
 
 
