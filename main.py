@@ -1830,6 +1830,28 @@ def hesapla(b_df, m_row, tolerans):
 
 
 
+
+def kombo_tahmini_oran(label, ana_odd):
+    """Kombo / HT-FT gibi marketlerde gerçek oran yoksa yaklaşık gösterim için kullanılır."""
+    try:
+        ana_odd = float(ana_odd or 1.0)
+    except Exception:
+        ana_odd = 1.0
+
+    lbl = str(label or "")
+    if not lbl:
+        return ana_odd
+
+    if "HT/FT" in lbl:
+        return max(ana_odd * 2.40, 2.40)
+    if "KG Var" in lbl or "KG Yok" in lbl:
+        return max(ana_odd * 1.55, 1.55)
+    if "2.5 Üst" in lbl or "2.5 Alt" in lbl:
+        return max(ana_odd * 1.45, 1.45)
+    if "+" in lbl:
+        return max(ana_odd * 1.50, 1.50)
+    return ana_odd
+
 def top10_market_adaylari(t):
     """
     Top 10 için gerçek multi-market aday havuzu.
