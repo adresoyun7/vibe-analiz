@@ -2631,6 +2631,26 @@ def clear_detail_on_filter_change():
     st.session_state.detay_idx = None
     st.session_state.detay_item = None
 
+
+def clear_detail_and_rebuild_top_markets():
+    # Market filtresi değişince eski detay popup'ı açık kalmasın.
+    st.session_state.detay_idx = None
+    st.session_state.detay_item = None
+
+    # Top 10 / Top 50 listeleri market filtrelerine bağlı olduğu için
+    # geçmiş analiz verisi varsa listeyi anında yeniden üret.
+    gecmis = st.session_state.get("last_gecmis_df")
+    bulten = st.session_state.get("last_bulten_df")
+    min_ornek_val = st.session_state.get("min_ornek", 1)
+
+    try:
+        if gecmis is not None and bulten is not None and not getattr(gecmis, "empty", True) and not getattr(bulten, "empty", True):
+            st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=10)
+            st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=50)
+    except Exception:
+        # Filtre değişimi UI'ı bozmasın; gerekirse kullanıcı Analizi Başlat ile yeniden üretir.
+        pass
+
 def selected_league_codes():
     return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
 
@@ -2682,15 +2702,15 @@ with st.sidebar:
         st.markdown("### Market Filtreleri")
         c_ms, c_25 = st.columns([1, 1], gap="small")
         with c_ms:
-            st.checkbox("MS", value=True, key="top10_filter_ms")
+            st.checkbox("MS", value=True, key="top10_filter_ms", on_change=clear_detail_and_rebuild_top_markets)
         with c_25:
-            st.checkbox("2.5", value=True, key="top10_filter_25")
+            st.checkbox("2.5", value=True, key="top10_filter_25", on_change=clear_detail_and_rebuild_top_markets)
 
         c_kg, c_iy = st.columns([1, 1], gap="small")
         with c_kg:
-            st.checkbox("KG", value=True, key="top10_filter_kg")
+            st.checkbox("KG", value=True, key="top10_filter_kg", on_change=clear_detail_and_rebuild_top_markets)
         with c_iy:
-            st.checkbox("İY 0.5", value=True, key="top10_filter_iy05")
+            st.checkbox("İY 0.5", value=True, key="top10_filter_iy05", on_change=clear_detail_and_rebuild_top_markets)
 
     st.markdown("### ⚙️ Analiz Filtreleri")
 
