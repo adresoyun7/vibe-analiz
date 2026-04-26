@@ -875,6 +875,21 @@ div[data-testid="stDialog"] div[role="dialog"]::-webkit-scrollbar-thumb {
     border-radius: 99px;
 }
 
+
+/* Compact Top 10 market filters in sidebar */
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] {
+    margin-bottom: -8px !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    min-height: 24px !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] p {
+    margin: 0 !important;
+    line-height: 1.1 !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -2598,6 +2613,25 @@ with st.sidebar:
       <div class="brand-text" style="font-size:1.35rem">VIBE <span>PRO</span></div>
     </div>
     """, unsafe_allow_html=True)
+    with st.expander("🔑 API Key", expanded=False):
+        current_key = st.session_state.get("user_api_key", "")
+        api_key_input = st.text_input("ODDS API KEY", value=current_key, placeholder="API key gir...", type="password", key="api_key_input_sidebar_clean")
+        a1, a2 = st.columns(2)
+        with a1:
+            if st.button("Kaydet", use_container_width=True, key="save_api_key_sidebar_clean"):
+                st.session_state["user_api_key"] = api_key_input.strip()
+                st.success("API Key kaydedildi ✅")
+                st.rerun()
+        with a2:
+            if st.button("Temizle", use_container_width=True, key="clear_api_key_sidebar_clean"):
+                st.session_state.pop("user_api_key", None)
+                st.success("API Key temizlendi")
+                st.rerun()
+        if get_app_api_key():
+            st.success("API key aktif ✅")
+        else:
+            st.warning("Maçları çekmek için API key girmen gerekiyor.")
+
     sayfa_modu = st.radio(
         "Görünüm",
         ["Maç Analizi", "Top 10 Market"],
@@ -2620,25 +2654,6 @@ with st.sidebar:
         with c_iy:
             st.checkbox("İY 0.5", value=True, key="top10_filter_iy05")
 
-    st.markdown("---")
-    with st.expander("🔑 API Key", expanded=False):
-        current_key = st.session_state.get("user_api_key", "")
-        api_key_input = st.text_input("ODDS API KEY", value=current_key, placeholder="API key gir...", type="password", key="api_key_input_sidebar_clean")
-        a1, a2 = st.columns(2)
-        with a1:
-            if st.button("Kaydet", use_container_width=True, key="save_api_key_sidebar_clean"):
-                st.session_state["user_api_key"] = api_key_input.strip()
-                st.success("API Key kaydedildi ✅")
-                st.rerun()
-        with a2:
-            if st.button("Temizle", use_container_width=True, key="clear_api_key_sidebar_clean"):
-                st.session_state.pop("user_api_key", None)
-                st.success("API Key temizlendi")
-                st.rerun()
-        if get_app_api_key():
-            st.success("API key aktif ✅")
-        else:
-            st.warning("Maçları çekmek için API key girmen gerekiyor.")
     st.markdown("### ⚙️ Analiz Filtreleri")
 
     secili_tarih = tarih_secimine_gore_date(
