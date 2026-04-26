@@ -2022,6 +2022,27 @@ def top10_market_adaylari(t):
     return adaylar
 
 
+
+def mac_key(m):
+    """Aynı maç + aynı market tekrarını engellemek için güvenli maç anahtarı."""
+    try:
+        if not isinstance(m, dict):
+            try:
+                m = m.to_dict()
+            except Exception:
+                m = {}
+
+        zaman = m.get("zaman") or m.get("zaman_iso") or ""
+        if hasattr(zaman, "strftime"):
+            zaman = zaman.strftime("%Y-%m-%d %H:%M")
+        else:
+            zaman = str(zaman)
+
+        return f"{m.get('ev', '')}|{m.get('dep', '')}|{zaman}"
+    except Exception:
+        return str(m)
+
+
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     """
     Günün Top 10 listesini seçili hassasiyete bağlamaz.
@@ -2149,6 +2170,7 @@ for key, default in [
     ("detay_idx", None),
     ("detay_item", None),
     ("top10_list", []),
+    ("top50_list", []),
     ("filtre", "tumu"),
     ("kupona", []),
     ("coupon_popup_open", False),
@@ -2650,13 +2672,13 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 10 Market"],
+        ["Maç Analizi", "Top 10 Market", "Top 50 Market"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
 
-    if st.session_state.get("sayfa_modu") == "Top 10 Market":
+    if st.session_state.get("sayfa_modu") in ["Top 10 Market", "Top 50 Market"]:
         st.markdown("### Market Filtreleri")
         c_ms, c_25 = st.columns([1, 1], gap="small")
         with c_ms:
@@ -2847,6 +2869,7 @@ if analiz_btn:
         )
         st.session_state.final_list = final
         st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
+        st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50)
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -3176,11 +3199,17 @@ else:
     # GUNUN EN IYI 10 MACI - HASSASIYETTEN BAGIMSIZ
     # API kullanmaz; analizde cekilen maclar uzerinden 0.00 - 0.10 arasi en iyi toleransi secer.
     # ==========================================================
-    gunun_top10 = st.session_state.get("top10_list", [])
+    aktif_sayfa_modu = st.session_state.get("sayfa_modu", "Maç Analizi")
+    if aktif_sayfa_modu == "Top 50 Market":
+        gunun_top_liste = st.session_state.get("top50_list", [])
+        top_baslik = "🔥 TOP 50 MARKET"
+    else:
+        gunun_top_liste = st.session_state.get("top10_list", [])
+        top_baslik = "🔥 TOP 10 MARKET"
 
-    if st.session_state.get("sayfa_modu", "Maç Analizi") == "Top 10 Market":
-        if gunun_top10:
-            st.markdown("""<div class="list-heading">🔥 TOP 10 MARKET</div>""", unsafe_allow_html=True)
+    if aktif_sayfa_modu in ["Top 10 Market", "Top 50 Market"]:
+        if gunun_top_liste:
+            st.markdown(f"""<div class="list-heading">{top_baslik}</div>""", unsafe_allow_html=True)
             st.markdown(
                 """
                 <div style="font-size:0.86rem;color:#64748b;margin:0 0 12px 0;">
@@ -3191,7 +3220,7 @@ else:
                 unsafe_allow_html=True,
             )
 
-            for sira, item in enumerate(gunun_top10, start=1):
+            for sira, item in enumerate(gunun_top_liste, start=1):
                 m = item["m"]
                 t = item["t"]
                 guven = int(t.get("top10_market_guven", t.get("ana_p", 0)) or 0)
@@ -3253,7 +3282,7 @@ else:
                         st.rerun()
             st.markdown("<br>", unsafe_allow_html=True)
         else:
-            st.info("Top 10 Market listesi için önce analizi başlatmalısın.")
+            st.info(f"{top_baslik} listesi için önce analizi başlatmalısın.")
         st.stop()
 
     fc1, fc2, fc3, fc4 = st.columns(4)
