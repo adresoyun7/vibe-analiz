@@ -1952,6 +1952,8 @@ def top10_market_adaylari(t):
             return
         if not st.session_state.get("top10_filter_iy15", True) and label == "İY 1.5 Üst":
             return
+        if not st.session_state.get("top10_filter_combo", True) and tip in ["Kombo", "HT/FT"]:
+            return
 
         # İlk yarı marketleri daha volatil olduğu için Top 10/Top 50'ye kontrollü girsin.
         if label == "İY 0.5 Üst":
@@ -2811,19 +2813,24 @@ with st.sidebar:
 
     if st.session_state.get("sayfa_modu") in ["Top 10 Market", "Top 50 Market"]:
         st.markdown("### Market Filtreleri")
-        c_ms, c_25 = st.columns([1, 1], gap="small")
+
+        # Üst satır: 3 filtre
+        c_ms, c_25, c_kg = st.columns([1, 1, 1], gap="small")
         with c_ms:
             st.checkbox("MS", value=True, key="top10_filter_ms", on_change=clear_detail_and_rebuild_top_markets)
         with c_25:
             st.checkbox("2.5", value=True, key="top10_filter_25", on_change=clear_detail_and_rebuild_top_markets)
-
-        c_kg, c_iy05, c_iy15 = st.columns([1, 1, 1], gap="small")
         with c_kg:
             st.checkbox("KG", value=True, key="top10_filter_kg", on_change=clear_detail_and_rebuild_top_markets)
+
+        # Alt satır: 3 filtre
+        c_iy05, c_iy15, c_combo = st.columns([1, 1, 1], gap="small")
         with c_iy05:
             st.checkbox("İY 0.5", value=True, key="top10_filter_iy05", on_change=clear_detail_and_rebuild_top_markets)
         with c_iy15:
             st.checkbox("İY 1.5", value=True, key="top10_filter_iy15", on_change=clear_detail_and_rebuild_top_markets)
+        with c_combo:
+            st.checkbox("Kombo", value=True, key="top10_filter_combo", on_change=clear_detail_and_rebuild_top_markets)
 
     st.markdown("### ⚙️ Analiz Filtreleri")
 
