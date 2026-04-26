@@ -2332,8 +2332,6 @@ def tarih_secimine_gore_date(secim: str, bugun_tarih, ozel_tarih):
         return bugun_tarih + timedelta(days=1)
     if secim == "2 gün sonra":
         return bugun_tarih + timedelta(days=2)
-    if secim == "3 gün sonra":
-        return bugun_tarih + timedelta(days=3)
     return ozel_tarih
 
 
@@ -2526,6 +2524,42 @@ div[data-testid="stDateInput"] div[data-baseweb="input"] > div {
 .stSlider [data-baseweb="slider"] > div > div:nth-child(1) {
     background: #ffd24a !important;
 }
+/* Sidebar sade preset butonları */
+section[data-testid="stSidebar"] button[kind="secondary"] {
+    min-height: 34px !important;
+    padding: 5px 10px !important;
+    font-size: 0.78rem !important;
+}
+
+/* Kupon paneli dark fix */
+.coupon-panel-dark {
+    background: linear-gradient(180deg,#07111f 0%, #0a1830 100%);
+    border: 1px solid #284977;
+    border-radius: 18px;
+    box-shadow: 0 18px 45px rgba(2,8,23,.24);
+    padding: 14px 16px;
+    margin: 12px 0 18px 0;
+}
+.coupon-panel-dark h3 {
+    color:#f8fbff !important;
+    margin:0 0 8px 0 !important;
+}
+.coupon-panel-dark .coupon-sub {
+    color:#9db2d1 !important;
+    font-size:.76rem;
+    margin-bottom:10px;
+}
+.coupon-panel-dark-item {
+    background:#0b1628;
+    border:1px solid #223c63;
+    border-radius:12px;
+    padding:10px 12px;
+    margin-bottom:8px;
+}
+.coupon-panel-dark-item b { color:#f8fbff !important; }
+.coupon-panel-dark-item .line { color:#9db2d1 !important;font-size:.78rem;margin-top:4px; }
+.coupon-panel-dark-item code { background:#111827 !important;color:#ffd24a !important;border:1px solid #223c63;border-radius:6px;padding:2px 6px; }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -2540,6 +2574,9 @@ if 'date_mode' not in st.session_state:
     st.session_state['date_mode'] = 'Bugün'
 if 'special_date' not in st.session_state:
     st.session_state['special_date'] = bugun
+if st.session_state.get('date_mode') == '3 gün sonra':
+    st.session_state['date_mode'] = 'Özel Tarih'
+    st.session_state['special_date'] = bugun + timedelta(days=3)
 
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
@@ -2588,8 +2625,8 @@ with st.sidebar:
     with st.expander("📅 Tarih ve Lig Seçimi", expanded=True):
         st.radio(
             'Tarih modu',
-            options=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'],
-            index=['Bugün', 'Yarın', '2 gün sonra', '3 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
+            options=['Bugün', 'Yarın', '2 gün sonra', 'Özel Tarih'],
+            index=['Bugün', 'Yarın', '2 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
             key='date_mode',
             on_change=clear_detail_on_filter_change,
         )
@@ -2605,15 +2642,15 @@ with st.sidebar:
 
         c1, c2 = st.columns(2)
         with c1:
-            if st.button('🌍 Hepsini Aç', use_container_width=True, key='preset_all_sidebar'):
+            if st.button('Hepsini Aç', use_container_width=True, key='preset_all_sidebar'):
                 set_leagues(tum_lig_kodlari())
                 st.rerun()
         with c2:
-            if st.button('🧹 Temizle', use_container_width=True, key='preset_clear_sidebar'):
+            if st.button('Temizle', use_container_width=True, key='preset_clear_sidebar'):
                 clear_leagues()
                 st.rerun()
 
-        if st.button('⭐💎 Kararlı Çekirdek + Karlı / Value', use_container_width=True, key='preset_core_value_sidebar'):
+        if st.button('Kararlı Çekirdek + Value', use_container_width=True, key='preset_core_value_sidebar'):
             toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
             st.rerun()
 
@@ -3340,37 +3377,54 @@ else:
                 normalized_kupona.append(item)
         st.session_state.kupona = normalized_kupona
 
-        with st.container(border=True):
-            st.markdown("### 🎫 Kuponlarım")
-            for del_i, item in enumerate(list(st.session_state.kupona)):
-                mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
-                durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
-                mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
-                alt_satir = (
-                    f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
-                    f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}"
-                    if item.get("guven", 0)
-                    else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
-                )
-                c1, c2 = st.columns([8, 1])
-                with c1:
-                    st.markdown(f"**{mac_ad}**  \n{alt_satir}  \n`{durum}`")
-                with c2:
-                    if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
-                        st.session_state.kupona.pop(del_i)
-                        if not st.session_state.kupona:
-                            st.session_state.coupon_popup_open = False
-                        st.rerun()
+        st.markdown(
+            """
+            <div class="coupon-panel-dark">
+              <h3>🎫 Kuponlarım</h3>
+              <div class="coupon-sub">Eklediğin maçlar aşağıda listelenir.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-            b1, b2 = st.columns([1, 1])
-            with b1:
-                if st.button("🧹 Hepsini Temizle", key="coupon_clear_inside_panel", use_container_width=True):
-                    st.session_state.kupona = []
-                    st.session_state.coupon_popup_open = False
+        for del_i, item in enumerate(list(st.session_state.kupona)):
+            mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
+            durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
+            mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
+            alt_satir = (
+                f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
+                f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}"
+                if item.get("guven", 0)
+                else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
+            )
+            c1, c2 = st.columns([8, 1])
+            with c1:
+                st.markdown(
+                    f"""
+                    <div class="coupon-panel-dark-item">
+                      <b>{escape(mac_ad)}</b>
+                      <div class="line">{escape(alt_satir)}</div>
+                      <div class="line"><code>{escape(durum)}</code></div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with c2:
+                if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
+                    st.session_state.kupona.pop(del_i)
+                    if not st.session_state.kupona:
+                        st.session_state.coupon_popup_open = False
                     st.rerun()
-            with b2:
-                if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
-                    st.session_state.coupon_popup_open = False
-                    st.rerun()
+
+        b1, b2 = st.columns([1, 1])
+        with b1:
+            if st.button("Hepsini Temizle", key="coupon_clear_inside_panel", use_container_width=True):
+                st.session_state.kupona = []
+                st.session_state.coupon_popup_open = False
+                st.rerun()
+        with b2:
+            if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
+                st.session_state.coupon_popup_open = False
+                st.rerun()
 
 legal_footer()
