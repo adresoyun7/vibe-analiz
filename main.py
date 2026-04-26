@@ -1917,6 +1917,17 @@ def top10_market_adaylari(t):
             return
         tip = tip or infer_tip(label)
 
+        # Top 10 Market sayfasındaki market aç/kapat filtreleri.
+        # Ana maç analizi tarafını etkilemez; sadece Top 10 aday havuzunu filtreler.
+        if not st.session_state.get("top10_filter_ms", True) and tip == "MS":
+            return
+        if not st.session_state.get("top10_filter_25", True) and (tip == "Alt/Üst" or "2.5" in label):
+            return
+        if not st.session_state.get("top10_filter_kg", True) and tip == "KG":
+            return
+        if not st.session_state.get("top10_filter_iy05", True) and (tip == "İlk Yarı" or label.startswith("İY")):
+            return
+
         # Aynı label tekrar eklenirse en yüksek güvenli olanı tut.
         for a in adaylar:
             if a["label"] == label and a["tip"] == tip:
@@ -2594,6 +2605,20 @@ with st.sidebar:
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
+
+    if st.session_state.get("sayfa_modu") == "Top 10 Market":
+        st.markdown("### Market Filtreleri")
+        c_ms, c_25 = st.columns(2)
+        with c_ms:
+            st.checkbox("MS", value=True, key="top10_filter_ms")
+        with c_25:
+            st.checkbox("2.5", value=True, key="top10_filter_25")
+
+        c_kg, c_iy = st.columns(2)
+        with c_kg:
+            st.checkbox("KG", value=True, key="top10_filter_kg")
+        with c_iy:
+            st.checkbox("İY 0.5", value=True, key="top10_filter_iy05")
 
     st.markdown("---")
     with st.expander("🔑 API Key", expanded=False):
