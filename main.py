@@ -1474,29 +1474,6 @@ def hesapla(b_df, m_row, tolerans):
     ms35_raw = float((toplam_gol >= 4).mean())
     ms15_raw = float((toplam_gol >= 2).mean())
     kg_raw = float(((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
-
-    # Son trend etkisi: özellikle dar toleranslarda (örn. 0.02) son benzer maçlar
-    # güçlü sinyal veriyorsa model bunu tamamen kaçırmasın.
-    # Genel veri ana omurga kalır; son 10 sadece destekleyici ağırlık alır.
-    try:
-        b_recent = b.sort_values("Date", ascending=False).head(10)
-        if len(b_recent) >= 5:
-            recent_goal = b_recent["FTHG"] + b_recent["FTAG"]
-            recent_over25 = float((recent_goal >= 3).mean())
-            recent_over35 = float((recent_goal >= 4).mean())
-            recent_over15 = float((recent_goal >= 2).mean())
-            recent_kg = float(((b_recent["FTHG"] > 0) & (b_recent["FTAG"] > 0)).mean())
-
-            recent_w = 0.30 if len(b) >= 10 else 0.20
-            base_w = 1.0 - recent_w
-
-            ms25_raw = (ms25_raw * base_w) + (recent_over25 * recent_w)
-            ms35_raw = (ms35_raw * base_w) + (recent_over35 * recent_w)
-            ms15_raw = (ms15_raw * base_w) + (recent_over15 * recent_w)
-            kg_raw = (kg_raw * base_w) + (recent_kg * recent_w)
-    except Exception:
-        pass
-
     iy05_raw = float((ilk_yari_gol >= 1).mean())
     iy15_raw = float((ilk_yari_gol >= 2).mean())
 
