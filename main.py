@@ -2022,6 +2022,17 @@ def top10_market_adaylari(t):
     return adaylar
 
 
+
+def mac_key(m):
+    """Aynı maçı güvenli şekilde tekilleştirmek için yardımcı anahtar."""
+    try:
+        zaman = m.get("zaman") or m.get("zaman_iso") or ""
+        if hasattr(zaman, "strftime"):
+            zaman = zaman.strftime("%Y-%m-%d %H:%M")
+        return f"{m.get(047ev047,047047)}|{m.get(047dep047,047047)}|{zaman}"
+    except Exception:
+        return str(m)
+
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     """
     Günün Top 10 listesini seçili hassasiyete bağlamaz.
