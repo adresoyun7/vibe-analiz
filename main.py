@@ -2149,6 +2149,7 @@ for key, default in [
     ("detay_idx", None),
     ("detay_item", None),
     ("top10_list", []),
+    ("top50_list", []),
     ("filtre", "tumu"),
     ("kupona", []),
     ("coupon_popup_open", False),
@@ -2650,13 +2651,13 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 10 Market"],
+        ["Maç Analizi", "Top 10 Market", "Top 50"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
 
-    if st.session_state.get("sayfa_modu") == "Top 10 Market":
+    if st.session_state.get("sayfa_modu") in ["Top 10 Market", "Top 50"]:
         st.markdown("### Market Filtreleri")
         c_ms, c_25 = st.columns([1, 1], gap="small")
         with c_ms:
@@ -2847,6 +2848,7 @@ if analiz_btn:
         )
         st.session_state.final_list = final
         st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
+        st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50)
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -3176,22 +3178,28 @@ else:
     # GUNUN EN IYI 10 MACI - HASSASIYETTEN BAGIMSIZ
     # API kullanmaz; analizde cekilen maclar uzerinden 0.00 - 0.10 arasi en iyi toleransi secer.
     # ==========================================================
+    sayfa_modu_aktif = st.session_state.get("sayfa_modu", "Maç Analizi")
     gunun_top10 = st.session_state.get("top10_list", [])
+    gunun_top50 = st.session_state.get("top50_list", [])
 
-    if st.session_state.get("sayfa_modu", "Maç Analizi") == "Top 10 Market":
-        if gunun_top10:
-            st.markdown("""<div class="list-heading">🔥 TOP 10 MARKET</div>""", unsafe_allow_html=True)
+    if sayfa_modu_aktif in ["Top 10 Market", "Top 50"]:
+        aktif_liste = gunun_top50 if sayfa_modu_aktif == "Top 50" else gunun_top10
+        aktif_limit = 50 if sayfa_modu_aktif == "Top 50" else 10
+        aktif_baslik = "🚀 TOP 50 MARKET" if sayfa_modu_aktif == "Top 50" else "🔥 TOP 10 MARKET"
+
+        if aktif_liste:
+            st.markdown(f"""<div class="list-heading">{aktif_baslik}</div>""", unsafe_allow_html=True)
             st.markdown(
-                """
+                f"""
                 <div style="font-size:0.86rem;color:#64748b;margin:0 0 12px 0;">
                     Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 ile denenir.
-                    MS, Alt/Üst, KG, İlk Yarı ve Kombo adayları arasından en güçlü market seçilir.
+                    MS, Alt/Üst, KG, İlk Yarı ve Kombo adayları arasından en güçlü market seçilir. Şu an ilk <b>{aktif_limit}</b> aday gösteriliyor.
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            for sira, item in enumerate(gunun_top10, start=1):
+            for sira, item in enumerate(aktif_liste, start=1):
                 m = item["m"]
                 t = item["t"]
                 guven = int(t.get("top10_market_guven", t.get("ana_p", 0)) or 0)
@@ -3253,7 +3261,7 @@ else:
                         st.rerun()
             st.markdown("<br>", unsafe_allow_html=True)
         else:
-            st.info("Top 10 Market listesi için önce analizi başlatmalısın.")
+            st.info(f"{sayfa_modu_aktif} listesi için önce analizi başlatmalısın.")
         st.stop()
 
     fc1, fc2, fc3, fc4 = st.columns(4)
