@@ -1948,8 +1948,17 @@ def top10_market_adaylari(t):
             return
         if not st.session_state.get("top10_filter_kg", True) and tip == "KG":
             return
-        if not st.session_state.get("top10_filter_iy05", True) and (tip == "İlk Yarı" or label.startswith("İY")):
+        if not st.session_state.get("top10_filter_iy05", True) and label == "İY 0.5 Üst":
             return
+
+        # İY 0.5 Üst tek başına daha volatil olduğu için Top 10'a sadece premium şartlarda girsin.
+        if label == "İY 0.5 Üst":
+            if guven < 70:
+                return
+            if safe_int(t.get("ornek", 0)) < 5:
+                return
+            if str(t.get("goal_profile", "")) == "Düşük Gollü":
+                return
 
         # Aynı label tekrar eklenirse en yüksek güvenli olanı tut.
         for a in adaylar:
@@ -1993,9 +2002,8 @@ def top10_market_adaylari(t):
     add("KG Yok", t.get("kg_yok_p", 0), "KG", None, bonus=16, min_guven=50)
 
     # İlk yarı marketleri.
-    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=12, min_guven=54)
-    add("İY 0.5 Alt", t.get("iy05a_p", 0), "İlk Yarı", None, bonus=6, min_guven=56)
-    add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=5, min_guven=52)
+    # Top 10 için sadece İY 0.5 Üst kullanılır; İY 0.5 Alt / İY 1.5 Üst spam olmasın diye çıkarıldı.
+    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=10, min_guven=70)
 
     # Kombo / HT-FT.
     if t.get("combo_var") and t.get("combo_label"):
