@@ -889,6 +889,14 @@ section[data-testid="stSidebar"] div[data-testid="stCheckbox"] p {
     margin: 0 !important;
     line-height: 1.1 !important;
 }
+/* tighter 2x2 market filter grid */
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
+    gap: 0.28rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="column"] {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
 
 </style>
 """, unsafe_allow_html=True)
@@ -2642,13 +2650,13 @@ with st.sidebar:
 
     if st.session_state.get("sayfa_modu") == "Top 10 Market":
         st.markdown("### Market Filtreleri")
-        c_ms, c_25 = st.columns(2)
+        c_ms, c_25 = st.columns([1, 1], gap="small")
         with c_ms:
             st.checkbox("MS", value=True, key="top10_filter_ms")
         with c_25:
             st.checkbox("2.5", value=True, key="top10_filter_25")
 
-        c_kg, c_iy = st.columns(2)
+        c_kg, c_iy = st.columns([1, 1], gap="small")
         with c_kg:
             st.checkbox("KG", value=True, key="top10_filter_kg")
         with c_iy:
