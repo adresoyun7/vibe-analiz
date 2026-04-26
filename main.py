@@ -2005,20 +2005,23 @@ def top10_market_adaylari(t):
     # Top 10 için sadece İY 0.5 Üst kullanılır; İY 0.5 Alt / İY 1.5 Üst spam olmasın diye çıkarıldı.
     add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=10, min_guven=70)
 
-    # Kombo / HT-FT.
+    # Kombo.
     if t.get("combo_var") and t.get("combo_label"):
-        add(
-            t.get("combo_label"),
-            t.get("combo_p", 0),
-            "Kombo",
-            kombo_tahmini_oran(t.get("combo_label"), t.get("ana_odd")),
-            bonus=12,
-            min_guven=42,
-        )
+        combo_label_txt = str(t.get("combo_label", ""))
+        # Top 10 / Top 50 listesinde HT/FT ana öneri gibi öne çıkmasın.
+        # HT/FT detay ekranında görünmeye devam eder; liste önerisi MS / Alt-Üst / KG ağırlıklı kalır.
+        if not combo_label_txt.startswith("HT/FT"):
+            add(
+                t.get("combo_label"),
+                t.get("combo_p", 0),
+                "Kombo",
+                kombo_tahmini_oran(t.get("combo_label"), t.get("ana_odd")),
+                bonus=8,
+                min_guven=48,
+            )
 
-    if t.get("htft_mod") and str(t.get("htft_mod")) not in ["", "-"]:
-        add(f"HT/FT {t.get('htft_mod')}", t.get("htft_p", 0), "HT/FT", None, bonus=8, min_guven=42)
-
+    # HT/FT tek başına Top 10 / Top 50 adayı yapılmaz.
+    # Sebep: küçük örneklemde agresif öne çıkıp MS / 2.5 / KG marketlerinin önüne geçebiliyor.
     return adaylar
 
 
