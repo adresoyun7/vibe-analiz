@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 19
+APP_SCHEMA_VERSION = 20
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1950,10 +1950,20 @@ def top10_market_adaylari(t):
             return
         if not st.session_state.get("top10_filter_iy05", True) and label == "İY 0.5 Üst":
             return
+        if not st.session_state.get("top10_filter_iy15", True) and label == "İY 1.5 Üst":
+            return
 
-        # İY 0.5 Üst tek başına daha volatil olduğu için Top 10'a sadece premium şartlarda girsin.
+        # İlk yarı marketleri daha volatil olduğu için Top 10/Top 50'ye kontrollü girsin.
         if label == "İY 0.5 Üst":
             if guven < 70:
+                return
+            if safe_int(t.get("ornek", 0)) < 5:
+                return
+            if str(t.get("goal_profile", "")) == "Düşük Gollü":
+                return
+
+        if label == "İY 1.5 Üst":
+            if guven < 55:
                 return
             if safe_int(t.get("ornek", 0)) < 5:
                 return
@@ -2002,8 +2012,9 @@ def top10_market_adaylari(t):
     add("KG Yok", t.get("kg_yok_p", 0), "KG", None, bonus=16, min_guven=50)
 
     # İlk yarı marketleri.
-    # Top 10 için sadece İY 0.5 Üst kullanılır; İY 0.5 Alt / İY 1.5 Üst spam olmasın diye çıkarıldı.
+    # İY 0.5 Üst: erken gol sinyali. İY 1.5 Üst: daha yüksek tempo / ilk yarı çok gol sinyali.
     add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=10, min_guven=70)
+    add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=13, min_guven=55)
 
     # Kombo.
     if t.get("combo_var") and t.get("combo_label"):
@@ -2806,11 +2817,13 @@ with st.sidebar:
         with c_25:
             st.checkbox("2.5", value=True, key="top10_filter_25", on_change=clear_detail_and_rebuild_top_markets)
 
-        c_kg, c_iy = st.columns([1, 1], gap="small")
+        c_kg, c_iy05, c_iy15 = st.columns([1, 1, 1], gap="small")
         with c_kg:
             st.checkbox("KG", value=True, key="top10_filter_kg", on_change=clear_detail_and_rebuild_top_markets)
-        with c_iy:
+        with c_iy05:
             st.checkbox("İY 0.5", value=True, key="top10_filter_iy05", on_change=clear_detail_and_rebuild_top_markets)
+        with c_iy15:
+            st.checkbox("İY 1.5", value=True, key="top10_filter_iy15", on_change=clear_detail_and_rebuild_top_markets)
 
     st.markdown("### ⚙️ Analiz Filtreleri")
 
