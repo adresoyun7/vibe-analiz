@@ -2048,10 +2048,14 @@ def mac_key(m):
 
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     """
-    Günün Top 10 listesini seçili hassasiyete bağlamaz.
-    Her maç için 0.00 - 0.10 arası toleransları dener.
-    MS / Alt-Üst / KG / İlk Yarı / Kombo adayları arasından maçın en iyi marketini seçer.
-    API kullanmaz; sadece mevcut bülten + geçmiş veri üzerinden hesaplama yapar.
+    Top10 / Top50 özel liste üretici.
+
+    ÖNEMLİ:
+    Bu fonksiyon sidebar'daki hassasiyet slider'ına bağlı çalışmaz.
+    Her maç için 0.00 - 0.10 aralığını tarar ve aynı maç + aynı market
+    kaç farklı hassasiyette çıkıyorsa bunu stabilite skoru olarak kullanır.
+
+    Böylece slider 0.05 / 0.08 / 0.10 değişince Top10/Top50 listesi zıplamaz.
     """
     top_toleranslar = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
     adaylar = []
@@ -2061,8 +2065,13 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     if getattr(gecmis_df, "empty", True) or getattr(bulten_df, "empty", True):
         return []
 
+    min_ornek_val = max(1, int(min_ornek or 1))
+
     for _, m in bulten_df.iterrows():
-        en_iyi = None
+        # Aynı maç içinde market bazlı gruplama:
+        # Örnek: Arsenal - Chelsea / 2.5 Üst
+        # 0.02, 0.04, 0.06, 0.08'de çıkıyorsa stabil sayılır.
+        market_gruplari = {}
 
         for tol in top_toleranslar:
             try:
@@ -2074,7 +2083,7 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
                 continue
 
             ornek = int(t.get("ornek", 0) or 0)
-            if ornek < max(1, int(min_ornek or 1)):
+            if ornek < min_ornek_val:
                 continue
 
             marketler = top10_market_adaylari(t)
@@ -2089,48 +2098,137 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
             playable = float(t.get("playable_score", 0) or 0)
 
             for mk in marketler:
+                label = str(mk.get("label", "")).strip()
+                tip = str(mk.get("tip", "")).strip()
+                if not label:
+                    continue
+
                 guven = int(mk.get("guven", 0) or 0)
-                top10_skor = (
+
+                # Tek toleranstaki ham skor.
+                tekil_skor = (
                     guven * 1.00
                     + playable * 0.22
                     + sample_bonus
-                    + mk.get("bonus", 0)
+                    + float(mk.get("bonus", 0) or 0)
                     + dusuk_tol_bonus
                     - tol_ceza
                     - risk_ceza
                     - fake_ceza
                 )
 
+                grup_key = f"{label}|{tip}"
+                if grup_key not in market_gruplari:
+                    market_gruplari[grup_key] = {
+                        "label": label,
+                        "tip": tip,
+                        "kayitlar": [],
+                    }
+
                 t_secili = t.copy()
-                t_secili["top10_market_label"] = mk.get("label")
-                t_secili["top10_market_tip"] = mk.get("tip")
+                t_secili["top10_market_label"] = label
+                t_secili["top10_market_tip"] = tip
                 t_secili["top10_market_guven"] = guven
                 t_secili["top10_market_oran"] = mk.get("oran")
+
                 # Detay ekranı ve kartlar seçilen marketi ana tahmin gibi gösterebilsin.
-                t_secili["ana_label"] = mk.get("label")
+                t_secili["ana_label"] = label
                 t_secili["ana_p"] = guven
                 if mk.get("oran") is not None:
                     t_secili["ana_odd"] = mk.get("oran")
 
-                aday = {
-                    "m": m.to_dict(),
+                market_gruplari[grup_key]["kayitlar"].append({
+                    "tol": round(float(tol), 2),
+                    "skor": round(float(tekil_skor), 2),
+                    "guven": guven,
+                    "ornek": ornek,
                     "t": t_secili,
                     "b": b_det,
-                    "top10_tol": round(float(tol), 2),
-                    "top10_skor": round(top10_skor, 1),
-                    "top10_market": mk,
-                }
-                aday["m"]["durum"] = mac_canli_durumu(aday["m"].get("zaman"))
+                    "mk": mk,
+                })
 
-                if en_iyi is None or aday["top10_skor"] > en_iyi["top10_skor"]:
-                    en_iyi = aday
+        if not market_gruplari:
+            continue
+
+        en_iyi = None
+
+        for _, grup in market_gruplari.items():
+            kayitlar = grup["kayitlar"]
+            if not kayitlar:
+                continue
+
+            hassasiyetler = sorted({k["tol"] for k in kayitlar})
+            stabilite_sayisi = len(hassasiyetler)
+
+            # Aynı market birden fazla hassasiyette çıkıyorsa ciddi bonus.
+            # 6/6 çıkan market Top10'da en stabil kabul edilir.
+            stabilite_orani = stabilite_sayisi / max(len(top_toleranslar), 1)
+            stabilite_bonus = stabilite_sayisi * 7.5
+
+            max_skor = max(float(k["skor"]) for k in kayitlar)
+            ort_skor = sum(float(k["skor"]) for k in kayitlar) / len(kayitlar)
+            max_guven = max(int(k["guven"]) for k in kayitlar)
+            ort_guven = sum(int(k["guven"]) for k in kayitlar) / len(kayitlar)
+            max_ornek = max(int(k["ornek"]) for k in kayitlar)
+
+            # Stabilite odaklı final skor:
+            # - Sadece tek toleransta patlayan adaylar geriye düşer.
+            # - Birkaç hassasiyette sürekli çıkan adaylar öne gelir.
+            stabilite_skoru = (
+                max_skor * 0.55
+                + ort_skor * 0.30
+                + ort_guven * 0.10
+                + min(max_ornek, 30) * 0.15
+                + stabilite_bonus
+            )
+
+            # Tek hassasiyette çıkan ama skoru çok yüksek olanları biraz törpüle.
+            if stabilite_sayisi == 1:
+                stabilite_skoru -= 14
+            elif stabilite_sayisi == 2:
+                stabilite_skoru -= 5
+
+            # Temsilci kayıt: finalde detay ekranı için en iyi tekil skorun datasını kullan.
+            temsilci = max(
+                kayitlar,
+                key=lambda k: (
+                    k["skor"],
+                    k["guven"],
+                    k["ornek"],
+                    -k["tol"],
+                )
+            )
+
+            t_final = temsilci["t"].copy()
+            t_final["top10_hassasiyetler"] = hassasiyetler
+            t_final["top10_hassasiyet_sayisi"] = stabilite_sayisi
+            t_final["top10_stabilite_skoru"] = round(stabilite_skoru, 1)
+            t_final["top10_stabilite_orani"] = round(stabilite_orani * 100, 0)
+
+            aday = {
+                "m": m.to_dict(),
+                "t": t_final,
+                "b": temsilci["b"],
+                "top10_tol": round(float(temsilci["tol"]), 2),
+                "top10_skor": round(stabilite_skoru, 1),
+                "top10_market": temsilci["mk"],
+                "top10_hassasiyetler": hassasiyetler,
+                "top10_hassasiyet_sayisi": stabilite_sayisi,
+                "top10_stabilite_skoru": round(stabilite_skoru, 1),
+                "top10_stabilite_orani": round(stabilite_orani * 100, 0),
+            }
+            aday["m"]["durum"] = mac_canli_durumu(aday["m"].get("zaman"))
+
+            if en_iyi is None or aday["top10_skor"] > en_iyi["top10_skor"]:
+                en_iyi = aday
 
         if en_iyi:
             adaylar.append(en_iyi)
 
     adaylar.sort(
         key=lambda x: (
-            x.get("top10_skor", 0),
+            x.get("top10_stabilite_skoru", x.get("top10_skor", 0)),
+            x.get("top10_hassasiyet_sayisi", 0),
             x.get("t", {}).get("top10_market_guven", 0),
             x.get("t", {}).get("ornek", 0),
         ),
@@ -2138,10 +2236,10 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     )
 
     # Top 10 sadece MS1/MS2 dolmasın diye küçük çeşitlilik kuralı.
-    # Uygun non-MS aday varsa MS marketleri maksimum 4 adetle sınırlarız.
+    # Top50 için limit yüksek olduğundan aynı kural listeyi boğmaz.
     secilen = []
     ms_sayisi = 0
-    max_ms = 4
+    max_ms = 4 if int(limit or 10) <= 10 else 18
 
     for item in adaylar:
         tip = str(item.get("t", {}).get("top10_market_tip", ""))
@@ -2165,7 +2263,6 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
                 break
 
     return secilen[:limit]
-
 
 
 for key, default in [
@@ -3267,6 +3364,12 @@ else:
                 saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
                 en_iyi_tol = float(item.get("top10_tol", t.get("kullanilan_tolerans", 0)) or 0)
                 top10_skor = item.get("top10_skor", "")
+                hassasiyetler = item.get("top10_hassasiyetler", t.get("top10_hassasiyetler", [])) or []
+                hassasiyet_text = ", ".join([f"{float(x):.2f}" for x in hassasiyetler])
+                if not hassasiyet_text:
+                    hassasiyet_text = f"{en_iyi_tol:.2f}"
+                hassasiyet_sayisi = int(item.get("top10_hassasiyet_sayisi", t.get("top10_hassasiyet_sayisi", len(hassasiyetler))) or 0)
+                stabilite_skoru = item.get("top10_stabilite_skoru", t.get("top10_stabilite_skoru", top10_skor))
 
                 kart_col, btn_col = st.columns([7, 1])
                 with kart_col:
@@ -3290,7 +3393,9 @@ else:
                                 Oran: <b>{escape(str(oran))}</b>
                             </div>
                             <div style="margin-top:7px;font-size:0.78rem;color:#9db2d1;">
-                                En iyi hassasiyet: <b style="color:#facc15;">{en_iyi_tol:.2f}</b> · Top 10 skor: <b>{top10_skor}</b>
+                                Çıktığı hassasiyetler: <b style="color:#facc15;">{escape(str(hassasiyet_text))}</b> ·
+                                Güven hassasiyet skoru: <b>{stabilite_skoru}</b> ·
+                                Sayı: <b>{hassasiyet_sayisi}/6</b>
                             </div>
                         </div>
                         """,
