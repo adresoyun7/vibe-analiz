@@ -9,6 +9,40 @@ import requests
 import streamlit as st
 
 
+# ==========================================================
+# 🏀 BASKET MODU - LİG SETLERİ
+# ==========================================================
+BASKET_TIER_1 = {
+    "NBA": "basketball_nba",
+    "EuroLeague": "basketball_euroleague",
+    "İspanya ACB": "basketball_spain_acb",
+    "Türkiye BSL": "basketball_turkey_bsl",
+    "Fransa LNB": "basketball_france_lnb",
+    "İtalya Serie A": "basketball_italy_legabasket_serie_a",
+}
+
+BASKET_TIER_2 = {
+    "Almanya BBL": "basketball_germany_bbl",
+    "Yunanistan Basket League": "basketball_greece_basket_league",
+    "Litvanya LKL": "basketball_lithuania_lkl",
+    "Adriatic ABA": "basketball_aba_league",
+}
+
+
+def basket_lig_kodlari(lig_mode: str):
+    if lig_mode == "Tier 1 (Temiz)":
+        return list(BASKET_TIER_1.values())
+    return list(BASKET_TIER_1.values()) + list(BASKET_TIER_2.values())
+
+
+def basket_lig_adi(kod: str):
+    all_ligs = {**BASKET_TIER_1, **BASKET_TIER_2}
+    for name, code in all_ligs.items():
+        if code == kod:
+            return name
+    return kod
+
+
 def parse_mac_datetime(value):
     if isinstance(value, datetime):
         return value
@@ -1165,6 +1199,263 @@ def bulten_cek(key, kodlar, t):
 
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def basket_bulten_cek(key, kodlar, t):
+    """Basketbol için h2h + totals marketlerini çeker."""
+    secret_key = get_app_api_key()
+    if secret_key:
+        key = secret_key
+    if not key:
+        st.error("ODDS_API_KEY bulunamadı. Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY eklemelisin.")
+        return pd.DataFrame()
+
+    res = []
+    for k in kodlar:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
+                params={"apiKey": key, "regions": "eu", "markets": "h2h,totals", "oddsFormat": "decimal"},
+                timeout=12,
+            )
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+
+            for m in data:
+                try:
+                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                except Exception:
+                    continue
+                if tm.date() != t:
+                    continue
+
+                home = m.get("home_team", "")
+                away = m.get("away_team", "")
+                if not away:
+                    teams = m.get("teams", []) or []
+                    away = next((team for team in teams if team != home), "")
+
+                h = a = over = under = line = None
+                for bk in (m.get("bookmakers", []) or []):
+                    for mk in (bk.get("markets", []) or []):
+                        outcomes = mk.get("outcomes", []) or []
+                        if mk.get("key") == "h2h":
+                            for o in outcomes:
+                                if o.get("name") == home:
+                                    h = o.get("price")
+                                elif o.get("name") == away:
+                                    a = o.get("price")
+                        elif mk.get("key") == "totals":
+                            for o in outcomes:
+                                name = str(o.get("name", "")).lower()
+                                if line is None and o.get("point") is not None:
+                                    line = o.get("point")
+                                if name == "over":
+                                    over = o.get("price")
+                                elif name == "under":
+                                    under = o.get("price")
+                    if h is not None and a is not None and over is not None and under is not None:
+                        break
+
+                if h is None or a is None or over is None or under is None:
+                    continue
+
+                res.append({
+                    "sport": "basket",
+                    "lig": basket_lig_adi(k),
+                    "zaman": tm,
+                    "ev": home,
+                    "dep": away,
+                    "h": float(h),
+                    "a": float(a),
+                    "b": 0.0,
+                    "over": float(over),
+                    "under": float(under),
+                    "line": float(line) if line is not None else None,
+                })
+        except Exception:
+            continue
+
+    if not res:
+        return pd.DataFrame()
+    return pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
+
+
+def normalize_two_way_prob(odd1, odd2):
+    try:
+        p1 = 1 / float(odd1)
+        p2 = 1 / float(odd2)
+        total = p1 + p2
+        return (p1 / total, p2 / total) if total > 0 else (0.5, 0.5)
+    except Exception:
+        return 0.5, 0.5
+
+
+def hesapla_basket(m_row, lig_mode="Tier 1 (Temiz)"):
+    if not isinstance(m_row, dict):
+        try:
+            m_row = m_row.to_dict()
+        except Exception:
+            m_row = {}
+
+    h = float(m_row.get("h", 0) or 0)
+    a = float(m_row.get("a", 0) or 0)
+    over = float(m_row.get("over", 0) or 0)
+    under = float(m_row.get("under", 0) or 0)
+    line = m_row.get("line")
+
+    if h <= 1 or a <= 1 or over <= 1 or under <= 1:
+        return None, pd.DataFrame()
+
+    p_home, p_away = normalize_two_way_prob(h, a)
+    p_over, p_under = normalize_two_way_prob(over, under)
+
+    ms_label = "MS 1" if p_home >= p_away else "MS 2"
+    ms_p = int(round(max(p_home, p_away) * 100))
+    ms_odd = h if ms_label == "MS 1" else a
+
+    total_label = "Üst" if p_over >= p_under else "Alt"
+    total_p = int(round(max(p_over, p_under) * 100))
+    total_odd = over if total_label == "Üst" else under
+
+    if ms_p >= total_p:
+        ana_label, ana_p, ana_odd = ms_label, ms_p, ms_odd
+        alt_label, alt_p, alt_odd = total_label, total_p, total_odd
+    else:
+        ana_label, ana_p, ana_odd = total_label, total_p, total_odd
+        alt_label, alt_p, alt_odd = ms_label, ms_p, ms_odd
+
+    tier_ceza = 2 if lig_mode != "Tier 1 (Temiz)" else 0
+    ana_p = max(0, ana_p - tier_ceza)
+    alt_p = max(0, alt_p - tier_ceza)
+    ms_p = max(0, ms_p - tier_ceza)
+    total_p = max(0, total_p - tier_ceza)
+
+    combo_label = f"{ms_label} + {total_label}"
+    combo_p = int(round((ms_p * 0.52) + (total_p * 0.48)))
+    combo_var = combo_p >= 54
+    combo_level = "Premium" if combo_p >= 68 else "Güçlü" if combo_p >= 60 else "Deneysel"
+
+    playable_score = round(ana_p * 0.70 + alt_p * 0.20 + (combo_p if combo_var else 0) * 0.10, 1)
+    score = round(playable_score + (4 if combo_var else 0), 1)
+
+    toplam = float(line) if line else (160 if "Euro" in str(m_row.get("lig", "")) else 220)
+    favori_ev = ms_label == "MS 1"
+    fark = 6 if ms_p >= 62 else 3
+    ev_skor = int(round((toplam / 2) + (fark / 2 if favori_ev else -fark / 2)))
+    dep_skor = int(round(toplam - ev_skor))
+
+    return {
+        "sport": "basket",
+        "ana_label": ana_label,
+        "ana_p": ana_p,
+        "playable_score": playable_score,
+        "ana_raw_p": ana_p,
+        "ana_odd": ana_odd,
+        "alt_label": alt_label,
+        "alt_p": alt_p,
+        "alt_odd": alt_odd,
+        "combo_label": combo_label if combo_var else "",
+        "combo_p": combo_p if combo_var else 0,
+        "combo_raw_p": combo_p if combo_var else 0,
+        "combo_hit": 0,
+        "combo_var": combo_var,
+        "combo_level": combo_level if combo_var else "",
+        "scenario_label": f"{ms_label} + {total_label}",
+        "belirsiz": False,
+        "ms_side": ms_label,
+        "ms_p": ms_p,
+        "ms1_p": max(0, int(round(p_home * 100)) - tier_ceza),
+        "ms2_p": max(0, int(round(p_away * 100)) - tier_ceza),
+        "total_label": total_label,
+        "total_p": total_p,
+        "over_p": max(0, int(round(p_over * 100)) - tier_ceza),
+        "under_p": max(0, int(round(p_under * 100)) - tier_ceza),
+        "risk_label": "DÜŞÜK" if ana_p >= 65 else "ORTA" if ana_p >= 56 else "YÜKSEK",
+        "risk_cls": "risk-dusuk" if ana_p >= 65 else "risk-orta" if ana_p >= 56 else "risk-yuksek",
+        "eg": ev_skor,
+        "dg": dep_skor,
+        "guven_renk": guven_renk(ana_p)[0],
+        "guven_badge_cls": guven_renk(ana_p)[1],
+        "guven_badge_lbl": guven_renk(ana_p)[2],
+        "ornek": 0,
+        "ornek_durum": "Odds bazlı",
+        "ornek_renk": "#f39c12",
+        "kullanilan_tolerans": 0,
+        "goal_profile": "Yüksek Tempo" if total_label == "Üst" else "Düşük Tempo",
+        "match_type": "Favori" if abs(h - a) >= 0.55 else "Dengeli",
+        "nedenler": [
+            "Basket V1 motoru h2h ve totals oranlarından implied probability hesaplar.",
+            f"Taraf sinyali: {ms_label} %{ms_p}.",
+            f"Total line: {line if line else '-'} · {total_label} %{total_p}.",
+            f"Kombo senaryo: {combo_label} %{combo_p}.",
+        ],
+        "oynanabilir": ana_p >= 55,
+        "score": score,
+        "stability_tols": [],
+        "stability_count": 0,
+        "stability_text": "Basket V1",
+        "stability_early_tols": [],
+        "stability_late_tols": [],
+        "stability_early_text": "",
+        "stability_late_text": "Basket V1",
+    }, pd.DataFrame()
+
+
+def basket_top_market_adaylari(t):
+    adaylar = []
+
+    def add(label, guven, tip, oran=None, bonus=0, min_guven=50):
+        if not label:
+            return
+        try:
+            guven = int(round(float(guven or 0)))
+        except Exception:
+            guven = 0
+        if guven < min_guven:
+            return
+        adaylar.append({"label": label, "guven": guven, "tip": tip, "oran": oran, "bonus": bonus})
+
+    add("MS 1", t.get("ms1_p", 0), "MS", None, 3, 50)
+    add("MS 2", t.get("ms2_p", 0), "MS", None, 3, 50)
+    add("Üst", t.get("over_p", 0), "Alt/Üst", None, 6, 50)
+    add("Alt", t.get("under_p", 0), "Alt/Üst", None, 6, 50)
+    if t.get("combo_var") and t.get("combo_label"):
+        add(t.get("combo_label"), t.get("combo_p", 0), "Kombo", None, 8, 54)
+    return adaylar
+
+
+def basket_top_liste_uret(final_items, limit=10):
+    adaylar = []
+    for item in final_items:
+        m = item.get("m", {})
+        t = item.get("t", {})
+        for mk in basket_top_market_adaylari(t):
+            t2 = t.copy()
+            t2["ana_label"] = mk["label"]
+            t2["ana_p"] = int(mk["guven"])
+            t2["top10_market_label"] = mk["label"]
+            t2["top10_market_tip"] = mk["tip"]
+            t2["top10_market_guven"] = int(mk["guven"])
+            skor = float(mk["guven"]) + float(mk.get("bonus", 0)) + float(t.get("playable_score", 0)) * 0.18
+            adaylar.append({
+                "m": m,
+                "t": t2,
+                "b": item.get("b", pd.DataFrame()),
+                "top10_tol": 0,
+                "top10_skor": round(skor, 1),
+                "top10_market": mk,
+                "top10_hassasiyetler": [0],
+                "top10_hassasiyet_sayisi": 1,
+                "top10_stabilite_skoru": round(skor, 1),
+                "top10_stabilite_orani": 100,
+            })
+    adaylar.sort(key=lambda x: (x.get("top10_skor", 0), x.get("t", {}).get("top10_market_guven", 0)), reverse=True)
+    return adaylar[:limit]
+
+
 
 
 def fmt_odd(odd):
@@ -2289,6 +2580,8 @@ for key, default in [
     ("coupon_popup_open", False),
     ("last_gecmis_df", None),
     ("last_bulten_df", None),
+    ("spor_modu", "⚽ Futbol"),
+    ("basket_lig_mode", "Tier 1 (Temiz)"),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -2803,6 +3096,29 @@ with st.sidebar:
         else:
             st.warning("Maçları çekmek için API key girmen gerekiyor.")
 
+    st.markdown("### Spor Modu")
+    spor_modu = st.radio(
+        "Spor",
+        ["⚽ Futbol", "🏀 Basketbol"],
+        index=0 if st.session_state.get("spor_modu", "⚽ Futbol") == "⚽ Futbol" else 1,
+        key="spor_modu",
+        horizontal=True,
+        on_change=clear_detail_on_filter_change,
+    )
+    if st.session_state.get("spor_modu") == "🏀 Basketbol":
+        st.markdown("### 🏀 Basket Ligleri")
+        basket_lig_mode = st.radio(
+            "Lig Seviyesi",
+            ["Tier 1 (Temiz)", "Tier 1 + Tier 2 (Geniş)"],
+            index=0 if st.session_state.get("basket_lig_mode", "Tier 1 (Temiz)") == "Tier 1 (Temiz)" else 1,
+            key="basket_lig_mode",
+            on_change=clear_detail_on_filter_change,
+        )
+        if basket_lig_mode == "Tier 1 (Temiz)":
+            st.success("🔒 NBA + EuroLeague + ana Avrupa ligleri")
+        else:
+            st.warning("⚠️ Tier 2 açık: maç sayısı artar, varyans da artabilir")
+
     sayfa_modu = st.radio(
         "Görünüm",
         ["Maç Analizi", "Top 10 Market", "Top 50 Market"],
@@ -2927,16 +3243,45 @@ legal_sidebar_sections()
 
 
 if analiz_btn:
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ API Key ve en az bir lig seçin.")
+    aktif_spor = st.session_state.get("spor_modu", "⚽ Futbol")
+    if not API_KEY:
+        st.error("⚠️ API Key girmen gerekiyor.")
+    elif aktif_spor == "⚽ Futbol" and not secili_kodlar:
+        st.error("⚠️ Futbol için en az bir lig seçin.")
     else:
+        final = []
+        if aktif_spor == "🏀 Basketbol":
+            with st.spinner("🏀 Basket oranları çekiliyor ve analiz ediliyor..."):
+                basket_kodlar = basket_lig_kodlari(st.session_state.get("basket_lig_mode", "Tier 1 (Temiz)"))
+                bulten = basket_bulten_cek(API_KEY, basket_kodlar, secili_tarih)
+                st.session_state.last_gecmis_df = None
+                st.session_state.last_bulten_df = bulten
+            if not bulten.empty:
+                for _, m in bulten.iterrows():
+                    t, b_det = hesapla_basket(m, st.session_state.get("basket_lig_mode", "Tier 1 (Temiz)"))
+                    if t is None:
+                        continue
+                    if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
+                        continue
+                    m_dict = m.to_dict()
+                    m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
+                    final.append({"m": m_dict, "t": t, "b": b_det})
+            final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0)), reverse=True)
+            st.session_state.final_list = final
+            st.session_state.top10_list = basket_top_liste_uret(final, limit=10)
+            st.session_state.top50_list = basket_top_liste_uret(final, limit=50)
+            st.session_state.detay_idx = None
+            st.session_state.detay_item = None
+            st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
+            st.session_state.toplam_mac = len(final)
+            st.rerun()
+
         with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
 
-        final = []
         stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
@@ -3023,6 +3368,32 @@ def detay_popup_icerigi():
         idx = st.session_state.detay_idx
         item = st.session_state.final_list[idx]
     m, t, b_det = item["m"], item["t"], item["b"]
+
+    if t.get("sport") == "basket":
+        if st.button("✕ Kapat", key="close_basket_detail_popup_btn", use_container_width=True):
+            st.session_state.detay_idx = None
+            st.session_state.detay_item = None
+            st.rerun()
+        durum_color, durum_text = mac_durum_badge(m["zaman"])
+        line_txt = f"{m.get('line'):.1f}" if m.get("line") is not None else "-"
+        st.markdown(f"""
+        <div class="detail-header-box">
+          <div style="font-family:Rajdhani,sans-serif;font-size:2rem;font-weight:700;color:#f8fbff;letter-spacing:1px;line-height:1.1">🏀 {escape(str(m.get('ev','')).upper())} – {escape(str(m.get('dep','')).upper())}</div>
+          <div style="margin-top:8px;color:#9db2d1;">{escape(str(m.get('lig','')))} · {m['zaman'].strftime('%d.%m.%Y %H:%M')} · <span class="live-badge" style="background:{durum_color};color:white">{durum_text}</span></div>
+        </div>
+        <div class="tahmin-kart">
+          <div class="tk-title">🏀 Basket Analiz Özeti</div>
+          <div class="tk-row"><span class="tk-key">Ana Tahmin</span><b>{escape(str(t.get('ana_label','-')))} · %{int(t.get('ana_p',0))}</b></div>
+          <div class="tk-row"><span class="tk-key">Alternatif</span><b>{escape(str(t.get('alt_label','-')))} · %{int(t.get('alt_p',0))}</b></div>
+          <div class="tk-row"><span class="tk-key">Kombo</span><b>{escape(str(t.get('combo_label','-') or '-'))} · %{int(t.get('combo_p',0))}</b></div>
+          <div class="tk-row"><span class="tk-key">Total Line</span><b>{line_txt}</b></div>
+          <div class="tk-row"><span class="tk-key">Oranlar</span><b>MS1 {float(m.get('h',0)):.2f} · MS2 {float(m.get('a',0)):.2f} · Üst {float(m.get('over',0)):.2f} · Alt {float(m.get('under',0)):.2f}</b></div>
+          <div class="tk-row"><span class="tk-key">Tahmini Skor</span><b>{int(t.get('eg',0))}-{int(t.get('dg',0))}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<div class='neden-kart'><div class='tk-title'>Neden?</div>" + "".join([f"<div class='neden-item'>• {escape(str(x))}</div>" for x in t.get("nedenler", [])]) + "</div>", unsafe_allow_html=True)
+        return
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
 
@@ -3296,7 +3667,7 @@ with hc1:
     st.markdown(f"""
     <div class="top-header">
       <div>
-        <h2>ANA MAÇ EKRANI</h2>
+        <h2>{"🏀 BASKET EKRANI" if st.session_state.get("spor_modu") == "🏀 Basketbol" else "ANA MAÇ EKRANI"}</h2>
         <div class="sub">{format_tr_date(secili_tarih)}</div>
       </div>
     </div>
@@ -3500,6 +3871,24 @@ else:
             stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
+
+        if t.get("sport") == "basket":
+            line_txt = f"{m.get('line'):.1f}" if m.get("line") is not None else "-"
+            oranlar_html = f"""
+                <div class="oran-row">
+                  <div class="oran-box"><div class="ov">MS1</div><div class="val">{m.get('h', 0):.2f}</div></div>
+                  <div class="oran-box"><div class="ov">MS2</div><div class="val">{m.get('a', 0):.2f}</div></div>
+                  <div class="oran-box"><div class="ov">Üst</div><div class="val">{m.get('over', 0):.2f}</div></div>
+                  <div class="oran-box"><div class="ov">Alt</div><div class="val">{m.get('under', 0):.2f}</div></div>
+                </div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#cbd5e1">Line: <b>{line_txt}</b> · 🏅 {t.get('playable_score', t['ana_p'])} puan · {t.get('ornek_durum', 'Odds bazlı')}</div>
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
+                {stability_html}
+            """
+        else:
+            oranlar_html = f"""
+{oranlar_html}
+            """
 
         kc, bc = st.columns([9, 1.4])
         with kc:
