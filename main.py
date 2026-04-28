@@ -2278,12 +2278,112 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     return secilen[:limit]
 
 
+def yuksek_oran_listesi_uret(gecmis_df, bulten_df, min_ornek=1, limit=25, min_odd=2.00):
+    """
+    Yüksek Oran Listesi üretici.
+
+    Top10/Top50 mantığını bozmadan ayrı bir liste üretir.
+    Amaç: 2.00+ oranlı, yine de güven/skor tarafı tamamen zayıf olmayan adayları bulmak.
+
+    Not:
+    - MS 1 / MS 2 / Beraberlik oranları gerçek h2h oranıdır.
+    - Kombo oranları bookmaker'dan gelmediği için kombo_tahmini_oran() ile yaklaşık gösterilir.
+    - 2.5 / KG gibi API'den oran çekilmeyen marketler, oran yoksa bu listeye alınmaz.
+    """
+    tum_adaylar = gunun_en_iyi_10_uret(
+        gecmis_df,
+        bulten_df,
+        min_ornek=min_ornek,
+        limit=max(limit * 4, 80),
+    )
+
+    high = []
+    for item in tum_adaylar:
+        t = item.get("t", {}) or {}
+        market_label = str(t.get("top10_market_label", t.get("ana_label", "")) or "")
+        market_tip = str(t.get("top10_market_tip", "Market") or "Market")
+        guven = int(t.get("top10_market_guven", t.get("ana_p", 0)) or 0)
+        ornek = int(t.get("ornek", 0) or 0)
+        stabilite_sayisi = int(item.get("top10_hassasiyet_sayisi", t.get("top10_hassasiyet_sayisi", 0)) or 0)
+
+        oran_raw = t.get("top10_market_oran", t.get("ana_odd"))
+        try:
+            oran = float(oran_raw)
+        except Exception:
+            continue
+
+        if oran < float(min_odd):
+            continue
+        if t.get("belirsiz"):
+            continue
+        if market_label in ["Belirsiz Maç", "Tahmin Zayıf", ""]:
+            continue
+        if ornek < max(1, int(min_ornek or 1)):
+            continue
+
+        if market_tip == "Kombo":
+            if guven < 48:
+                continue
+        elif market_tip == "MS":
+            if guven < 52:
+                continue
+        else:
+            if guven < 55:
+                continue
+
+        if stabilite_sayisi <= 0:
+            continue
+
+        high_score = (
+            float(item.get("top10_stabilite_skoru", item.get("top10_skor", 0)) or 0) * 0.65
+            + guven * 0.55
+            + min(oran, 4.50) * 7.0
+            + stabilite_sayisi * 4.0
+            + min(ornek, 30) * 0.25
+        )
+
+        if oran >= 3.50 and guven < 58:
+            high_score -= 10
+
+        item2 = item.copy()
+        t2 = t.copy()
+        t2["high_odd"] = round(oran, 2)
+        t2["high_odd_score"] = round(high_score, 1)
+        t2["high_odd_note"] = "Tahmini kombo oranı" if market_tip == "Kombo" else "Gerçek MS oranı"
+        item2["t"] = t2
+        high.append(item2)
+
+    high.sort(
+        key=lambda x: (
+            x.get("t", {}).get("high_odd_score", 0),
+            x.get("t", {}).get("top10_market_guven", 0),
+            x.get("t", {}).get("high_odd", 0),
+            x.get("top10_hassasiyet_sayisi", 0),
+        ),
+        reverse=True,
+    )
+
+    secilen = []
+    used = set()
+    for item in high:
+        k = mac_key(item.get("m", {})) + str(item.get("t", {}).get("top10_market_label", ""))
+        if k in used:
+            continue
+        used.add(k)
+        secilen.append(item)
+        if len(secilen) >= limit:
+            break
+
+    return secilen
+
+
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
     ("detay_item", None),
     ("top10_list", []),
     ("top50_list", []),
+    ("high_odds_list", []),
     ("filtre", "tumu"),
     ("kupona", []),
     ("coupon_popup_open", False),
@@ -2760,6 +2860,7 @@ def clear_detail_and_rebuild_top_markets():
         if gecmis is not None and bulten is not None and not getattr(gecmis, "empty", True) and not getattr(bulten, "empty", True):
             st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=10)
             st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=50)
+            st.session_state.high_odds_list = yuksek_oran_listesi_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=25, min_odd=2.00)
     except Exception:
         # Filtre değişimi UI'ı bozmasın; gerekirse kullanıcı Analizi Başlat ile yeniden üretir.
         pass
@@ -2805,13 +2906,13 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 10 Market", "Top 50 Market"],
+        ["Maç Analizi", "Top 10 Market", "Top 50 Market", "Yüksek Oran Listesi"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
 
-    if st.session_state.get("sayfa_modu") in ["Top 10 Market", "Top 50 Market"]:
+    if st.session_state.get("sayfa_modu") in ["Top 10 Market", "Top 50 Market", "Yüksek Oran Listesi"]:
         st.markdown("### Market Filtreleri")
 
         # Üst satır: 3 filtre
@@ -3010,6 +3111,7 @@ if analiz_btn:
         st.session_state.final_list = final
         st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
         st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50)
+        st.session_state.high_odds_list = yuksek_oran_listesi_uret(gecmis, bulten, min_ornek=min_ornek, limit=25, min_odd=2.00)
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -3343,18 +3445,23 @@ else:
     if aktif_sayfa_modu == "Top 50 Market":
         gunun_top_liste = st.session_state.get("top50_list", [])
         top_baslik = "🔥 TOP 50 MARKET"
+        top_aciklama = "Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 ile denenir. MS, Alt/Üst, KG, İlk Yarı ve Kombo adayları arasından en güçlü market seçilir."
+    elif aktif_sayfa_modu == "Yüksek Oran Listesi":
+        gunun_top_liste = st.session_state.get("high_odds_list", [])
+        top_baslik = "🔥 YÜKSEK ORAN LİSTESİ"
+        top_aciklama = "Bu bölüm Top10/Top50’den bağımsızdır. Sadece 2.00+ oranlı, örnek/güven/stabilite tarafı tamamen zayıf olmayan adayları gösterir. Kombo oranları tahmini gösterimdir."
     else:
         gunun_top_liste = st.session_state.get("top10_list", [])
         top_baslik = "🔥 TOP 10 MARKET"
+        top_aciklama = "Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 ile denenir. MS, Alt/Üst, KG, İlk Yarı ve Kombo adayları arasından en güçlü market seçilir."
 
-    if aktif_sayfa_modu in ["Top 10 Market", "Top 50 Market"]:
+    if aktif_sayfa_modu in ["Top 10 Market", "Top 50 Market", "Yüksek Oran Listesi"]:
         if gunun_top_liste:
             st.markdown(f"""<div class="list-heading">{top_baslik}</div>""", unsafe_allow_html=True)
             st.markdown(
-                """
+                f"""
                 <div style="font-size:0.86rem;color:#64748b;margin:0 0 12px 0;">
-                    Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 ile denenir.
-                    MS, Alt/Üst, KG, İlk Yarı ve Kombo adayları arasından en güçlü market seçilir.
+                    {escape(str(top_aciklama))}
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -3411,6 +3518,7 @@ else:
                                 Tahmini Skor: <b>{escape(str(skor))}</b> ·
                                 Örnek: <b>{int(t.get('ornek',0) or 0)}</b> ·
                                 Oran: <b>{escape(str(oran))}</b>
+                                {f" · Yüksek Oran Skoru: <b>{escape(str(t.get('high_odd_score','')))}</b> · <span style='color:#facc15'>{escape(str(t.get('high_odd_note','')))}</span>" if aktif_sayfa_modu == "Yüksek Oran Listesi" else ""}
                             </div>
                             <div style="margin-top:7px;font-size:0.78rem;color:#9db2d1;">
                                 Çıktığı hassasiyetler: <b style="color:#facc15;">{escape(str(hassasiyet_text))}</b> ·
