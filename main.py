@@ -3481,7 +3481,7 @@ with hc2:
 # ==========================================================
 st.markdown("<br>", unsafe_allow_html=True)
 
-if not fl:
+if not fl and st.session_state.get("sayfa_modu", "Maç Analizi") == "Maç Analizi":
     st.markdown("""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
       <div style="font-size:2rem;margin-bottom:12px">⚡</div>
@@ -3596,7 +3596,17 @@ else:
                         st.rerun()
             st.markdown("<br>", unsafe_allow_html=True)
         else:
-            st.info(f"{top_baslik} listesi için önce analizi başlatmalısın.")
+            analiz_var = (
+                st.session_state.get("last_gecmis_df") is not None
+                and st.session_state.get("last_bulten_df") is not None
+            )
+            if analiz_var:
+                st.warning(
+                    f"{top_baslik} için kriterlere uygun maç bulunamadı. "
+                    "Sidebar’daki minimum oran / maksimum oran / minimum güven ayarlarını biraz gevşetebilirsin."
+                )
+            else:
+                st.info(f"{top_baslik} listesi için önce analizi başlatmalısın.")
         st.stop()
 
     fc1, fc2, fc3, fc4 = st.columns(4)
