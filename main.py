@@ -2278,7 +2278,7 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     return secilen[:limit]
 
 
-def yuksek_oran_listesi_uret(gecmis_df, bulten_df, min_ornek=1, limit=25, min_odd=2.00):
+def yuksek_oran_listesi_uret(gecmis_df, bulten_df, min_ornek=1, limit=25, min_odd=2.00, min_guven=55, max_odd=6.00):
     """
     Yüksek Oran Listesi üretici.
 
@@ -2314,6 +2314,8 @@ def yuksek_oran_listesi_uret(gecmis_df, bulten_df, min_ornek=1, limit=25, min_od
 
         if oran < float(min_odd):
             continue
+        if max_odd is not None and oran > float(max_odd):
+            continue
         if t.get("belirsiz"):
             continue
         if market_label in ["Belirsiz Maç", "Tahmin Zayıf", ""]:
@@ -2321,15 +2323,12 @@ def yuksek_oran_listesi_uret(gecmis_df, bulten_df, min_ornek=1, limit=25, min_od
         if ornek < max(1, int(min_ornek or 1)):
             continue
 
-        if market_tip == "Kombo":
-            if guven < 48:
-                continue
-        elif market_tip == "MS":
-            if guven < 52:
-                continue
-        else:
-            if guven < 55:
-                continue
+        # Sidebar'daki Yüksek Oran güven filtresi tüm marketlere uygulanır.
+        # Kombo için küçük tolerans bırakılır; çünkü kombo oranı tahminidir.
+        min_guven_val = int(min_guven or 55)
+        efektif_min_guven = max(45, min_guven_val - 5) if market_tip == "Kombo" else min_guven_val
+        if guven < efektif_min_guven:
+            continue
 
         if stabilite_sayisi <= 0:
             continue
@@ -2384,6 +2383,10 @@ for key, default in [
     ("top10_list", []),
     ("top50_list", []),
     ("high_odds_list", []),
+    ("high_odds_min_odd", 2.00),
+    ("high_odds_max_odd", 6.00),
+    ("high_odds_min_guven", 55),
+    ("high_odds_limit", 25),
     ("filtre", "tumu"),
     ("kupona", []),
     ("coupon_popup_open", False),
@@ -2860,7 +2863,15 @@ def clear_detail_and_rebuild_top_markets():
         if gecmis is not None and bulten is not None and not getattr(gecmis, "empty", True) and not getattr(bulten, "empty", True):
             st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=10)
             st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=50)
-            st.session_state.high_odds_list = yuksek_oran_listesi_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=25, min_odd=2.00)
+            st.session_state.high_odds_list = yuksek_oran_listesi_uret(
+                gecmis,
+                bulten,
+                min_ornek=min_ornek_val,
+                limit=int(st.session_state.get("high_odds_limit", 25)),
+                min_odd=float(st.session_state.get("high_odds_min_odd", 2.00)),
+                min_guven=int(st.session_state.get("high_odds_min_guven", 55)),
+                max_odd=float(st.session_state.get("high_odds_max_odd", 6.00)),
+            )
     except Exception:
         # Filtre değişimi UI'ı bozmasın; gerekirse kullanıcı Analizi Başlat ile yeniden üretir.
         pass
@@ -2932,6 +2943,45 @@ with st.sidebar:
             st.checkbox("İY 1.5", value=True, key="top10_filter_iy15", on_change=clear_detail_and_rebuild_top_markets)
         with c_combo:
             st.checkbox("Kombo", value=True, key="top10_filter_combo", on_change=clear_detail_and_rebuild_top_markets)
+
+        if st.session_state.get("sayfa_modu") == "Yüksek Oran Listesi":
+            st.markdown("### 🔥 Yüksek Oran Filtresi")
+            st.slider(
+                "Minimum oran",
+                min_value=1.50,
+                max_value=4.00,
+                value=float(st.session_state.get("high_odds_min_odd", 2.00)),
+                step=0.05,
+                key="high_odds_min_odd",
+                on_change=clear_detail_and_rebuild_top_markets,
+            )
+            st.slider(
+                "Maksimum oran",
+                min_value=2.00,
+                max_value=10.00,
+                value=float(st.session_state.get("high_odds_max_odd", 6.00)),
+                step=0.10,
+                key="high_odds_max_odd",
+                on_change=clear_detail_and_rebuild_top_markets,
+            )
+            st.slider(
+                "Minimum güven",
+                min_value=45,
+                max_value=75,
+                value=int(st.session_state.get("high_odds_min_guven", 55)),
+                step=1,
+                key="high_odds_min_guven",
+                on_change=clear_detail_and_rebuild_top_markets,
+            )
+            st.number_input(
+                "Liste limiti",
+                min_value=5,
+                max_value=50,
+                value=int(st.session_state.get("high_odds_limit", 25)),
+                step=5,
+                key="high_odds_limit",
+                on_change=clear_detail_and_rebuild_top_markets,
+            )
 
     st.markdown("### ⚙️ Analiz Filtreleri")
 
@@ -3111,7 +3161,15 @@ if analiz_btn:
         st.session_state.final_list = final
         st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
         st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50)
-        st.session_state.high_odds_list = yuksek_oran_listesi_uret(gecmis, bulten, min_ornek=min_ornek, limit=25, min_odd=2.00)
+        st.session_state.high_odds_list = yuksek_oran_listesi_uret(
+            gecmis,
+            bulten,
+            min_ornek=min_ornek,
+            limit=int(st.session_state.get("high_odds_limit", 25)),
+            min_odd=float(st.session_state.get("high_odds_min_odd", 2.00)),
+            min_guven=int(st.session_state.get("high_odds_min_guven", 55)),
+            max_odd=float(st.session_state.get("high_odds_max_odd", 6.00)),
+        )
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -3449,7 +3507,7 @@ else:
     elif aktif_sayfa_modu == "Yüksek Oran Listesi":
         gunun_top_liste = st.session_state.get("high_odds_list", [])
         top_baslik = "🔥 YÜKSEK ORAN LİSTESİ"
-        top_aciklama = "Bu bölüm Top10/Top50’den bağımsızdır. Sadece 2.00+ oranlı, örnek/güven/stabilite tarafı tamamen zayıf olmayan adayları gösterir. Kombo oranları tahmini gösterimdir."
+        top_aciklama = f"Bu bölüm Top10/Top50’den bağımsızdır. Sidebar’daki Yüksek Oran Filtresi ile {float(st.session_state.get('high_odds_min_odd', 2.00)):.2f}+ oranlı adayları süzebilirsin. Kombo oranları tahmini gösterimdir."
     else:
         gunun_top_liste = st.session_state.get("top10_list", [])
         top_baslik = "🔥 TOP 10 MARKET"
