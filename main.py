@@ -1163,6 +1163,68 @@ def bulten_cek(key, kodlar, t):
     return df.sort_values("zaman").reset_index(drop=True)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def aktif_bulten_ligleri_cek(key, kodlar, t):
+    """
+    Seçili tarihte The Odds API bülteninde gerçekten maç dönen ligleri bulur.
+    Bu sayede 22.05.2026 gibi günlerde eski/sezonu bitmiş ligleri manuel temizlemek gerekmez.
+    """
+    secret_key = get_app_api_key()
+    if secret_key:
+        key = secret_key
+
+    if not key:
+        return {}
+
+    aktif = {}
+
+    for k in kodlar:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
+                params={
+                    "apiKey": key,
+                    "regions": "eu",
+                    "markets": "h2h",
+                    "oddsFormat": "decimal",
+                },
+                timeout=12,
+            )
+
+            if r.status_code != 200:
+                continue
+
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+
+            sayac = 0
+            lig_adi = k
+
+            for m in data:
+                try:
+                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                except Exception:
+                    continue
+
+                if tm.date() == t:
+                    sayac += 1
+                    lig_adi = m.get("sport_title", k)
+
+            if sayac > 0:
+                aktif[k] = {
+                    "lig": lig_adi,
+                    "mac": sayac,
+                }
+
+        except Exception:
+            continue
+
+    return aktif
+
+
+
+
 
 
 
@@ -2357,6 +2419,24 @@ FUTBOL_LIGLERI = {
 }
 
 
+# 22.05.2026 bülteni için sezonsal olarak aktif olması beklenen ana havuz.
+# API key varsa aşağıdaki "Bülten Liglerini Otomatik Seç" butonu gerçek maç dönen ligleri bulur.
+BULTEN_22052026_FALLBACK_LIGLERI = [
+    "soccer_norway_eliteserien",
+    "soccer_sweden_allsvenskan",
+    "soccer_finland_veikkausliiga",
+    "soccer_league_of_ireland",
+    "soccer_usa_mls",
+    "soccer_brazil_campeonato",
+    "soccer_argentina_primera_division",
+    "soccer_japan_j_league",
+    "soccer_korea_kleague1",
+    "soccer_mexico_ligamx",
+    "soccer_chile_campeonato",
+]
+
+
+
 LEAGUE_EMOJIS = {
     "Şampiyonlar Ligi": "🏆",
     "Avrupa Ligi": "🟠",
@@ -2468,12 +2548,25 @@ def tum_lig_kodlari():
     return [kod for ligler in FUTBOL_LIGLERI.values() for kod in ligler.values()]
 
 
+def lig_kodundan_isim(kod: str) -> str:
+    for ligler in FUTBOL_LIGLERI.values():
+        for isim, lig_kod in ligler.items():
+            if lig_kod == kod:
+                return isim
+    return kod
+
+
 def init_league_states():
+    """
+    İlk açılışta 22.05.2026 bülteni için sezonsal aktif havuzu seçili getirir.
+    Kullanıcı sonrasında Hepsini Aç / Temizle / Otomatik Bülten Seç ile değiştirebilir.
+    """
+    fallback = set(BULTEN_22052026_FALLBACK_LIGLERI)
     for _, ligler in FUTBOL_LIGLERI.items():
         for _, kod in ligler.items():
             item_key = f"cb_{kod}"
             if item_key not in st.session_state:
-                st.session_state[item_key] = False
+                st.session_state[item_key] = kod in fallback
 
 
 
@@ -2871,6 +2964,24 @@ with st.sidebar:
         if st.button('Kararlı Çekirdek + Value', use_container_width=True, key='preset_core_value_sidebar'):
             toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
             st.rerun()
+
+        if st.button('📌 Seçili Tarihin Bülten Liglerini Bul', use_container_width=True, key='preset_active_bulletin_sidebar'):
+            aktif_ligler = aktif_bulten_ligleri_cek(API_KEY, tum_lig_kodlari(), secili_tarih)
+
+            if aktif_ligler:
+                set_leagues(list(aktif_ligler.keys()))
+                st.session_state["aktif_bulten_ozet"] = ", ".join(
+                    [f"{lig_kodundan_isim(k)} ({v.get('mac', 0)})" for k, v in aktif_ligler.items()]
+                )
+                st.rerun()
+            else:
+                # API cevap vermezse 22.05.2026 için beklenen sezonluk aktif havuza düş.
+                set_leagues(BULTEN_22052026_FALLBACK_LIGLERI)
+                st.session_state["aktif_bulten_ozet"] = "API'den aktif lig alınamadı; 22.05.2026 fallback havuzu seçildi."
+                st.rerun()
+
+        if st.session_state.get("aktif_bulten_ozet"):
+            st.caption("Bülten ligleri: " + str(st.session_state.get("aktif_bulten_ozet")))
 
         lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar', on_change=clear_detail_on_filter_change)
         filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
