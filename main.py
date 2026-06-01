@@ -2308,7 +2308,10 @@ FUTBOL_LIGLERI = {
         "UEFA Euro Elemeleri": "soccer_uefa_euro_qualification",
         "UEFA Nations League": "soccer_uefa_nations_league",
         "Copa America": "soccer_conmebol_copa_america",
-        "Hazırlık Maçları": "soccer_international_friendlies",
+        "FIFA Club World Cup": "soccer_fifa_club_world_cup",
+        "Africa Cup of Nations": "soccer_africa_cup_of_nations",
+        "CONCACAF Gold Cup": "soccer_concacaf_gold_cup",
+        "Hazırlık Maçları (API desteklemeyebilir)": "soccer_international_friendlies",
     },
     "TÜRKİYE": {
         "Süper Lig": "soccer_turkey_super_league",
@@ -2380,7 +2383,10 @@ LEAGUE_EMOJIS = {
     "UEFA Euro Elemeleri": "🇪🇺",
     "UEFA Nations League": "🇪🇺",
     "Copa America": "🌎",
-    "Hazırlık Maçları": "🤝",
+    "FIFA Club World Cup": "🏆",
+    "Africa Cup of Nations": "🌍",
+    "CONCACAF Gold Cup": "🏆",
+    "Hazırlık Maçları (API desteklemeyebilir)": "🤝",
     "Süper Lig": "🇹🇷",
     "Premier League": "🏴",
     "Championship": "🏴",
@@ -2787,6 +2793,107 @@ def clear_detail_and_rebuild_top_markets():
 def selected_league_codes():
     return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
 
+
+@st.cache_data(ttl=900, show_spinner=False)
+def api_spor_kodlari_cek(api_key: str, tumunu_getir: bool = False):
+    """The Odds API /sports endpointinden aktif/desteklenen sport_key listesini çeker.
+    tumunu_getir=True olursa sezon dışı kodları da listeler. Bu endpoint kullanım kotasından düşmez.
+    """
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return pd.DataFrame()
+
+    try:
+        params = {"apiKey": api_key}
+        if tumunu_getir:
+            params["all"] = "true"
+        r = requests.get(
+            "https://api.the-odds-api.com/v4/sports/",
+            params=params,
+            timeout=12,
+        )
+        if r.status_code != 200:
+            return pd.DataFrame()
+        data = r.json()
+        if not isinstance(data, list):
+            return pd.DataFrame()
+        return pd.DataFrame(data)
+    except Exception:
+        return pd.DataFrame()
+
+
+def api_aktif_kod_seti(api_key: str):
+    df = api_spor_kodlari_cek(api_key, tumunu_getir=False)
+    if df.empty or "key" not in df.columns:
+        return set()
+    return set(df["key"].astype(str).tolist())
+
+
+def api_tum_kod_seti(api_key: str):
+    df = api_spor_kodlari_cek(api_key, tumunu_getir=True)
+    if df.empty or "key" not in df.columns:
+        return set()
+    return set(df["key"].astype(str).tolist())
+
+
+def lig_kod_durum_ozeti(api_key: str):
+    """Kodlarımızın API'deki durumunu döndürür: aktif, destekli ama sezon dışı, desteklenmiyor."""
+    tum_df = api_spor_kodlari_cek(api_key, tumunu_getir=True)
+    aktif_df = api_spor_kodlari_cek(api_key, tumunu_getir=False)
+
+    tum_keys = set(tum_df["key"].astype(str).tolist()) if not tum_df.empty and "key" in tum_df.columns else set()
+    aktif_keys = set(aktif_df["key"].astype(str).tolist()) if not aktif_df.empty and "key" in aktif_df.columns else set()
+
+    rows = []
+    for lig in tum_lig_listesi():
+        kod = lig["kod"]
+        if kod in aktif_keys:
+            durum = "aktif"
+        elif kod in tum_keys:
+            durum = "destekli_sezon_disi"
+        else:
+            durum = "desteklenmiyor"
+        rows.append({**lig, "durum": durum})
+    return pd.DataFrame(rows)
+
+
+def secili_tarihte_mac_olan_kodlari_bul(api_key: str, aday_kodlar, tarih):
+    """Seçili tarih için event endpointinden maç olan kodları bulur.
+    Events endpoint kota yemez; odds endpointinden önce doğru ligleri seçmek için kullanılır.
+    """
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return []
+
+    tarih = pd.to_datetime(tarih).date()
+    aktif_keys = api_aktif_kod_seti(api_key)
+    adaylar = [k for k in list(aday_kodlar or []) if (not aktif_keys or k in aktif_keys)]
+    bulunan = []
+
+    for kod in adaylar:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{kod}/events",
+                params={"apiKey": api_key},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+            for ev in data:
+                try:
+                    tm = datetime.strptime(ev.get("commence_time", ""), "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                except Exception:
+                    continue
+                if tm.date() == tarih:
+                    bulunan.append(kod)
+                    break
+        except Exception:
+            continue
+    return bulunan
+
 if 'date_mode' not in st.session_state:
     st.session_state['date_mode'] = 'Bugün'
 if 'special_date' not in st.session_state:
@@ -2891,6 +2998,48 @@ with st.sidebar:
         if st.button('Kararlı Çekirdek + Value', use_container_width=True, key='preset_core_value_sidebar'):
             toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
             st.rerun()
+
+        if st.button('📌 Seçili Tarihte Maç Olan Ligleri Bul', use_container_width=True, key='find_active_event_leagues_sidebar'):
+            api_key_tmp = get_app_api_key()
+            if not api_key_tmp:
+                st.warning('Önce API key girmen gerekiyor.')
+            else:
+                bulunan = secili_tarihte_mac_olan_kodlari_bul(api_key_tmp, tum_lig_kodlari(), secili_tarih)
+                if bulunan:
+                    set_leagues(bulunan)
+                    st.success(f'{len(bulunan)} lig/kupa seçildi ✅')
+                    st.rerun()
+                else:
+                    st.warning('Bu tarihte API events tarafında maç bulunan lig/kupa yakalanmadı. Tarihi veya API destek durumunu kontrol et.')
+
+        with st.expander('🩺 API Kod Kontrolü', expanded=False):
+            api_key_tmp = get_app_api_key()
+            if st.button('API’de Aktif Kodları Kontrol Et', use_container_width=True, key='check_api_sport_keys'):
+                if not api_key_tmp:
+                    st.warning('Önce API key girmen gerekiyor.')
+                else:
+                    durum_df = lig_kod_durum_ozeti(api_key_tmp)
+                    if durum_df.empty:
+                        st.error('API kod listesi çekilemedi.')
+                    else:
+                        st.session_state['lig_kod_durum_df'] = durum_df
+
+            durum_df = st.session_state.get('lig_kod_durum_df')
+            if isinstance(durum_df, pd.DataFrame) and not durum_df.empty:
+                aktif_sayi = int((durum_df['durum'] == 'aktif').sum())
+                sezon_disi_sayi = int((durum_df['durum'] == 'destekli_sezon_disi').sum())
+                desteklenmeyen_sayi = int((durum_df['durum'] == 'desteklenmiyor').sum())
+                st.caption(f'Aktif: {aktif_sayi} · Sezon dışı: {sezon_disi_sayi} · Desteklenmeyen: {desteklenmeyen_sayi}')
+
+                unsupported = durum_df[durum_df['durum'] == 'desteklenmiyor'][['isim', 'kod']]
+                if not unsupported.empty:
+                    st.warning('Desteklenmeyen kodlar maç döndürmez:')
+                    st.dataframe(unsupported, hide_index=True, use_container_width=True)
+
+                if st.button('Sadece API’de aktif kodları seç', use_container_width=True, key='select_only_api_active'):
+                    aktifler = durum_df.loc[durum_df['durum'] == 'aktif', 'kod'].tolist()
+                    set_leagues(aktifler)
+                    st.rerun()
 
         lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar', on_change=clear_detail_on_filter_change)
         filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
