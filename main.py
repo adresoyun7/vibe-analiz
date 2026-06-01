@@ -1163,68 +1163,6 @@ def bulten_cek(key, kodlar, t):
     return df.sort_values("zaman").reset_index(drop=True)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def aktif_bulten_ligleri_cek(key, kodlar, t):
-    """
-    Seçili tarihte The Odds API bülteninde gerçekten maç dönen ligleri bulur.
-    Bu sayede 22.05.2026 gibi günlerde eski/sezonu bitmiş ligleri manuel temizlemek gerekmez.
-    """
-    secret_key = get_app_api_key()
-    if secret_key:
-        key = secret_key
-
-    if not key:
-        return {}
-
-    aktif = {}
-
-    for k in kodlar:
-        try:
-            r = requests.get(
-                f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
-                params={
-                    "apiKey": key,
-                    "regions": "eu",
-                    "markets": "h2h",
-                    "oddsFormat": "decimal",
-                },
-                timeout=12,
-            )
-
-            if r.status_code != 200:
-                continue
-
-            data = r.json()
-            if not isinstance(data, list):
-                continue
-
-            sayac = 0
-            lig_adi = k
-
-            for m in data:
-                try:
-                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
-                except Exception:
-                    continue
-
-                if tm.date() == t:
-                    sayac += 1
-                    lig_adi = m.get("sport_title", k)
-
-            if sayac > 0:
-                aktif[k] = {
-                    "lig": lig_adi,
-                    "mac": sayac,
-                }
-
-        except Exception:
-            continue
-
-    return aktif
-
-
-
-
 
 
 
@@ -2361,6 +2299,20 @@ FUTBOL_LIGLERI = {
         "Avrupa Ligi": "soccer_uefa_europa_league",
         "Konferans Ligi": "soccer_uefa_europa_conference_league",
     },
+    "MİLLİ TAKIMLAR": {
+        "Dünya Kupası": "soccer_fifa_world_cup",
+        "Dünya Kupası Elemeleri Avrupa": "soccer_fifa_world_cup_qualifiers_europe",
+        "Dünya Kupası Elemeleri Güney Amerika": "soccer_fifa_world_cup_qualifiers_south_america",
+        "Kadınlar Dünya Kupası": "soccer_fifa_world_cup_womens",
+        "UEFA Euro": "soccer_uefa_european_championship",
+        "UEFA Euro Elemeleri": "soccer_uefa_euro_qualification",
+        "UEFA Nations League": "soccer_uefa_nations_league",
+        "Copa America": "soccer_conmebol_copa_america",
+        "FIFA Club World Cup": "soccer_fifa_club_world_cup",
+        "Africa Cup of Nations": "soccer_africa_cup_of_nations",
+        "CONCACAF Gold Cup": "soccer_concacaf_gold_cup",
+        "Hazırlık Maçları (API desteklemeyebilir)": "soccer_international_friendlies",
+    },
     "TÜRKİYE": {
         "Süper Lig": "soccer_turkey_super_league",
     },
@@ -2419,28 +2371,22 @@ FUTBOL_LIGLERI = {
 }
 
 
-# 22.05.2026 bülteni için sezonsal olarak aktif olması beklenen ana havuz.
-# API key varsa aşağıdaki "Bülten Liglerini Otomatik Seç" butonu gerçek maç dönen ligleri bulur.
-BULTEN_22052026_FALLBACK_LIGLERI = [
-    "soccer_norway_eliteserien",
-    "soccer_sweden_allsvenskan",
-    "soccer_finland_veikkausliiga",
-    "soccer_league_of_ireland",
-    "soccer_usa_mls",
-    "soccer_brazil_campeonato",
-    "soccer_argentina_primera_division",
-    "soccer_japan_j_league",
-    "soccer_korea_kleague1",
-    "soccer_mexico_ligamx",
-    "soccer_chile_campeonato",
-]
-
-
-
 LEAGUE_EMOJIS = {
     "Şampiyonlar Ligi": "🏆",
     "Avrupa Ligi": "🟠",
     "Konferans Ligi": "🟢",
+    "Dünya Kupası": "🌍",
+    "Dünya Kupası Elemeleri Avrupa": "🌍",
+    "Dünya Kupası Elemeleri Güney Amerika": "🌎",
+    "Kadınlar Dünya Kupası": "🌍",
+    "UEFA Euro": "🇪🇺",
+    "UEFA Euro Elemeleri": "🇪🇺",
+    "UEFA Nations League": "🇪🇺",
+    "Copa America": "🌎",
+    "FIFA Club World Cup": "🏆",
+    "Africa Cup of Nations": "🌍",
+    "CONCACAF Gold Cup": "🏆",
+    "Hazırlık Maçları (API desteklemeyebilir)": "🤝",
     "Süper Lig": "🇹🇷",
     "Premier League": "🏴",
     "Championship": "🏴",
@@ -2548,25 +2494,12 @@ def tum_lig_kodlari():
     return [kod for ligler in FUTBOL_LIGLERI.values() for kod in ligler.values()]
 
 
-def lig_kodundan_isim(kod: str) -> str:
-    for ligler in FUTBOL_LIGLERI.values():
-        for isim, lig_kod in ligler.items():
-            if lig_kod == kod:
-                return isim
-    return kod
-
-
 def init_league_states():
-    """
-    İlk açılışta 22.05.2026 bülteni için sezonsal aktif havuzu seçili getirir.
-    Kullanıcı sonrasında Hepsini Aç / Temizle / Otomatik Bülten Seç ile değiştirebilir.
-    """
-    fallback = set(BULTEN_22052026_FALLBACK_LIGLERI)
     for _, ligler in FUTBOL_LIGLERI.items():
         for _, kod in ligler.items():
             item_key = f"cb_{kod}"
             if item_key not in st.session_state:
-                st.session_state[item_key] = kod in fallback
+                st.session_state[item_key] = False
 
 
 
@@ -2860,6 +2793,107 @@ def clear_detail_and_rebuild_top_markets():
 def selected_league_codes():
     return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
 
+
+@st.cache_data(ttl=900, show_spinner=False)
+def api_spor_kodlari_cek(api_key: str, tumunu_getir: bool = False):
+    """The Odds API /sports endpointinden aktif/desteklenen sport_key listesini çeker.
+    tumunu_getir=True olursa sezon dışı kodları da listeler. Bu endpoint kullanım kotasından düşmez.
+    """
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return pd.DataFrame()
+
+    try:
+        params = {"apiKey": api_key}
+        if tumunu_getir:
+            params["all"] = "true"
+        r = requests.get(
+            "https://api.the-odds-api.com/v4/sports/",
+            params=params,
+            timeout=12,
+        )
+        if r.status_code != 200:
+            return pd.DataFrame()
+        data = r.json()
+        if not isinstance(data, list):
+            return pd.DataFrame()
+        return pd.DataFrame(data)
+    except Exception:
+        return pd.DataFrame()
+
+
+def api_aktif_kod_seti(api_key: str):
+    df = api_spor_kodlari_cek(api_key, tumunu_getir=False)
+    if df.empty or "key" not in df.columns:
+        return set()
+    return set(df["key"].astype(str).tolist())
+
+
+def api_tum_kod_seti(api_key: str):
+    df = api_spor_kodlari_cek(api_key, tumunu_getir=True)
+    if df.empty or "key" not in df.columns:
+        return set()
+    return set(df["key"].astype(str).tolist())
+
+
+def lig_kod_durum_ozeti(api_key: str):
+    """Kodlarımızın API'deki durumunu döndürür: aktif, destekli ama sezon dışı, desteklenmiyor."""
+    tum_df = api_spor_kodlari_cek(api_key, tumunu_getir=True)
+    aktif_df = api_spor_kodlari_cek(api_key, tumunu_getir=False)
+
+    tum_keys = set(tum_df["key"].astype(str).tolist()) if not tum_df.empty and "key" in tum_df.columns else set()
+    aktif_keys = set(aktif_df["key"].astype(str).tolist()) if not aktif_df.empty and "key" in aktif_df.columns else set()
+
+    rows = []
+    for lig in tum_lig_listesi():
+        kod = lig["kod"]
+        if kod in aktif_keys:
+            durum = "aktif"
+        elif kod in tum_keys:
+            durum = "destekli_sezon_disi"
+        else:
+            durum = "desteklenmiyor"
+        rows.append({**lig, "durum": durum})
+    return pd.DataFrame(rows)
+
+
+def secili_tarihte_mac_olan_kodlari_bul(api_key: str, aday_kodlar, tarih):
+    """Seçili tarih için event endpointinden maç olan kodları bulur.
+    Events endpoint kota yemez; odds endpointinden önce doğru ligleri seçmek için kullanılır.
+    """
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return []
+
+    tarih = pd.to_datetime(tarih).date()
+    aktif_keys = api_aktif_kod_seti(api_key)
+    adaylar = [k for k in list(aday_kodlar or []) if (not aktif_keys or k in aktif_keys)]
+    bulunan = []
+
+    for kod in adaylar:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{kod}/events",
+                params={"apiKey": api_key},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+            for ev in data:
+                try:
+                    tm = datetime.strptime(ev.get("commence_time", ""), "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                except Exception:
+                    continue
+                if tm.date() == tarih:
+                    bulunan.append(kod)
+                    break
+        except Exception:
+            continue
+    return bulunan
+
 if 'date_mode' not in st.session_state:
     st.session_state['date_mode'] = 'Bugün'
 if 'special_date' not in st.session_state:
@@ -2965,23 +2999,47 @@ with st.sidebar:
             toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
             st.rerun()
 
-        if st.button('📌 Seçili Tarihin Bülten Liglerini Bul', use_container_width=True, key='preset_active_bulletin_sidebar'):
-            aktif_ligler = aktif_bulten_ligleri_cek(API_KEY, tum_lig_kodlari(), secili_tarih)
-
-            if aktif_ligler:
-                set_leagues(list(aktif_ligler.keys()))
-                st.session_state["aktif_bulten_ozet"] = ", ".join(
-                    [f"{lig_kodundan_isim(k)} ({v.get('mac', 0)})" for k, v in aktif_ligler.items()]
-                )
-                st.rerun()
+        if st.button('📌 Seçili Tarihte Maç Olan Ligleri Bul', use_container_width=True, key='find_active_event_leagues_sidebar'):
+            api_key_tmp = get_app_api_key()
+            if not api_key_tmp:
+                st.warning('Önce API key girmen gerekiyor.')
             else:
-                # API cevap vermezse 22.05.2026 için beklenen sezonluk aktif havuza düş.
-                set_leagues(BULTEN_22052026_FALLBACK_LIGLERI)
-                st.session_state["aktif_bulten_ozet"] = "API'den aktif lig alınamadı; 22.05.2026 fallback havuzu seçildi."
-                st.rerun()
+                bulunan = secili_tarihte_mac_olan_kodlari_bul(api_key_tmp, tum_lig_kodlari(), secili_tarih)
+                if bulunan:
+                    set_leagues(bulunan)
+                    st.success(f'{len(bulunan)} lig/kupa seçildi ✅')
+                    st.rerun()
+                else:
+                    st.warning('Bu tarihte API events tarafında maç bulunan lig/kupa yakalanmadı. Tarihi veya API destek durumunu kontrol et.')
 
-        if st.session_state.get("aktif_bulten_ozet"):
-            st.caption("Bülten ligleri: " + str(st.session_state.get("aktif_bulten_ozet")))
+        with st.expander('🩺 API Kod Kontrolü', expanded=False):
+            api_key_tmp = get_app_api_key()
+            if st.button('API’de Aktif Kodları Kontrol Et', use_container_width=True, key='check_api_sport_keys'):
+                if not api_key_tmp:
+                    st.warning('Önce API key girmen gerekiyor.')
+                else:
+                    durum_df = lig_kod_durum_ozeti(api_key_tmp)
+                    if durum_df.empty:
+                        st.error('API kod listesi çekilemedi.')
+                    else:
+                        st.session_state['lig_kod_durum_df'] = durum_df
+
+            durum_df = st.session_state.get('lig_kod_durum_df')
+            if isinstance(durum_df, pd.DataFrame) and not durum_df.empty:
+                aktif_sayi = int((durum_df['durum'] == 'aktif').sum())
+                sezon_disi_sayi = int((durum_df['durum'] == 'destekli_sezon_disi').sum())
+                desteklenmeyen_sayi = int((durum_df['durum'] == 'desteklenmiyor').sum())
+                st.caption(f'Aktif: {aktif_sayi} · Sezon dışı: {sezon_disi_sayi} · Desteklenmeyen: {desteklenmeyen_sayi}')
+
+                unsupported = durum_df[durum_df['durum'] == 'desteklenmiyor'][['isim', 'kod']]
+                if not unsupported.empty:
+                    st.warning('Desteklenmeyen kodlar maç döndürmez:')
+                    st.dataframe(unsupported, hide_index=True, use_container_width=True)
+
+                if st.button('Sadece API’de aktif kodları seç', use_container_width=True, key='select_only_api_active'):
+                    aktifler = durum_df.loc[durum_df['durum'] == 'aktif', 'kod'].tolist()
+                    set_leagues(aktifler)
+                    st.rerun()
 
         lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar', on_change=clear_detail_on_filter_change)
         filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
