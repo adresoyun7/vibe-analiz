@@ -1163,215 +1163,6 @@ def bulten_cek(key, kodlar, t):
     return df.sort_values("zaman").reset_index(drop=True)
 
 
-# ==========================================================
-# 2. VERİ KAYNAĞI: TheSportsDB - Friendly International
-# ==========================================================
-# The Odds API'de Friendly International görünmediği için bu maçları
-# TheSportsDB üzerinden fikstür olarak çekiyoruz. Bu kaynak oran vermez.
-# Bu yüzden bu maçlar "Oran Yok / Manuel Analiz" etiketiyle listelenir.
-
-THESPORTSDB_FRIENDLY_LEAGUE_ID = "4562"
-
-
-def get_thesportsdb_api_key():
-    # TheSportsDB ücretsiz test key genelde "3" olarak çalışır.
-    # İstersen Streamlit Secrets içine THESPORTSDB_API_KEY ekleyebilirsin.
-    return str(get_secret_value("THESPORTSDB_API_KEY", "3")).strip() or "3"
-
-
-def parse_thesportsdb_datetime(event):
-    """TheSportsDB tarih/saat alanlarını TR saatine yakın şekilde datetime'a çevirir."""
-    ts = str(event.get("strTimestamp") or "").strip()
-    if ts:
-        try:
-            # Örn: 2026-06-02T19:45:00+00:00
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            # timezone aware ise UTC'den TR'ye çevirir gibi +3 uygula
-            return dt.replace(tzinfo=None) + timedelta(hours=3)
-        except Exception:
-            pass
-
-    date_part = str(event.get("dateEvent") or "").strip()
-    time_part = str(event.get("strTime") or "00:00:00").strip()
-    if not time_part or time_part.lower() == "none":
-        time_part = "00:00:00"
-
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-        try:
-            return datetime.strptime(f"{date_part} {time_part[:8]}", fmt)
-        except Exception:
-            pass
-
-    return parse_mac_datetime(date_part)
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def thesportsdb_friendlies_cek(t):
-    """Seçili tarihteki Friendly International maçlarını TheSportsDB'den çeker."""
-    api_key = get_thesportsdb_api_key()
-    hedef_tarih = str(t)
-    res = []
-
-    # 1) Günlük tüm futbol maçları içinden Friendly International filtrele
-    endpoints = [
-        (
-            f"https://www.thesportsdb.com/api/v1/json/{api_key}/eventsday.php",
-            {"d": hedef_tarih, "s": "Soccer"},
-        ),
-        # 2) Yedek: International Friendlies liginden sıradaki maçlar
-        (
-            f"https://www.thesportsdb.com/api/v1/json/{api_key}/eventsnextleague.php",
-            {"id": THESPORTSDB_FRIENDLY_LEAGUE_ID},
-        ),
-    ]
-
-    seen = set()
-
-    for url, params in endpoints:
-        try:
-            r = requests.get(url, params=params, timeout=12)
-            if r.status_code != 200:
-                continue
-
-            data = r.json()
-            events = data.get("events") or data.get("event") or []
-            if not isinstance(events, list):
-                continue
-
-            for ev in events:
-                date_event = str(ev.get("dateEvent") or "").strip()
-                if date_event != hedef_tarih:
-                    continue
-
-                league_id = str(ev.get("idLeague") or "").strip()
-                league_name = str(ev.get("strLeague") or "").lower()
-
-                is_friendly = (
-                    league_id == THESPORTSDB_FRIENDLY_LEAGUE_ID
-                    or "friendly" in league_name
-                    or "friendlies" in league_name
-                    or "friendly international" in league_name
-                    or "international friendlies" in league_name
-                )
-
-                if not is_friendly:
-                    continue
-
-                home = ev.get("strHomeTeam") or ""
-                away = ev.get("strAwayTeam") or ""
-                if not home or not away:
-                    continue
-
-                event_id = str(ev.get("idEvent") or f"{date_event}_{home}_{away}")
-                if event_id in seen:
-                    continue
-                seen.add(event_id)
-
-                res.append({
-                    "lig": "Friendly International",
-                    "zaman": parse_thesportsdb_datetime(ev),
-                    "ev": home,
-                    "dep": away,
-                    # Oran yok. UI formatı bozulmasın diye 0.0 tutuyoruz,
-                    # ekranda ayrıca "—" olarak gösterilecek.
-                    "h": 0.0,
-                    "b": 0.0,
-                    "a": 0.0,
-                    "source": "TheSportsDB",
-                    "oran_yok": True,
-                    "event_id": event_id,
-                })
-        except Exception:
-            continue
-
-    if not res:
-        return pd.DataFrame()
-
-    return pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
-
-
-def friendly_manual_tahmin(m_row):
-    """Oran olmayan Friendly International maçları için güvenli placeholder analiz."""
-    return {
-        "ana_label": "Oran Yok",
-        "ana_p": 0,
-        "playable_score": 0,
-        "ana_raw_p": 0,
-        "ana_odd": None,
-        "alt_label": "Manuel Analiz",
-        "alt_p": 0,
-        "kg_label": "",
-        "kg_p": 0,
-        "combo_label": "",
-        "combo_p": 0,
-        "combo_raw_p": 0,
-        "combo_hit": 0,
-        "combo_var": False,
-        "combo_level": "",
-        "scenario_label": "TheSportsDB fikstür verisi",
-        "canli_label": "Canlı İzle",
-        "canli_p": 0,
-        "canli_strateji": "Bu maç TheSportsDB'den oran olmadan geldi. Mevcut oran benzerliği modeli bu maçta çalışmaz; manuel değerlendirme veya canlı tempo takibi gerekir.",
-        "belirsiz": True,
-        "ms_side": "-",
-        "ms_p": 0,
-        "ms_mod": "D",
-        "ms1_p": 0,
-        "msx_p": 0,
-        "ms2_p": 0,
-        "ms25_p": 0,
-        "ms25a_p": 0,
-        "ms15_p": 0,
-        "ms35_p": 0,
-        "kg_var_p": 0,
-        "kg_yok_p": 0,
-        "iy05_p": 0,
-        "iy05a_p": 0,
-        "iy15_p": 0,
-        "iy1_p": 0,
-        "iyx_p": 0,
-        "iy2_p": 0,
-        "htft_mod": "-",
-        "htft_p": 0,
-        "flip_p": 0.0,
-        "risk_label": "MANUEL",
-        "risk_cls": "risk-orta",
-        "eg": 0,
-        "dg": 0,
-        "guven_renk": "#5d6779",
-        "guven_badge_cls": "badge-dusuk",
-        "guven_badge_lbl": "Oran Yok",
-        "ornek": 0,
-        "ornek_durum": "TheSportsDB",
-        "ornek_renk": "#5d6779",
-        "onerilen_tolerans": "-",
-        "onerilen_min_mac": 0,
-        "tolerans_yorumu": "Oran olmadığı için benzer oranlı geçmiş maç modeli çalışmaz.",
-        "tolerans_tavsiyesi": "Manuel analiz",
-        "kullanilan_tolerans": 0.0,
-        "guven_carpani": 0,
-        "goal_profile": "Manuel",
-        "match_type": "Hazırlık",
-        "nedenler": [
-            "Bu maç TheSportsDB Friendly International fikstüründen çekildi.",
-            "The Odds API bu maç için oran vermediği için otomatik oran benzerliği analizi yapılmadı.",
-            "Maç listede görünür; tahmin için manuel analiz veya canlı takip önerilir.",
-        ],
-        "oynanabilir": False,
-        "oynanabilir_esik_ok": False,
-        "fake_drop": False,
-        "score": 0,
-        "stability_tols": [],
-        "stability_count": 0,
-        "stability_text": "",
-        "stability_early_tols": [],
-        "stability_late_tols": [],
-        "stability_early_text": "",
-        "stability_late_text": "",
-        "manual_mode": True,
-    }
-
-
 
 
 
@@ -2508,20 +2299,6 @@ FUTBOL_LIGLERI = {
         "Avrupa Ligi": "soccer_uefa_europa_league",
         "Konferans Ligi": "soccer_uefa_europa_conference_league",
     },
-    "MİLLİ TAKIMLAR": {
-        "Dünya Kupası": "soccer_fifa_world_cup",
-        "Dünya Kupası Elemeleri Avrupa": "soccer_fifa_world_cup_qualifiers_europe",
-        "Dünya Kupası Elemeleri Güney Amerika": "soccer_fifa_world_cup_qualifiers_south_america",
-        "Kadınlar Dünya Kupası": "soccer_fifa_world_cup_womens",
-        "UEFA Euro": "soccer_uefa_european_championship",
-        "UEFA Euro Elemeleri": "soccer_uefa_euro_qualification",
-        "UEFA Nations League": "soccer_uefa_nations_league",
-        "Copa America": "soccer_conmebol_copa_america",
-        "FIFA Club World Cup": "soccer_fifa_club_world_cup",
-        "Africa Cup of Nations": "soccer_africa_cup_of_nations",
-        "CONCACAF Gold Cup": "soccer_concacaf_gold_cup",
-        "Hazırlık Maçları (TheSportsDB)": "soccer_international_friendlies",
-    },
     "TÜRKİYE": {
         "Süper Lig": "soccer_turkey_super_league",
     },
@@ -2584,18 +2361,6 @@ LEAGUE_EMOJIS = {
     "Şampiyonlar Ligi": "🏆",
     "Avrupa Ligi": "🟠",
     "Konferans Ligi": "🟢",
-    "Dünya Kupası": "🌍",
-    "Dünya Kupası Elemeleri Avrupa": "🌍",
-    "Dünya Kupası Elemeleri Güney Amerika": "🌎",
-    "Kadınlar Dünya Kupası": "🌍",
-    "UEFA Euro": "🇪🇺",
-    "UEFA Euro Elemeleri": "🇪🇺",
-    "UEFA Nations League": "🇪🇺",
-    "Copa America": "🌎",
-    "FIFA Club World Cup": "🏆",
-    "Africa Cup of Nations": "🌍",
-    "CONCACAF Gold Cup": "🏆",
-    "Hazırlık Maçları (API desteklemeyebilir)": "🤝",
     "Süper Lig": "🇹🇷",
     "Premier League": "🏴",
     "Championship": "🏴",
@@ -3002,107 +2767,6 @@ def clear_detail_and_rebuild_top_markets():
 def selected_league_codes():
     return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
 
-
-@st.cache_data(ttl=900, show_spinner=False)
-def api_spor_kodlari_cek(api_key: str, tumunu_getir: bool = False):
-    """The Odds API /sports endpointinden aktif/desteklenen sport_key listesini çeker.
-    tumunu_getir=True olursa sezon dışı kodları da listeler. Bu endpoint kullanım kotasından düşmez.
-    """
-    api_key = str(api_key or "").strip()
-    if not api_key:
-        return pd.DataFrame()
-
-    try:
-        params = {"apiKey": api_key}
-        if tumunu_getir:
-            params["all"] = "true"
-        r = requests.get(
-            "https://api.the-odds-api.com/v4/sports/",
-            params=params,
-            timeout=12,
-        )
-        if r.status_code != 200:
-            return pd.DataFrame()
-        data = r.json()
-        if not isinstance(data, list):
-            return pd.DataFrame()
-        return pd.DataFrame(data)
-    except Exception:
-        return pd.DataFrame()
-
-
-def api_aktif_kod_seti(api_key: str):
-    df = api_spor_kodlari_cek(api_key, tumunu_getir=False)
-    if df.empty or "key" not in df.columns:
-        return set()
-    return set(df["key"].astype(str).tolist())
-
-
-def api_tum_kod_seti(api_key: str):
-    df = api_spor_kodlari_cek(api_key, tumunu_getir=True)
-    if df.empty or "key" not in df.columns:
-        return set()
-    return set(df["key"].astype(str).tolist())
-
-
-def lig_kod_durum_ozeti(api_key: str):
-    """Kodlarımızın API'deki durumunu döndürür: aktif, destekli ama sezon dışı, desteklenmiyor."""
-    tum_df = api_spor_kodlari_cek(api_key, tumunu_getir=True)
-    aktif_df = api_spor_kodlari_cek(api_key, tumunu_getir=False)
-
-    tum_keys = set(tum_df["key"].astype(str).tolist()) if not tum_df.empty and "key" in tum_df.columns else set()
-    aktif_keys = set(aktif_df["key"].astype(str).tolist()) if not aktif_df.empty and "key" in aktif_df.columns else set()
-
-    rows = []
-    for lig in tum_lig_listesi():
-        kod = lig["kod"]
-        if kod in aktif_keys:
-            durum = "aktif"
-        elif kod in tum_keys:
-            durum = "destekli_sezon_disi"
-        else:
-            durum = "desteklenmiyor"
-        rows.append({**lig, "durum": durum})
-    return pd.DataFrame(rows)
-
-
-def secili_tarihte_mac_olan_kodlari_bul(api_key: str, aday_kodlar, tarih):
-    """Seçili tarih için event endpointinden maç olan kodları bulur.
-    Events endpoint kota yemez; odds endpointinden önce doğru ligleri seçmek için kullanılır.
-    """
-    api_key = str(api_key or "").strip()
-    if not api_key:
-        return []
-
-    tarih = pd.to_datetime(tarih).date()
-    aktif_keys = api_aktif_kod_seti(api_key)
-    adaylar = [k for k in list(aday_kodlar or []) if (not aktif_keys or k in aktif_keys)]
-    bulunan = []
-
-    for kod in adaylar:
-        try:
-            r = requests.get(
-                f"https://api.the-odds-api.com/v4/sports/{kod}/events",
-                params={"apiKey": api_key},
-                timeout=10,
-            )
-            if r.status_code != 200:
-                continue
-            data = r.json()
-            if not isinstance(data, list):
-                continue
-            for ev in data:
-                try:
-                    tm = datetime.strptime(ev.get("commence_time", ""), "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
-                except Exception:
-                    continue
-                if tm.date() == tarih:
-                    bulunan.append(kod)
-                    break
-        except Exception:
-            continue
-    return bulunan
-
 if 'date_mode' not in st.session_state:
     st.session_state['date_mode'] = 'Bugün'
 if 'special_date' not in st.session_state:
@@ -3208,48 +2872,6 @@ with st.sidebar:
             toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
             st.rerun()
 
-        if st.button('📌 Seçili Tarihte Maç Olan Ligleri Bul', use_container_width=True, key='find_active_event_leagues_sidebar'):
-            api_key_tmp = get_app_api_key()
-            if not api_key_tmp:
-                st.warning('Önce API key girmen gerekiyor.')
-            else:
-                bulunan = secili_tarihte_mac_olan_kodlari_bul(api_key_tmp, tum_lig_kodlari(), secili_tarih)
-                if bulunan:
-                    set_leagues(bulunan)
-                    st.success(f'{len(bulunan)} lig/kupa seçildi ✅')
-                    st.rerun()
-                else:
-                    st.warning('Bu tarihte API events tarafında maç bulunan lig/kupa yakalanmadı. Tarihi veya API destek durumunu kontrol et.')
-
-        with st.expander('🩺 API Kod Kontrolü', expanded=False):
-            api_key_tmp = get_app_api_key()
-            if st.button('API’de Aktif Kodları Kontrol Et', use_container_width=True, key='check_api_sport_keys'):
-                if not api_key_tmp:
-                    st.warning('Önce API key girmen gerekiyor.')
-                else:
-                    durum_df = lig_kod_durum_ozeti(api_key_tmp)
-                    if durum_df.empty:
-                        st.error('API kod listesi çekilemedi.')
-                    else:
-                        st.session_state['lig_kod_durum_df'] = durum_df
-
-            durum_df = st.session_state.get('lig_kod_durum_df')
-            if isinstance(durum_df, pd.DataFrame) and not durum_df.empty:
-                aktif_sayi = int((durum_df['durum'] == 'aktif').sum())
-                sezon_disi_sayi = int((durum_df['durum'] == 'destekli_sezon_disi').sum())
-                desteklenmeyen_sayi = int((durum_df['durum'] == 'desteklenmiyor').sum())
-                st.caption(f'Aktif: {aktif_sayi} · Sezon dışı: {sezon_disi_sayi} · Desteklenmeyen: {desteklenmeyen_sayi}')
-
-                unsupported = durum_df[durum_df['durum'] == 'desteklenmiyor'][['isim', 'kod']]
-                if not unsupported.empty:
-                    st.warning('Desteklenmeyen kodlar maç döndürmez:')
-                    st.dataframe(unsupported, hide_index=True, use_container_width=True)
-
-                if st.button('Sadece API’de aktif kodları seç', use_container_width=True, key='select_only_api_active'):
-                    aktifler = durum_df.loc[durum_df['durum'] == 'aktif', 'kod'].tolist()
-                    set_leagues(aktifler)
-                    st.rerun()
-
         lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar', on_change=clear_detail_on_filter_change)
         filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
         st.caption(f"Gösterilen lig: {len(filtreli_ligler)} · Seçili lig: {len(selected_league_codes())}")
@@ -3311,14 +2933,6 @@ if analiz_btn:
         with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
             bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
-
-            # Friendly International The Odds API'de yoksa TheSportsDB'den fikstür olarak çek.
-            if "soccer_international_friendlies" in secili_kodlar:
-                friendlies_df = thesportsdb_friendlies_cek(secili_tarih)
-                if not friendlies_df.empty:
-                    bulten = pd.concat([bulten, friendlies_df], ignore_index=True)
-                    bulten = bulten.drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
-
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
 
@@ -3326,14 +2940,6 @@ if analiz_btn:
         stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
-                # TheSportsDB Friendly International maçlarında oran yok.
-                # Bu yüzden oran benzerliği hesaplamasını atlayıp manuel placeholder kartı ekliyoruz.
-                if bool(m.get("oran_yok", False)):
-                    m_dict = m.to_dict()
-                    m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
-                    final.append({"m": m_dict, "t": friendly_manual_tahmin(m_dict), "b": pd.DataFrame()})
-                    continue
-
                 t, b_det = hesapla(gecmis, m, TOLERANS)
                 if t is None:
                     continue
@@ -3402,9 +3008,8 @@ if analiz_btn:
             reverse=True
         )
         st.session_state.final_list = final
-        bulten_oranli = bulten[bulten.get("oran_yok", False) != True].copy() if not bulten.empty and "oran_yok" in bulten.columns else bulten
-        st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten_oranli, min_ornek=min_ornek, limit=10)
-        st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten_oranli, min_ornek=min_ornek, limit=50)
+        st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
+        st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50)
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -3425,24 +3030,6 @@ def detay_popup_icerigi():
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.rerun()
-
-    if t.get("manual_mode") or m.get("oran_yok"):
-        saat_txt = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
-        st.markdown(
-            f"""
-            <div class="detail-header-box">
-              <div style="font-size:0.82rem;color:#facc15;font-weight:800;">{escape(str(m.get('lig','Friendly International')))} · {saat_txt} · Kaynak: TheSportsDB</div>
-              <div style="font-size:1.35rem;font-weight:900;margin-top:6px;color:#fff;">{escape(str(m.get('ev','')))} - {escape(str(m.get('dep','')))}</div>
-              <div style="margin-top:10px;font-size:0.86rem;color:#cbd5e1;line-height:1.55;">
-                Bu maç TheSportsDB'den <b>fikstür</b> olarak çekildi. The Odds API oran vermediği için mevcut oran benzerliği modeli bu maçta çalışmaz.
-                Manuel analiz veya canlı tempo takibi önerilir.
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.info("Friendly International maçları listede görünür; fakat oran olmadığı için Top10/Top50 ve otomatik güven modeli dışında tutulur.")
-        return
 
     st.markdown(
         f"""
@@ -3638,9 +3225,9 @@ def detay_popup_icerigi():
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
             <div style="display:flex;gap:16px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{oran_1}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{oran_x}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{oran_2}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div></div>
             </div>
           </div>
         </div>
@@ -3916,14 +3503,6 @@ else:
 
         kc, bc = st.columns([9, 1.4])
         with kc:
-            if m.get("oran_yok"):
-                oran_1, oran_x, oran_2 = "—", "—", "—"
-                source_note = '<div style="margin-top:8px;font-size:0.72rem;color:#facc15">📡 TheSportsDB · Oran yok / manuel analiz</div>'
-            else:
-                oran_1 = f"{float(m.get('h', 0)):.2f}"
-                oran_x = f"{float(m.get('b', 0)):.2f}"
-                oran_2 = f"{float(m.get('a', 0)):.2f}"
-                source_note = ""
             card_html = f"""
             <div class="mac-kart">
               <div class="mk-zaman">
@@ -3968,7 +3547,6 @@ else:
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
-                {source_note}
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
                 {stability_html}
               </div>
