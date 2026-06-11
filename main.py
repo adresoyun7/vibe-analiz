@@ -2294,6 +2294,9 @@ for key, default in [
         st.session_state[key] = default
 
 FUTBOL_LIGLERI = {
+    "ULUSLARARASI": {
+        "Dünya Kupası": "soccer_fifa_world_cup",
+    },
     "AVRUPA KUPALARI": {
         "Şampiyonlar Ligi": "soccer_uefa_champs_league",
         "Avrupa Ligi": "soccer_uefa_europa_league",
@@ -2358,6 +2361,7 @@ FUTBOL_LIGLERI = {
 
 
 LEAGUE_EMOJIS = {
+    "Dünya Kupası": "🌍",
     "Şampiyonlar Ligi": "🏆",
     "Avrupa Ligi": "🟠",
     "Konferans Ligi": "🟢",
@@ -2437,6 +2441,7 @@ KARLI_LIG_PRESETLERI = {
     # Popup içindeki tek hızlı filtre: Kararlı çekirdek + kârlı/value ligler birlikte seçilir.
     "cekirdek_value": [
         # Kararlı çekirdek
+        "soccer_fifa_world_cup",
         "soccer_epl",
         "soccer_efl_champ",
         "soccer_spain_la_liga",
