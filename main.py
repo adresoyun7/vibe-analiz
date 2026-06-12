@@ -2355,6 +2355,8 @@ FUTBOL_LIGLERI = {
         "Japonya J League": "soccer_japan_j_league",
         "Meksika Liga MX": "soccer_mexico_ligamx",
         "Güney Kore K League 1": "soccer_korea_kleague1",
+        "Çin Süper Ligi": "soccer_china_superleague",
+        "Suudi Pro League": "soccer_saudi_arabia_pro_league",
         "Şili Primera": "soccer_chile_campeonato",
     },
 }
@@ -2463,8 +2465,15 @@ KARLI_LIG_PRESETLERI = {
         "soccer_belgium_first_div",
         "soccer_austria_bundesliga",
         "soccer_denmark_superliga",
+        "soccer_spl",
         "soccer_sweden_allsvenskan",
         "soccer_finland_veikkausliiga",
+        "soccer_brazil_campeonato",
+        "soccer_argentina_primera_division",
+        "soccer_japan_j_league",
+        "soccer_korea_kleague1",
+        "soccer_china_superleague",
+        "soccer_saudi_arabia_pro_league",
     ],
 }
 
