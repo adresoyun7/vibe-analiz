@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 20
+APP_SCHEMA_VERSION = 21
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1073,15 +1073,92 @@ def futbol_veri_motoru(sezonlar):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def bulten_cek(key, kodlar, t):
+    """
+    Seçili liglerin gün bültenini çeker.
+
+    Mantık:
+    1) /events endpoint'i ile o gün bültende olan tüm maçları almaya çalışır.
+    2) /odds endpoint'i ile H2H oranlarını alır.
+    3) Events'te olup oranı olmayan maçları da listede tutar.
+
+    Böylece ana ekranda iki tip maç görünür:
+    - ORANLI: h / b / a dolu, mevcut oran-benzerliği modeli çalışır.
+    - ORANSIZ: bültende var ama H2H oranı yok, ayrı uyarılı analiz kartı basılır.
+    """
     secret_key = get_app_api_key()
     if secret_key:
         key = secret_key
     if not key:
         st.error("ODDS_API_KEY bulunamadı. Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY eklemelisin.")
         return pd.DataFrame()
-    res = []
+
+    def parse_commence_time(value):
+        try:
+            return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+        except Exception:
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None) + timedelta(hours=3)
+            except Exception:
+                return None
+
+    def match_key(row):
+        zaman = row.get("zaman")
+        zaman_key = zaman.strftime("%Y-%m-%d %H:%M") if hasattr(zaman, "strftime") else str(zaman)
+        return (str(row.get("ev", "")).strip().lower(), str(row.get("dep", "")).strip().lower(), zaman_key)
+
+    def safe_float(v):
+        try:
+            if v is None:
+                return None
+            return float(v)
+        except Exception:
+            return None
+
+    tum_maclar = {}
 
     for k in kodlar:
+        # 1) Önce fikstür/events: oran olmasa bile maç yakalansın.
+        try:
+            ev_r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{k}/events",
+                params={"apiKey": key, "dateFormat": "iso"},
+                timeout=12,
+            )
+            if ev_r.status_code == 200:
+                events_data = ev_r.json()
+                if isinstance(events_data, list):
+                    for ev in events_data:
+                        tm = parse_commence_time(ev.get("commence_time"))
+                        if tm is None or tm.date() != t:
+                            continue
+                        home = ev.get("home_team", "") or ""
+                        away = ev.get("away_team", "") or ""
+                        if not away:
+                            teams = ev.get("teams", []) or []
+                            for team in teams:
+                                if team != home:
+                                    away = team
+                                    break
+                        if not home or not away:
+                            continue
+                        row = {
+                            "event_id": ev.get("id", ""),
+                            "sport_key": ev.get("sport_key", k),
+                            "lig": ev.get("sport_title", k),
+                            "zaman": tm,
+                            "ev": home,
+                            "dep": away,
+                            "h": None,
+                            "b": None,
+                            "a": None,
+                            "analiz_tipi": "ORANSIZ",
+                            "oran_durumu": "H2H oranı yok",
+                        }
+                        tum_maclar[row["event_id"] or match_key(row)] = row
+        except Exception:
+            pass
+
+        # 2) H2H oranları: varsa aynı maça işlenir.
         try:
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
@@ -1090,6 +1167,7 @@ def bulten_cek(key, kodlar, t):
                     "regions": "eu",
                     "markets": "h2h",
                     "oddsFormat": "decimal",
+                    "dateFormat": "iso",
                 },
                 timeout=12,
             )
@@ -1102,66 +1180,148 @@ def bulten_cek(key, kodlar, t):
                 continue
 
             for m in data:
-                try:
-                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
-                except Exception:
+                tm = parse_commence_time(m.get("commence_time"))
+                if tm is None or tm.date() != t:
                     continue
 
-                if tm.date() != t:
+                home = m.get("home_team", "") or ""
+                away = m.get("away_team", "") or ""
+                if not away:
+                    teams = m.get("teams", []) or []
+                    for team in teams:
+                        if team != home:
+                            away = team
+                            break
+                if not home or not away:
                     continue
 
-                bookies = m.get("bookmakers", [])
-                if not bookies:
-                    continue
+                row = {
+                    "event_id": m.get("id", ""),
+                    "sport_key": m.get("sport_key", k),
+                    "lig": m.get("sport_title", k),
+                    "zaman": tm,
+                    "ev": home,
+                    "dep": away,
+                    "h": None,
+                    "b": None,
+                    "a": None,
+                    "analiz_tipi": "ORANSIZ",
+                    "oran_durumu": "H2H oranı yok",
+                }
 
+                bookies = m.get("bookmakers", []) or []
                 market = None
                 for bk in bookies:
-                    for mk in bk.get("markets", []):
+                    for mk in bk.get("markets", []) or []:
                         if mk.get("key") == "h2h":
                             market = mk
                             break
                     if market:
                         break
 
-                if not market:
-                    continue
+                if market:
+                    outcomes = market.get("outcomes", []) or []
+                    h = safe_float(next((x.get("price") for x in outcomes if x.get("name") == home), None))
+                    a = safe_float(next((x.get("price") for x in outcomes if x.get("name") == away), None))
+                    b = safe_float(next((x.get("price") for x in outcomes if str(x.get("name", "")).lower() in ["draw", "tie", "beraberlik"]), None))
+                    row["h"], row["b"], row["a"] = h, b, a
+                    if h is not None and b is not None and a is not None:
+                        row["analiz_tipi"] = "ORANLI"
+                        row["oran_durumu"] = "H2H oranı var"
 
-                outcomes = market.get("outcomes", [])
-                home = m.get("home_team", "")
-                away = m.get("away_team", "")
-
-                if not away:
-                    teams = m.get("teams", [])
-                    for team in teams:
-                        if team != home:
-                            away = team
-                            break
-
-                h = next((x["price"] for x in outcomes if x["name"] == home), None)
-                a = next((x["price"] for x in outcomes if x["name"] == away), None)
-                b = next((x["price"] for x in outcomes if str(x["name"]).lower() in ["draw", "tie", "beraberlik"]), None)
-
-                if h is None or a is None or b is None:
-                    continue
-
-                res.append({
-                    "lig": m.get("sport_title", k),
-                    "zaman": tm,
-                    "ev": home,
-                    "dep": away,
-                    "h": float(h),
-                    "b": float(b),
-                    "a": float(a),
-                })
+                tum_maclar[row["event_id"] or match_key(row)] = row
         except Exception:
             continue
 
-    if not res:
+    if not tum_maclar:
         return pd.DataFrame()
 
-    df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
+    df = pd.DataFrame(list(tum_maclar.values())).drop_duplicates(subset=["ev", "dep", "zaman"])
     return df.sort_values("zaman").reset_index(drop=True)
 
+
+def oransiz_analiz_uret(m_row):
+    """
+    H2H oranı eksik maçlar için güvenli, düşük tavanlı fikstür analizi.
+    Bu analiz oran-benzerliği modeli değildir; sadece maçın bültende görünmesini sağlar.
+    """
+    ev = str(m_row.get("ev", ""))
+    dep = str(m_row.get("dep", ""))
+    lig = str(m_row.get("lig", ""))
+
+    # Takım isimleri üzerinden çok basit ve deterministik skor varyasyonu.
+    seed = sum(ord(c) for c in (ev + dep + lig))
+    skorlar = [(1, 1), (1, 0), (0, 1), (2, 1), (1, 2), (2, 0), (0, 2)]
+    eg, dg = skorlar[seed % len(skorlar)]
+
+    ana_label = "Oransız / İzle"
+    if eg + dg >= 3:
+        alt_label = "2.5 Üst eğilimi"
+    elif eg == dg:
+        alt_label = "Dengeli maç"
+    else:
+        alt_label = "Taraf eğilimi zayıf"
+
+    return {
+        "analiz_tipi": "ORANSIZ",
+        "ana_label": ana_label,
+        "ana_p": 45,
+        "ana_raw_p": 45,
+        "ana_odd": None,
+        "alt_label": alt_label,
+        "alt_p": 40,
+        "combo_label": "",
+        "combo_p": 0,
+        "combo_var": False,
+        "combo_level": "",
+        "match_type": "Oransız",
+        "goal_profile": "Veri sınırlı",
+        "belirsiz": True,
+        "eg": eg,
+        "dg": dg,
+        "score": 45.0,
+        "playable_score": 45.0,
+        "ornek": 0,
+        "ornek_durum": "Oran yok",
+        "onerilen_min_mac": 0,
+        "kullanilan_tolerans": 0,
+        "risk_label": "YÜKSEK",
+        "risk_cls": "risk-yuksek",
+        "scenario_label": "Oran gelince yeniden analiz et",
+        "canli_label": "İlk 15 dk izle",
+        "canli_p": 45,
+        "canli_strateji": "Bu maçta H2H oranı bulunmadığı için oran-benzerliği modeli çalışmadı. Maç başı tempo, şut ve baskı görülmeden giriş önerilmez.",
+        "ms1_p": 34,
+        "msx_p": 33,
+        "ms2_p": 33,
+        "ms25_p": 50,
+        "ms25a_p": 50,
+        "ms35_p": 35,
+        "kg_var_p": 50,
+        "kg_yok_p": 50,
+        "iy1_p": 33,
+        "iyx_p": 34,
+        "iy2_p": 33,
+        "iy05_p": 50,
+        "iy05a_p": 50,
+        "htft_mod": "-",
+        "htft_p": 0,
+        "fake_drop": False,
+        "stability_tols": [],
+        "stability_count": 0,
+        "stability_text": "Oran yok",
+        "stability_early_tols": [],
+        "stability_late_tols": [],
+        "stability_early_text": "",
+        "stability_late_text": "",
+        "oynanabilir": False,
+        "nedenler": [
+            "Bu maç bültende var ancak H2H 1/X/2 oranı bulunamadı.",
+            "Oran-benzerliği modeli bu maçta çalıştırılmadı.",
+            "Maç ana listede kaybolmasın diye ORANSIZ analiz olarak gösterildi.",
+            "Oran açıldığında analizi tekrar başlatırsan maç otomatik ORANLI analize döner.",
+        ],
+    }
 
 
 
@@ -2933,7 +3093,7 @@ with st.sidebar:
 
     if 'son_analiz' in st.session_state:
         st.markdown(
-            f"<div class='summary-note'>Son analiz: {st.session_state.son_analiz}<br>Toplam maç: {st.session_state.get('toplam_mac',0)}</div>",
+            f"<div class='summary-note'>Son analiz: {st.session_state.son_analiz}<br>Toplam maç: {st.session_state.get('toplam_mac',0)} · Oranlı: {st.session_state.get('oranli_mac',0)} · Oransız: {st.session_state.get('oransiz_mac',0)}</div>",
             unsafe_allow_html=True,
         )
 
@@ -2952,13 +3112,33 @@ if analiz_btn:
 
         final = []
         stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
-        if not bulten.empty and not gecmis.empty:
+        if not bulten.empty:
             for _, m in bulten.iterrows():
+                m_dict = m.to_dict()
+                m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
+
+                oranli_mi = all(pd.notna(m_dict.get(x)) for x in ["h", "b", "a"])
+
+                # ORANSIZ: bültende var ama 1/X/2 H2H oranı yok. Listeye ayrı analiz tipiyle ekle.
+                if not oranli_mi:
+                    if oynanabilir_esik:
+                        # Kullanıcı güven eşiği seçtiyse oransız maçları ele; çünkü gerçek güven yok.
+                        continue
+                    t = oransiz_analiz_uret(m_dict)
+                    final.append({"m": m_dict, "t": t, "b": pd.DataFrame()})
+                    continue
+
+                # ORANLI: mevcut oran-benzerliği modeli.
+                if gecmis.empty:
+                    continue
+
                 t, b_det = hesapla(gecmis, m, TOLERANS)
                 if t is None:
                     continue
                 if len(b_det) < min_ornek:
                     continue
+
+                t["analiz_tipi"] = "ORANLI"
 
                 stable_hits = []
                 for stab_tol in stability_tols:
@@ -2998,8 +3178,6 @@ if analiz_btn:
 
                 if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
                     continue
-                m_dict = m.to_dict()
-                m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
                 final.append({"m": m_dict, "t": t, "b": b_det})
 
         final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0), x["t"].get("ornek", 0)), reverse=True)
@@ -3028,6 +3206,8 @@ if analiz_btn:
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
         st.session_state.toplam_mac = len(final)
+        st.session_state.oranli_mac = sum(1 for x in final if x.get("t", {}).get("analiz_tipi") == "ORANLI")
+        st.session_state.oransiz_mac = sum(1 for x in final if x.get("t", {}).get("analiz_tipi") == "ORANSIZ")
         st.rerun()
 
 def detay_popup_icerigi():
@@ -3037,6 +3217,9 @@ def detay_popup_icerigi():
         idx = st.session_state.detay_idx
         item = st.session_state.final_list[idx]
     m, t, b_det = item["m"], item["t"], item["b"]
+    odd_h_txt = fmt_odd(m.get("h")) or "—"
+    odd_b_txt = fmt_odd(m.get("b")) or "—"
+    odd_a_txt = fmt_odd(m.get("a")) or "—"
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
 
@@ -3239,9 +3422,9 @@ def detay_popup_icerigi():
           <div class="risk-row" style="margin-top:14px">
             <span class="rk">ORANLAR</span>
             <div style="display:flex;gap:16px">
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['h']:.2f}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['b']:.2f}</div></div>
-              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{m['a']:.2f}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">1</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{odd_h_txt}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">X</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{odd_b_txt}</div></div>
+              <div style="text-align:center"><div style="font-size:0.62rem;color:#94a3b8">2</div><div style="font-weight:700;color:#fff;font-size:0.95rem">{odd_a_txt}</div></div>
             </div>
           </div>
         </div>
@@ -3447,20 +3630,33 @@ else:
             st.info(f"{top_baslik} listesi için önce analizi başlatmalısın.")
         st.stop()
 
-    fc1, fc2, fc3, fc4 = st.columns(4)
+    oranli = [(idx, x) for idx, x in indexed_fl if x["t"].get("analiz_tipi") == "ORANLI"]
+    oransiz = [(idx, x) for idx, x in indexed_fl if x["t"].get("analiz_tipi") == "ORANSIZ"]
+
+    fc1, fc2, fc3 = st.columns(3)
     with fc1:
         if st.button(f"Tümü {len(fl)}", use_container_width=True, key="f1"):
             st.session_state.filtre = "tumu"
             st.rerun()
     with fc2:
+        if st.button(f"✅ Oranlı {len(oranli)}", use_container_width=True, key="f_oranli"):
+            st.session_state.filtre = "oranli"
+            st.rerun()
+    with fc3:
+        if st.button(f"⚠️ Oransız {len(oransiz)}", use_container_width=True, key="f_oransiz"):
+            st.session_state.filtre = "oransiz"
+            st.rerun()
+
+    fc4, fc5, fc6 = st.columns(3)
+    with fc4:
         if st.button(f"🔥 Yüksek Güven {len(yuksek)}", use_container_width=True, key="f2"):
             st.session_state.filtre = "yuksek"
             st.rerun()
-    with fc3:
+    with fc5:
         if st.button(f"🟡 Orta Güven {len(orta)}", use_container_width=True, key="f3"):
             st.session_state.filtre = "orta"
             st.rerun()
-    with fc4:
+    with fc6:
         if st.button(f"🎯 Güçlü Kombo {len(kombolu)}", use_container_width=True, key="f4"):
             st.session_state.filtre = "kombo"
             st.rerun()
@@ -3476,6 +3672,10 @@ else:
         goster = sorted(orta, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
     elif filtre == "kombo":
         goster = sorted(kombolu, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
+    elif filtre == "oranli":
+        goster = oranli
+    elif filtre == "oransiz":
+        goster = oransiz
     else:
         goster = indexed_fl
 
@@ -3498,6 +3698,10 @@ else:
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
         ai_comment_html = ""
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
+        odd_h_txt = fmt_odd(m.get("h")) or "—"
+        odd_b_txt = fmt_odd(m.get("b")) or "—"
+        odd_a_txt = fmt_odd(m.get("a")) or "—"
+        analiz_tipi_badge = "⚠️ ORANSIZ" if t.get("analiz_tipi") == "ORANSIZ" else "✅ ORANLI"
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
         combo_html = ''
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
@@ -3529,7 +3733,7 @@ else:
               <div class="mk-takimlar">
                 <div class="mk-ev">⬜ {m['ev']}</div>
                 <div class="mk-dep">🟦 {m['dep']}</div>
-                <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
+                <div class="mk-mini">{analiz_tipi_badge} · Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
                 {belirsiz_html}
                 {ai_comment_html}
               </div>
@@ -3554,11 +3758,11 @@ else:
               <div>
                 <div class="mk-label">ORANLAR</div>
                 <div class="oran-row">
-                  <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
+                  <div class="oran-box"><div class="ov">1</div><div class="val">{odd_h_txt}</div></div>
                   <div style="color:#2a2a2a">/</div>
-                  <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
+                  <div class="oran-box"><div class="ov">X</div><div class="val">{odd_b_txt}</div></div>
                   <div style="color:#2a2a2a">/</div>
-                  <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
+                  <div class="oran-box"><div class="ov">2</div><div class="val">{odd_a_txt}</div></div>
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
