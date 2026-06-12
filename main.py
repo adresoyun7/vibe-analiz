@@ -1,6 +1,7 @@
 
 import io
 import math
+import difflib
 from datetime import datetime, timedelta
 from html import escape
 
@@ -49,6 +50,14 @@ def get_app_api_key():
     return str(get_secret_value("ODDS_API_KEY", "")).strip()
 
 
+def get_api_football_key():
+    """Opsiyonel fikstür kaynağı. Gerçek tüm fikstürü çekmek için API-FOOTBALL_KEY gerekir."""
+    user_key = str(st.session_state.get("api_football_key", "")).strip()
+    if user_key:
+        return user_key
+    return str(get_secret_value("API_FOOTBALL_KEY", "")).strip()
+
+
 def api_key_panel():
     with st.sidebar:
         st.markdown("### 🔑 API Key Girişi")
@@ -76,9 +85,36 @@ def api_key_panel():
                 st.rerun()
 
         if get_app_api_key():
-            st.success("API key aktif ✅")
+            st.success("Odds API key aktif ✅")
         else:
-            st.warning("Maçları çekmek için API key girmen gerekiyor.")
+            st.warning("Maçları çekmek için ODDS API key girmen gerekiyor.")
+
+        st.markdown("---")
+        st.markdown("### 🗓️ Fikstür API Key")
+        af_current = st.session_state.get("api_football_key", "")
+        af_input = st.text_input(
+            "API-FOOTBALL KEY (opsiyonel)",
+            value=af_current,
+            placeholder="Tüm fikstür için API-FOOTBALL key...",
+            type="password",
+            key="api_football_key_input",
+        )
+        c3, c4 = st.columns(2)
+        with c3:
+            if st.button("Kaydet", use_container_width=True, key="save_api_football_key_btn"):
+                st.session_state["api_football_key"] = af_input.strip()
+                st.success("Fikstür key kaydedildi ✅")
+                st.rerun()
+        with c4:
+            if st.button("Temizle", use_container_width=True, key="clear_api_football_key_btn"):
+                st.session_state.pop("api_football_key", None)
+                st.success("Fikstür key temizlendi")
+                st.rerun()
+
+        if get_api_football_key():
+            st.success("API-FOOTBALL aktif ✅ Tüm fikstür modu")
+        else:
+            st.info("API-FOOTBALL key yoksa sistem The Odds API events + odds listesini kullanır.")
 
 
 def require_api_key():
@@ -1071,6 +1107,164 @@ def futbol_veri_motoru(sezonlar):
     return pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
 
 
+
+
+# ==========================================================
+# OPSİYONEL TAM FİKSTÜR KAYNAĞI: API-FOOTBALL
+# ==========================================================
+# The Odds API /odds endpoint'i doğal olarak sadece oranı açılmış maçları döndürür.
+# /events endpoint'i daha geniştir ama yine de gerçek fikstür API'si değildir.
+# API-FOOTBALL_KEY girilirse seçili liglerin aynı gün fikstürü ayrıca çekilir,
+# sonra The Odds API oranlarıyla eşleştirilir. Böylece oranı olmayan maçlar da
+# ORANSIZ AI analiz olarak listede kalır.
+
+API_FOOTBALL_LEAGUE_MAP = {
+    "soccer_epl": 39,
+    "soccer_efl_champ": 40,
+    "soccer_england_league1": 41,
+    "soccer_england_league2": 42,
+    "soccer_fa_cup": 45,
+    "soccer_england_efl_cup": 48,
+    "soccer_spain_la_liga": 140,
+    "soccer_spain_segunda_division": 141,
+    "soccer_spain_copa_del_rey": 143,
+    "soccer_germany_bundesliga": 78,
+    "soccer_germany_bundesliga2": 79,
+    "soccer_germany_dfb_pokal": 81,
+    "soccer_italy_serie_a": 135,
+    "soccer_italy_serie_b": 136,
+    "soccer_italy_coppa_italia": 137,
+    "soccer_france_ligue_one": 61,
+    "soccer_france_ligue_two": 62,
+    "soccer_france_coupe_de_france": 66,
+    "soccer_turkey_super_league": 203,
+    "soccer_netherlands_eredivisie": 88,
+    "soccer_belgium_first_div": 144,
+    "soccer_portugal_primeira_liga": 94,
+    "soccer_spl": 179,
+    "soccer_denmark_superliga": 119,
+    "soccer_austria_bundesliga": 218,
+    "soccer_switzerland_superleague": 207,
+    "soccer_sweden_allsvenskan": 113,
+    "soccer_norway_eliteserien": 103,
+    "soccer_poland_ekstraklasa": 106,
+    "soccer_finland_veikkausliiga": 244,
+    "soccer_league_of_ireland": 357,
+    "soccer_greece_super_league": 197,
+    "soccer_usa_mls": 253,
+    "soccer_brazil_campeonato": 71,
+    "soccer_argentina_primera_division": 128,
+    "soccer_japan_j_league": 98,
+    "soccer_mexico_ligamx": 262,
+    "soccer_korea_kleague1": 292,
+    "soccer_china_superleague": 169,
+    "soccer_saudi_arabia_pro_league": 307,
+    "soccer_chile_campeonato": 265,
+    "soccer_uefa_champs_league": 2,
+    "soccer_uefa_europa_league": 3,
+    "soccer_uefa_europa_conference_league": 848,
+    "soccer_fifa_world_cup": 1,
+}
+
+API_FOOTBALL_SEASON_START_MONTH = {
+    39: 8, 40: 8, 41: 8, 42: 8, 45: 8, 48: 8,
+    140: 8, 141: 8, 143: 8, 78: 8, 79: 8, 81: 8,
+    135: 8, 136: 8, 137: 8, 61: 8, 62: 8, 66: 8,
+    203: 8, 88: 8, 144: 7, 94: 8, 179: 8, 119: 7,
+    218: 7, 207: 7, 106: 7, 197: 8, 307: 8,
+    # Bahar-yaz sezonu ligleri
+    113: 2026, 103: 2026, 244: 2026, 357: 2026, 253: 2026,
+    71: 2026, 128: 2026, 98: 2026, 292: 2026, 169: 2026,
+    265: 2026,
+    # Turnuvalar
+    1: 2026, 2: 2025, 3: 2025, 848: 2025,
+}
+
+
+def api_football_season_for_date(league_id, date_obj):
+    val = API_FOOTBALL_SEASON_START_MONTH.get(int(league_id), 8)
+    if val > 1000:
+        return val
+    return date_obj.year if date_obj.month >= int(val) else date_obj.year - 1
+
+
+def normalize_team_name(name):
+    s = str(name or "").lower().strip()
+    for ch in [".", ",", "'", "’", "-", "_", "&", "(", ")"]:
+        s = s.replace(ch, " ")
+    aliases = {
+        "man utd": "manchester united",
+        "man united": "manchester united",
+        "man city": "manchester city",
+        "spurs": "tottenham",
+        "inter milan": "internazionale",
+        "inter": "internazionale",
+        "psg": "paris saint germain",
+        "bayern munich": "bayern münchen",
+        "galatasaray sk": "galatasaray",
+        "fenerbahce": "fenerbahçe",
+        "besiktas": "beşiktaş",
+    }
+    s = " ".join(s.split())
+    return aliases.get(s, s)
+
+
+def fixture_match_key(home, away, zaman):
+    dt_key = zaman.strftime("%Y-%m-%d") if hasattr(zaman, "strftime") else ""
+    return (normalize_team_name(home), normalize_team_name(away), dt_key)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def api_football_fikstur_cek(api_key, kodlar, t):
+    if not api_key:
+        return pd.DataFrame()
+    rows = []
+    wanted = [API_FOOTBALL_LEAGUE_MAP.get(k) for k in kodlar if API_FOOTBALL_LEAGUE_MAP.get(k)]
+    for league_id in sorted(set(wanted)):
+        season = api_football_season_for_date(league_id, t)
+        try:
+            r = requests.get(
+                "https://v3.football.api-sports.io/fixtures",
+                headers={"x-apisports-key": api_key},
+                params={"date": t.strftime("%Y-%m-%d"), "league": league_id, "season": season, "timezone": "Europe/Istanbul"},
+                timeout=14,
+            )
+            if r.status_code != 200:
+                continue
+            payload = r.json()
+            for fx in payload.get("response", []) or []:
+                fixture = fx.get("fixture", {}) or {}
+                league = fx.get("league", {}) or {}
+                teams = fx.get("teams", {}) or {}
+                home = (teams.get("home", {}) or {}).get("name", "")
+                away = (teams.get("away", {}) or {}).get("name", "")
+                raw_date = fixture.get("date")
+                try:
+                    tm = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00")).replace(tzinfo=None)
+                except Exception:
+                    tm = datetime.combine(t, datetime.min.time())
+                if not home or not away:
+                    continue
+                rows.append({
+                    "event_id": f"apifootball_{fixture.get('id','')}",
+                    "sport_key": f"api_football_{league_id}",
+                    "lig": league.get("name") or f"League {league_id}",
+                    "zaman": tm,
+                    "ev": home,
+                    "dep": away,
+                    "h": None,
+                    "b": None,
+                    "a": None,
+                    "analiz_tipi": "ORANSIZ",
+                    "oran_durumu": "Fikstür var, H2H oranı yok",
+                    "fixture_source": "API-FOOTBALL",
+                })
+        except Exception:
+            continue
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def bulten_cek(key, kodlar, t):
     """
@@ -1116,6 +1310,18 @@ def bulten_cek(key, kodlar, t):
 
     tum_maclar = {}
 
+    # 0) Opsiyonel gerçek fikstür: API-FOOTBALL key varsa önce tüm fikstürü al.
+    # Sonra The Odds API oranlarıyla aynı maçları eşleştir.
+    api_football_key = get_api_football_key()
+    try:
+        fikstur_df = api_football_fikstur_cek(api_football_key, tuple(kodlar), t) if api_football_key else pd.DataFrame()
+        if not fikstur_df.empty:
+            for _, fx in fikstur_df.iterrows():
+                row = fx.to_dict()
+                tum_maclar[fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))] = row
+    except Exception:
+        pass
+
     for k in kodlar:
         # 1) Önce fikstür/events: oran olmasa bile maç yakalansın.
         try:
@@ -1154,7 +1360,26 @@ def bulten_cek(key, kodlar, t):
                             "analiz_tipi": "ORANSIZ",
                             "oran_durumu": "H2H oranı yok",
                         }
-                        tum_maclar[row["event_id"] or match_key(row)] = row
+                        # API-FOOTBALL fikstüründen aynı maç geldiyse onu koru/güncelle.
+                        fk = fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))
+                        if fk in tum_maclar:
+                            tum_maclar[fk].update({kk: vv for kk, vv in row.items() if vv not in [None, ""]})
+                        else:
+                            fk = fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))
+                if fk in tum_maclar:
+                    # Fikstür maçına oranları ve Odds API başlığını işle.
+                    tum_maclar[fk].update({
+                        "event_id": row.get("event_id") or tum_maclar[fk].get("event_id"),
+                        "sport_key": row.get("sport_key") or tum_maclar[fk].get("sport_key"),
+                        "lig": row.get("lig") or tum_maclar[fk].get("lig"),
+                        "h": row.get("h"),
+                        "b": row.get("b"),
+                        "a": row.get("a"),
+                        "analiz_tipi": row.get("analiz_tipi", "ORANSIZ"),
+                        "oran_durumu": row.get("oran_durumu", "H2H oranı yok"),
+                    })
+                else:
+                    tum_maclar[row["event_id"] or match_key(row)] = row
         except Exception:
             pass
 
@@ -1229,7 +1454,21 @@ def bulten_cek(key, kodlar, t):
                         row["analiz_tipi"] = "ORANLI"
                         row["oran_durumu"] = "H2H oranı var"
 
-                tum_maclar[row["event_id"] or match_key(row)] = row
+                fk = fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))
+                if fk in tum_maclar:
+                    # Fikstür maçına oranları ve Odds API başlığını işle.
+                    tum_maclar[fk].update({
+                        "event_id": row.get("event_id") or tum_maclar[fk].get("event_id"),
+                        "sport_key": row.get("sport_key") or tum_maclar[fk].get("sport_key"),
+                        "lig": row.get("lig") or tum_maclar[fk].get("lig"),
+                        "h": row.get("h"),
+                        "b": row.get("b"),
+                        "a": row.get("a"),
+                        "analiz_tipi": row.get("analiz_tipi", "ORANSIZ"),
+                        "oran_durumu": row.get("oran_durumu", "H2H oranı yok"),
+                    })
+                else:
+                    tum_maclar[row["event_id"] or match_key(row)] = row
         except Exception:
             continue
 
@@ -1240,35 +1479,37 @@ def bulten_cek(key, kodlar, t):
     return df.sort_values("zaman").reset_index(drop=True)
 
 
-def oransiz_analiz_uret(m_row):
+def best_team_match(team_name, candidates, threshold=0.68):
+    target = normalize_team_name(team_name)
+    cand_norm = {normalize_team_name(c): c for c in candidates if str(c).strip()}
+    if target in cand_norm:
+        return cand_norm[target]
+    matches = difflib.get_close_matches(target, list(cand_norm.keys()), n=1, cutoff=threshold)
+    return cand_norm[matches[0]] if matches else None
+
+
+def oransiz_analiz_uret(m_row, b_df=None):
     """
-    H2H oranı eksik maçlar için güvenli, düşük tavanlı fikstür analizi.
-    Bu analiz oran-benzerliği modeli değildir; sadece maçın bültende görünmesini sağlar.
+    H2H oranı eksik maçlar için geçmiş maç/form tabanlı AI analiz.
+
+    Oran-benzerliği kullanılmaz. Takımlar geçmiş veri havuzunda bulunursa:
+    - son form
+    - iç/dış saha gol ortalaması
+    - KG Var / 2.5 Üst eğilimi
+    - lig genel gol profili
+    üzerinden düşük tavanlı tahmin üretir.
     """
     ev = str(m_row.get("ev", ""))
     dep = str(m_row.get("dep", ""))
     lig = str(m_row.get("lig", ""))
 
-    # Takım isimleri üzerinden çok basit ve deterministik skor varyasyonu.
-    seed = sum(ord(c) for c in (ev + dep + lig))
-    skorlar = [(1, 1), (1, 0), (0, 1), (2, 1), (1, 2), (2, 0), (0, 2)]
-    eg, dg = skorlar[seed % len(skorlar)]
-
-    ana_label = "Oransız / İzle"
-    if eg + dg >= 3:
-        alt_label = "2.5 Üst eğilimi"
-    elif eg == dg:
-        alt_label = "Dengeli maç"
-    else:
-        alt_label = "Taraf eğilimi zayıf"
-
-    return {
+    base = {
         "analiz_tipi": "ORANSIZ",
-        "ana_label": ana_label,
+        "ana_label": "Oransız / İzle",
         "ana_p": 45,
         "ana_raw_p": 45,
         "ana_odd": None,
-        "alt_label": alt_label,
+        "alt_label": "Geçmiş veri sınırlı",
         "alt_p": 40,
         "combo_label": "",
         "combo_p": 0,
@@ -1277,8 +1518,8 @@ def oransiz_analiz_uret(m_row):
         "match_type": "Oransız",
         "goal_profile": "Veri sınırlı",
         "belirsiz": True,
-        "eg": eg,
-        "dg": dg,
+        "eg": 1,
+        "dg": 1,
         "score": 45.0,
         "playable_score": 45.0,
         "ornek": 0,
@@ -1287,10 +1528,10 @@ def oransiz_analiz_uret(m_row):
         "kullanilan_tolerans": 0,
         "risk_label": "YÜKSEK",
         "risk_cls": "risk-yuksek",
-        "scenario_label": "Oran gelince yeniden analiz et",
+        "scenario_label": "Oran yok · geçmiş form analizi",
         "canli_label": "İlk 15 dk izle",
         "canli_p": 45,
-        "canli_strateji": "Bu maçta H2H oranı bulunmadığı için oran-benzerliği modeli çalışmadı. Maç başı tempo, şut ve baskı görülmeden giriş önerilmez.",
+        "canli_strateji": "H2H oranı olmadığı için piyasa referansı yok. İlk 15 dakikada tempo, şut ve baskı doğrulanmadan agresif giriş önerilmez.",
         "ms1_p": 34,
         "msx_p": 33,
         "ms2_p": 33,
@@ -1316,12 +1557,180 @@ def oransiz_analiz_uret(m_row):
         "stability_late_text": "",
         "oynanabilir": False,
         "nedenler": [
-            "Bu maç bültende var ancak H2H 1/X/2 oranı bulunamadı.",
-            "Oran-benzerliği modeli bu maçta çalıştırılmadı.",
-            "Maç ana listede kaybolmasın diye ORANSIZ analiz olarak gösterildi.",
-            "Oran açıldığında analizi tekrar başlatırsan maç otomatik ORANLI analize döner.",
+            "Bu maçta H2H 1/X/2 oranı bulunamadı.",
+            "Oran-benzerliği modeli yerine geçmiş maç/form analizi kullanıldı.",
+            "Oran olmadığı için güven yüzdesi bilinçli olarak düşük tavanlı tutuldu.",
         ],
     }
+
+    if b_df is None or not isinstance(b_df, pd.DataFrame) or b_df.empty:
+        seed = sum(ord(c) for c in (ev + dep + lig))
+        skorlar = [(1, 1), (1, 0), (0, 1), (2, 1), (1, 2), (2, 0), (0, 2)]
+        base["eg"], base["dg"] = skorlar[seed % len(skorlar)]
+        base["nedenler"].append("Geçmiş veri havuzu boş olduğu için sadece fikstür bazlı temkinli gösterim yapıldı.")
+        return base
+
+    df = b_df.copy()
+    needed = {"HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR"}
+    if not needed.issubset(set(df.columns)):
+        base["nedenler"].append("Geçmiş veri kolonları eksik olduğu için detaylı form analizi yapılamadı.")
+        return base
+
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.sort_values("Date", ascending=False)
+
+    teams = pd.concat([df["HomeTeam"].dropna(), df["AwayTeam"].dropna()]).astype(str).unique().tolist()
+    ev_match = best_team_match(ev, teams)
+    dep_match = best_team_match(dep, teams)
+
+    if not ev_match or not dep_match:
+        base["nedenler"].append(f"Takım adı geçmiş veriyle eşleşmedi: {ev} / {dep}.")
+        base["nedenler"].append("Bu durumda maç listede kalır ama detaylı AI form analizi güvenli şekilde sınırlanır.")
+        return base
+
+    for c in ["FTHG", "FTAG"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    if "HTHG" in df.columns:
+        df["HTHG"] = pd.to_numeric(df["HTHG"], errors="coerce")
+    if "HTAG" in df.columns:
+        df["HTAG"] = pd.to_numeric(df["HTAG"], errors="coerce")
+
+    home_all = df[(df["HomeTeam"] == ev_match) | (df["AwayTeam"] == ev_match)].head(10)
+    away_all = df[(df["HomeTeam"] == dep_match) | (df["AwayTeam"] == dep_match)].head(10)
+    home_home = df[df["HomeTeam"] == ev_match].head(8)
+    away_away = df[df["AwayTeam"] == dep_match].head(8)
+
+    sample = int(len(home_all) + len(away_all))
+    if sample < 6:
+        base["nedenler"].append(f"Eşleşen geçmiş veri az bulundu: {sample} maç.")
+        return base
+
+    def team_points(rows, team):
+        pts = 0
+        games = 0
+        for _, r in rows.iterrows():
+            h, a, ftr = r.get("HomeTeam"), r.get("AwayTeam"), r.get("FTR")
+            if team == h:
+                pts += 3 if ftr == "H" else 1 if ftr == "D" else 0
+                games += 1
+            elif team == a:
+                pts += 3 if ftr == "A" else 1 if ftr == "D" else 0
+                games += 1
+        return pts / max(games, 1)
+
+    def goals_for_against(rows, team):
+        gf, ga, games = 0.0, 0.0, 0
+        for _, r in rows.iterrows():
+            if team == r.get("HomeTeam"):
+                gf += float(r.get("FTHG", 0) or 0); ga += float(r.get("FTAG", 0) or 0); games += 1
+            elif team == r.get("AwayTeam"):
+                gf += float(r.get("FTAG", 0) or 0); ga += float(r.get("FTHG", 0) or 0); games += 1
+        return gf / max(games, 1), ga / max(games, 1), games
+
+    ev_form = team_points(home_all, ev_match)
+    dep_form = team_points(away_all, dep_match)
+    ev_gf, ev_ga, ev_games = goals_for_against(home_home if len(home_home) >= 3 else home_all, ev_match)
+    dep_gf, dep_ga, dep_games = goals_for_against(away_away if len(away_away) >= 3 else away_all, dep_match)
+
+    # Beklenen gol: ev hücumu + deplasman savunma zayıflığı, deplasman hücumu + ev savunma zayıflığı
+    exp_home = max(0.2, (ev_gf * 0.62 + dep_ga * 0.38))
+    exp_away = max(0.2, (dep_gf * 0.58 + ev_ga * 0.42))
+    total_exp = exp_home + exp_away
+
+    eg = max(0, int(math.floor(exp_home + 0.45)))
+    dg = max(0, int(math.floor(exp_away + 0.45)))
+    if eg == 0 and dg == 0:
+        eg, dg = 1, 0 if ev_form >= dep_form else 0
+
+    form_diff = ev_form - dep_form
+    ms1 = 36 + min(18, max(-12, form_diff * 8)) + min(8, max(-6, (exp_home - exp_away) * 6))
+    ms2 = 32 + min(18, max(-12, -form_diff * 8)) + min(8, max(-6, (exp_away - exp_home) * 6))
+    msx = 100 - ms1 - ms2
+    if msx < 20:
+        msx = 20
+    total_ms = ms1 + msx + ms2
+    ms1_p = pct100(ms1 / total_ms * 100)
+    msx_p = pct100(msx / total_ms * 100)
+    ms2_p = pct100(ms2 / total_ms * 100)
+
+    ust25_p = pct100(42 + (total_exp - 2.25) * 18)
+    ust25_p = max(32, min(68, ust25_p))
+    kg_var_p = pct100(40 + (min(exp_home, exp_away) - 0.75) * 22 + (total_exp - 2.2) * 8)
+    kg_var_p = max(30, min(66, kg_var_p))
+
+    candidates = [
+        ("MS 1", ms1_p),
+        ("Beraberlik", msx_p),
+        ("MS 2", ms2_p),
+        ("2.5 Üst", ust25_p),
+        ("2.5 Alt", 100 - ust25_p),
+        ("KG Var", kg_var_p),
+        ("KG Yok", 100 - kg_var_p),
+    ]
+    ana_label, raw_p = max(candidates, key=lambda x: x[1])
+    # Oransız analiz tavanı: piyasa oranı yoksa güveni şişirme.
+    ana_p = min(int(raw_p), 62)
+    if ana_p < 52:
+        ana_label = "Oransız / İzle"
+        ana_p = max(45, ana_p)
+
+    alt_candidates = [x for x in candidates if x[0] != ana_label]
+    alt_label, alt_raw = max(alt_candidates, key=lambda x: x[1])
+    alt_p = min(int(alt_raw), 58)
+
+    if ana_label in ["2.5 Üst", "KG Var"]:
+        scenario = f"{ana_label} · tempo onayı bekle"
+    elif ana_label in ["MS 1", "MS 2"]:
+        scenario = f"{ana_label} · taraf form avantajı"
+    else:
+        scenario = f"{ana_label} · düşük ağırlık"
+
+    profile = "Yüksek Gollü" if total_exp >= 2.75 else "Dengeli" if total_exp >= 2.25 else "Düşük Gollü"
+    playable = max(42, min(62, ana_p + min(8, sample * 0.25)))
+
+    base.update({
+        "ana_label": ana_label,
+        "ana_p": ana_p,
+        "ana_raw_p": int(raw_p),
+        "alt_label": alt_label,
+        "alt_p": alt_p,
+        "match_type": "Form Analizi",
+        "goal_profile": profile,
+        "belirsiz": ana_label == "Oransız / İzle",
+        "eg": eg,
+        "dg": dg,
+        "score": float(playable),
+        "playable_score": float(playable),
+        "ornek": sample,
+        "ornek_durum": "Geçmiş form" if sample >= 12 else "Az örnek",
+        "risk_label": "ORTA" if ana_p >= 58 and sample >= 14 else "YÜKSEK",
+        "risk_cls": "risk-orta" if ana_p >= 58 and sample >= 14 else "risk-yuksek",
+        "scenario_label": scenario,
+        "canli_label": "Tempo Onayı" if ana_label in ["2.5 Üst", "KG Var"] else "İlk 15 dk izle",
+        "canli_p": min(60, max(45, ana_p)),
+        "canli_strateji": "Oran yok; geçmiş form sinyali var. İlk 15 dakikada şut, ceza sahası aksiyonu ve baskı ana tahmini destekliyorsa canlı giriş düşün.",
+        "ms1_p": ms1_p,
+        "msx_p": msx_p,
+        "ms2_p": ms2_p,
+        "ms25_p": ust25_p,
+        "ms25a_p": 100 - ust25_p,
+        "ms35_p": max(20, min(55, ust25_p - 12)),
+        "kg_var_p": kg_var_p,
+        "kg_yok_p": 100 - kg_var_p,
+        "iy05_p": max(42, min(64, int(total_exp * 20))),
+        "iy05a_p": 100 - max(42, min(64, int(total_exp * 20))),
+        "oynanabilir": False,
+        "nedenler": [
+            "Bu maçta H2H 1/X/2 oranı bulunamadı; oran-benzerliği modeli kullanılmadı.",
+            f"Takım eşleşmesi: {ev} → {ev_match}, {dep} → {dep_match}.",
+            f"Ev sahibi son form ortalaması: {ev_form:.2f} puan/maç.",
+            f"Deplasman son form ortalaması: {dep_form:.2f} puan/maç.",
+            f"Beklenen gol profili yaklaşık {exp_home:.2f} - {exp_away:.2f} ({profile}).",
+            f"Analiz {sample} takım geçmişi örneğine dayanıyor; oran olmadığı için güven %{ana_p} ile sınırlandı.",
+        ],
+    })
+    return base
 
 
 
@@ -2973,9 +3382,36 @@ with st.sidebar:
                 st.success("API Key temizlendi")
                 st.rerun()
         if get_app_api_key():
-            st.success("API key aktif ✅")
+            st.success("Odds API key aktif ✅")
         else:
-            st.warning("Maçları çekmek için API key girmen gerekiyor.")
+            st.warning("Maçları çekmek için ODDS API key girmen gerekiyor.")
+
+        st.markdown("---")
+        st.markdown("### 🗓️ Fikstür API Key")
+        af_current = st.session_state.get("api_football_key", "")
+        af_input = st.text_input(
+            "API-FOOTBALL KEY (opsiyonel)",
+            value=af_current,
+            placeholder="Tüm fikstür için API-FOOTBALL key...",
+            type="password",
+            key="api_football_key_input",
+        )
+        c3, c4 = st.columns(2)
+        with c3:
+            if st.button("Kaydet", use_container_width=True, key="save_api_football_key_btn"):
+                st.session_state["api_football_key"] = af_input.strip()
+                st.success("Fikstür key kaydedildi ✅")
+                st.rerun()
+        with c4:
+            if st.button("Temizle", use_container_width=True, key="clear_api_football_key_btn"):
+                st.session_state.pop("api_football_key", None)
+                st.success("Fikstür key temizlendi")
+                st.rerun()
+
+        if get_api_football_key():
+            st.success("API-FOOTBALL aktif ✅ Tüm fikstür modu")
+        else:
+            st.info("API-FOOTBALL key yoksa sistem The Odds API events + odds listesini kullanır.")
 
     sayfa_modu = st.radio(
         "Görünüm",
@@ -3124,7 +3560,7 @@ if analiz_btn:
                     if oynanabilir_esik:
                         # Kullanıcı güven eşiği seçtiyse oransız maçları ele; çünkü gerçek güven yok.
                         continue
-                    t = oransiz_analiz_uret(m_dict)
+                    t = oransiz_analiz_uret(m_dict, gecmis)
                     final.append({"m": m_dict, "t": t, "b": pd.DataFrame()})
                     continue
 
