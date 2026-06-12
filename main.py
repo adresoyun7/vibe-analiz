@@ -1216,23 +1216,75 @@ def fixture_match_key(home, away, zaman):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def api_football_fikstur_cek(api_key, kodlar, t):
+    """API-FOOTBALL'dan seçili liglerin gerçek fikstürünü çeker.
+
+    Notlar:
+    - api-football.com / api-sports.io key için header: x-apisports-key
+    - RapidAPI üzerinden alınan key için alternatif header da denenir.
+    - Hata/boş sonuç bilgisi st.session_state içine yazılır ki ekranda görülebilsin.
+    """
     if not api_key:
         return pd.DataFrame()
+
     rows = []
+    debug = []
     wanted = [API_FOOTBALL_LEAGUE_MAP.get(k) for k in kodlar if API_FOOTBALL_LEAGUE_MAP.get(k)]
+
+    if not wanted:
+        st.session_state["api_football_debug"] = "API-FOOTBALL eşleşen lig bulamadı. Seçili liglerin API_FOOTBALL_LEAGUE_MAP içinde olması gerekiyor."
+        return pd.DataFrame()
+
+    base_url = "https://v3.football.api-sports.io/fixtures"
+
+    def request_with_key(params):
+        # 1) Direkt API-FOOTBALL / API-SPORTS key
+        r1 = requests.get(
+            base_url,
+            headers={"x-apisports-key": api_key},
+            params=params,
+            timeout=18,
+        )
+        if r1.status_code == 200:
+            return r1, "x-apisports-key"
+
+        # 2) RapidAPI key kullananlar için fallback
+        r2 = requests.get(
+            base_url,
+            headers={
+                "x-rapidapi-key": api_key,
+                "x-rapidapi-host": "v3.football.api-sports.io",
+            },
+            params=params,
+            timeout=18,
+        )
+        if r2.status_code == 200:
+            return r2, "x-rapidapi-key"
+
+        return r1, "x-apisports-key"
+
     for league_id in sorted(set(wanted)):
         season = api_football_season_for_date(league_id, t)
+        params = {
+            "date": t.strftime("%Y-%m-%d"),
+            "league": league_id,
+            "season": season,
+            "timezone": "Europe/Istanbul",
+        }
         try:
-            r = requests.get(
-                "https://v3.football.api-sports.io/fixtures",
-                headers={"x-apisports-key": api_key},
-                params={"date": t.strftime("%Y-%m-%d"), "league": league_id, "season": season, "timezone": "Europe/Istanbul"},
-                timeout=14,
-            )
+            r, header_mode = request_with_key(params)
             if r.status_code != 200:
+                debug.append(f"Lig {league_id}: HTTP {r.status_code}")
                 continue
+
             payload = r.json()
-            for fx in payload.get("response", []) or []:
+            errors = payload.get("errors")
+            if errors:
+                debug.append(f"Lig {league_id}: API error {errors}")
+
+            response = payload.get("response", []) or []
+            debug.append(f"Lig {league_id} / sezon {season}: {len(response)} maç ({header_mode})")
+
+            for fx in response:
                 fixture = fx.get("fixture", {}) or {}
                 league = fx.get("league", {}) or {}
                 teams = fx.get("teams", {}) or {}
@@ -1240,11 +1292,15 @@ def api_football_fikstur_cek(api_key, kodlar, t):
                 away = (teams.get("away", {}) or {}).get("name", "")
                 raw_date = fixture.get("date")
                 try:
-                    tm = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00")).replace(tzinfo=None)
+                    tm = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+                    # API timezone=Europe/Istanbul verildiği için saati lokal gibi kullan.
+                    tm = tm.replace(tzinfo=None)
                 except Exception:
                     tm = datetime.combine(t, datetime.min.time())
+
                 if not home or not away:
                     continue
+
                 rows.append({
                     "event_id": f"apifootball_{fixture.get('id','')}",
                     "sport_key": f"api_football_{league_id}",
@@ -1259,10 +1315,15 @@ def api_football_fikstur_cek(api_key, kodlar, t):
                     "oran_durumu": "Fikstür var, H2H oranı yok",
                     "fixture_source": "API-FOOTBALL",
                 })
-        except Exception:
+        except Exception as e:
+            debug.append(f"Lig {league_id}: {type(e).__name__}: {e}")
             continue
+
+    st.session_state["api_football_debug"] = " | ".join(debug[-25:]) if debug else "API-FOOTBALL çağrısı yapıldı ama debug bilgisi oluşmadı."
+
     if not rows:
         return pd.DataFrame()
+
     return pd.DataFrame(rows).drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1270,14 +1331,9 @@ def bulten_cek(key, kodlar, t):
     """
     Seçili liglerin gün bültenini çeker.
 
-    Mantık:
-    1) /events endpoint'i ile o gün bültende olan tüm maçları almaya çalışır.
-    2) /odds endpoint'i ile H2H oranlarını alır.
-    3) Events'te olup oranı olmayan maçları da listede tutar.
-
-    Böylece ana ekranda iki tip maç görünür:
-    - ORANLI: h / b / a dolu, mevcut oran-benzerliği modeli çalışır.
-    - ORANSIZ: bültende var ama H2H oranı yok, ayrı uyarılı analiz kartı basılır.
+    1) API-FOOTBALL key varsa gerçek fikstür alınır.
+    2) The Odds API /events ile oranı olmayan ama Odds tarafında görünen maçlar eklenir.
+    3) The Odds API /odds ile H2H oranı olan maçlar aynı fikstüre işlenir.
     """
     secret_key = get_app_api_key()
     if secret_key:
@@ -1295,11 +1351,6 @@ def bulten_cek(key, kodlar, t):
             except Exception:
                 return None
 
-    def match_key(row):
-        zaman = row.get("zaman")
-        zaman_key = zaman.strftime("%Y-%m-%d %H:%M") if hasattr(zaman, "strftime") else str(zaman)
-        return (str(row.get("ev", "")).strip().lower(), str(row.get("dep", "")).strip().lower(), zaman_key)
-
     def safe_float(v):
         try:
             if v is None:
@@ -1308,22 +1359,27 @@ def bulten_cek(key, kodlar, t):
         except Exception:
             return None
 
+    def loose_key(home, away, zaman):
+        # Saat farkı yüzünden kaçmasın diye ana eşleştirme gün + takım adı üzerinden.
+        dt_key = zaman.strftime("%Y-%m-%d") if hasattr(zaman, "strftime") else ""
+        return (normalize_team_name(home), normalize_team_name(away), dt_key)
+
     tum_maclar = {}
 
-    # 0) Opsiyonel gerçek fikstür: API-FOOTBALL key varsa önce tüm fikstürü al.
-    # Sonra The Odds API oranlarıyla aynı maçları eşleştir.
+    # 0) Gerçek fikstür: API-FOOTBALL
     api_football_key = get_api_football_key()
     try:
         fikstur_df = api_football_fikstur_cek(api_football_key, tuple(kodlar), t) if api_football_key else pd.DataFrame()
         if not fikstur_df.empty:
             for _, fx in fikstur_df.iterrows():
                 row = fx.to_dict()
-                tum_maclar[fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))] = row
-    except Exception:
-        pass
+                tum_maclar[loose_key(row.get("ev"), row.get("dep"), row.get("zaman"))] = row
+    except Exception as e:
+        st.session_state["api_football_debug"] = f"API-FOOTBALL fikstür çekme hatası: {type(e).__name__}: {e}"
 
+    # 1) Odds API events + odds
     for k in kodlar:
-        # 1) Önce fikstür/events: oran olmasa bile maç yakalansın.
+        # Events endpoint: Odds API içinde görünen ama oranı olmayan maçları da ekler.
         try:
             ev_r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{k}/events",
@@ -1359,31 +1415,18 @@ def bulten_cek(key, kodlar, t):
                             "a": None,
                             "analiz_tipi": "ORANSIZ",
                             "oran_durumu": "H2H oranı yok",
+                            "fixture_source": "The Odds API Events",
                         }
-                        # API-FOOTBALL fikstüründen aynı maç geldiyse onu koru/güncelle.
-                        fk = fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))
+                        fk = loose_key(row.get("ev"), row.get("dep"), row.get("zaman"))
                         if fk in tum_maclar:
-                            tum_maclar[fk].update({kk: vv for kk, vv in row.items() if vv not in [None, ""]})
+                            # API-FOOTBALL maçı varsa saat/lig bilgisini koru, event id ekle.
+                            tum_maclar[fk].update({kk: vv for kk, vv in row.items() if vv not in [None, ""] and kk not in ["zaman"]})
                         else:
-                            fk = fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))
-                if fk in tum_maclar:
-                    # Fikstür maçına oranları ve Odds API başlığını işle.
-                    tum_maclar[fk].update({
-                        "event_id": row.get("event_id") or tum_maclar[fk].get("event_id"),
-                        "sport_key": row.get("sport_key") or tum_maclar[fk].get("sport_key"),
-                        "lig": row.get("lig") or tum_maclar[fk].get("lig"),
-                        "h": row.get("h"),
-                        "b": row.get("b"),
-                        "a": row.get("a"),
-                        "analiz_tipi": row.get("analiz_tipi", "ORANSIZ"),
-                        "oran_durumu": row.get("oran_durumu", "H2H oranı yok"),
-                    })
-                else:
-                    tum_maclar[row["event_id"] or match_key(row)] = row
+                            tum_maclar[fk] = row
         except Exception:
             pass
 
-        # 2) H2H oranları: varsa aynı maça işlenir.
+        # Odds endpoint: oranları ekler.
         try:
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
@@ -1396,7 +1439,6 @@ def bulten_cek(key, kodlar, t):
                 },
                 timeout=12,
             )
-
             if r.status_code != 200:
                 continue
 
@@ -1432,6 +1474,7 @@ def bulten_cek(key, kodlar, t):
                     "a": None,
                     "analiz_tipi": "ORANSIZ",
                     "oran_durumu": "H2H oranı yok",
+                    "fixture_source": "The Odds API Odds",
                 }
 
                 bookies = m.get("bookmakers", []) or []
@@ -1454,21 +1497,11 @@ def bulten_cek(key, kodlar, t):
                         row["analiz_tipi"] = "ORANLI"
                         row["oran_durumu"] = "H2H oranı var"
 
-                fk = fixture_match_key(row.get("ev"), row.get("dep"), row.get("zaman"))
+                fk = loose_key(row.get("ev"), row.get("dep"), row.get("zaman"))
                 if fk in tum_maclar:
-                    # Fikstür maçına oranları ve Odds API başlığını işle.
-                    tum_maclar[fk].update({
-                        "event_id": row.get("event_id") or tum_maclar[fk].get("event_id"),
-                        "sport_key": row.get("sport_key") or tum_maclar[fk].get("sport_key"),
-                        "lig": row.get("lig") or tum_maclar[fk].get("lig"),
-                        "h": row.get("h"),
-                        "b": row.get("b"),
-                        "a": row.get("a"),
-                        "analiz_tipi": row.get("analiz_tipi", "ORANSIZ"),
-                        "oran_durumu": row.get("oran_durumu", "H2H oranı yok"),
-                    })
+                    tum_maclar[fk].update(row)
                 else:
-                    tum_maclar[row["event_id"] or match_key(row)] = row
+                    tum_maclar[fk] = row
         except Exception:
             continue
 
@@ -1477,7 +1510,6 @@ def bulten_cek(key, kodlar, t):
 
     df = pd.DataFrame(list(tum_maclar.values())).drop_duplicates(subset=["ev", "dep", "zaman"])
     return df.sort_values("zaman").reset_index(drop=True)
-
 
 def best_team_match(team_name, candidates, threshold=0.68):
     target = normalize_team_name(team_name)
