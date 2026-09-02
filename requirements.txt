@@ -5,4 +5,3 @@ xlsxwriter
 numpy
 scipy
 openpyxl
-scikit-learn
