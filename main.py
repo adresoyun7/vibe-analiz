@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 22
+APP_SCHEMA_VERSION = 23
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2418,6 +2418,57 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
     return b.sort_values("Date", ascending=False).head(int(limit))
 
 
+def gecmis_tablo_stili(tablo):
+    """Geçmiş sonuç tablolarını maç sonucu ve market tipine göre renklendirir."""
+    def skor_renk(value):
+        try:
+            ev, dep = [int(x) for x in str(value).split("-", 1)]
+        except (TypeError, ValueError):
+            return ""
+        if ev > dep:
+            return "background-color:#166534;color:#f0fdf4;font-weight:800"
+        if ev < dep:
+            return "background-color:#991b1b;color:#fff1f2;font-weight:800"
+        return "background-color:#854d0e;color:#fefce8;font-weight:800"
+
+    def alt_ust_renk(value):
+        if str(value) == "Üst":
+            return "background-color:#166534;color:#f0fdf4;font-weight:800"
+        if str(value) == "Alt":
+            return "background-color:#9a3412;color:#fff7ed;font-weight:800"
+        return ""
+
+    def kg_renk(value):
+        if str(value) == "Var":
+            return "background-color:#075985;color:#f0f9ff;font-weight:800"
+        if str(value) == "Yok":
+            return "background-color:#374151;color:#f9fafb;font-weight:800"
+        return ""
+
+    def olay_renk(value):
+        metin = str(value)
+        if "İki yarıda da KG" in metin:
+            return "background-color:#6b21a8;color:#faf5ff;font-weight:900"
+        if "1/2" in metin:
+            return "background-color:#9f1239;color:#fff1f2;font-weight:900"
+        if "2/1" in metin:
+            return "background-color:#1d4ed8;color:#eff6ff;font-weight:900"
+        return "color:#94a3b8"
+
+    stil = tablo.style
+    skor_kolonlari = [c for c in ["İY", "MS"] if c in tablo.columns]
+    if skor_kolonlari:
+        stil = stil.map(skor_renk, subset=skor_kolonlari)
+    if "2.5" in tablo.columns:
+        stil = stil.map(alt_ust_renk, subset=["2.5"])
+    if "KG" in tablo.columns:
+        stil = stil.map(kg_renk, subset=["KG"])
+    olay_kolonlari = [c for c in ["Özel olay", "Yüksek oran olayı"] if c in tablo.columns]
+    if olay_kolonlari:
+        stil = stil.map(olay_renk, subset=olay_kolonlari)
+    return stil
+
+
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
@@ -3198,7 +3249,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
                     "Özel olay": ornekler["Olay"],
                 })
-                st.dataframe(tablo, use_container_width=True, hide_index=True)
+                st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
@@ -3265,7 +3316,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                     "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
                     "Yüksek oran olayı": ornekler["Olay"],
                 })
-                st.dataframe(tablo, use_container_width=True, hide_index=True)
+                st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
