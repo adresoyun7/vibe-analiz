@@ -154,7 +154,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 27
+APP_SCHEMA_VERSION = 28
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1077,6 +1077,28 @@ def futbol_veri_motoru(sezonlar):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
+def odds_spor_katalogu(key):
+    try:
+        r = requests.get(
+            "https://api.the-odds-api.com/v4/sports/",
+            params={"apiKey": key, "all": "true"}, timeout=12,
+        )
+        return r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
+    except Exception:
+        return []
+
+
+def odds_lig_kodu_coz(key, kod):
+    if kod != "auto_turkey_1_lig":
+        return kod
+    for item in odds_spor_katalogu(key):
+        metin = f"{item.get('group','')} {item.get('title','')} {item.get('description','')}".lower()
+        if "soccer" in metin and "turk" in metin and ("1. lig" in metin or "1 lig" in metin or "tff 1" in metin):
+            return item.get("key")
+    return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
 def bulten_cek(key, kodlar, t):
     secret_key = get_app_api_key()
     if secret_key:
@@ -1086,7 +1108,10 @@ def bulten_cek(key, kodlar, t):
         return pd.DataFrame()
     res = []
 
-    for k in kodlar:
+    for secili_kod in kodlar:
+        k = odds_lig_kodu_coz(key, secili_kod)
+        if not k:
+            continue
         try:
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
@@ -1585,6 +1610,45 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         ms_raw = float(form_ms_dagilim[ms_mod])
         ms_side = "MS 1" if ms_mod == "H" else "MS 2" if ms_mod == "A" else "Beraberlik"
 
+    # 2.5 Üst + KG Var özel birleşik modeli.
+    ust_kg_raw = float(((toplam_gol >= 3) & (b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
+    form_ust_sinyal = (
+        (float(ev_form.get("ust25", 0.5)) + float(dep_form.get("ust25", 0.5))) / 2
+        if form_var else ms25_raw
+    )
+    form_kg_sinyal = (
+        (float(ev_form.get("kg", 0.5)) + float(dep_form.get("kg", 0.5))) / 2
+        if form_var else kg_raw
+    )
+    if form_var:
+        toplam_gol_proxy = (
+            float(ev_form.get("gf", 0)) + float(ev_form.get("ga", 0))
+            + float(dep_form.get("gf", 0)) + float(dep_form.get("ga", 0))
+        ) / 2
+        gol_sinyali = max(0.0, min(1.0, toplam_gol_proxy / 3.5))
+    else:
+        gol_sinyali = max(0.0, min(1.0, float(toplam_gol.mean()) / 3.5))
+    ornek_guveni = min(sample / 25.0, 1.0)
+    ust_kg_model_prob = (
+        ust_kg_raw * 0.40
+        + form_ust_sinyal * 0.18
+        + form_kg_sinyal * 0.18
+        + gol_sinyali * 0.12
+        + iy05_raw * 0.12
+    )
+    # Az örnekli maçlarda sonucu nötr seviyeye yaklaştır.
+    ust_kg_model_prob = ust_kg_model_prob * (0.65 + 0.35 * ornek_guveni)
+    ust_kg_model_p = int(round(max(0.0, min(0.95, ust_kg_model_prob)) * 100))
+    ust_kg_hit = int(((toplam_gol >= 3) & (b["FTHG"] > 0) & (b["FTAG"] > 0)).sum())
+    if sample >= 20 and ust_kg_model_p >= 62 and ust_kg_hit >= 7:
+        ust_kg_oneri = "GÜÇLÜ"
+    elif sample >= 12 and ust_kg_model_p >= 54 and ust_kg_hit >= 4:
+        ust_kg_oneri = "DENENEBİLİR"
+    elif ust_kg_model_p >= 46 and ust_kg_hit >= 2:
+        ust_kg_oneri = "RİSKLİ"
+    else:
+        ust_kg_oneri = "PAS"
+
     htft_s = b["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + b["FTR"].replace({"H": "1", "A": "2", "D": "X"})
     htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
     htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
@@ -1876,6 +1940,10 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
             f"Güncel form desteği: {yon}; {ev_form.get('takim')} {ev_form.get('puan')}/100, "
             f"{dep_form.get('takim')} {dep_form.get('puan')}/100."
         )
+    nedenler.append(
+        f"2.5 Üst + KG Var özel modeli: %{ust_kg_model_p} ({ust_kg_oneri}); "
+        f"benzerlerde {ust_kg_hit}/{sample} gerçekleşme."
+    )
 
     playable_score = ana_p
     if combo_var:
@@ -1982,6 +2050,10 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         "form_etkisi": round(form_etkisi * 100, 1),
         "ev_form": ev_form,
         "dep_form": dep_form,
+        "ust_kg_model_p": ust_kg_model_p,
+        "ust_kg_oneri": ust_kg_oneri,
+        "ust_kg_hit": ust_kg_hit,
+        "ust_kg_raw_p": int(round(ust_kg_raw * 100)),
         "score": score,
         "stability_tols": [],
         "stability_count": 0,
@@ -2135,6 +2207,17 @@ def top10_market_adaylari(t):
     # İY 0.5 Üst: erken gol sinyali. İY 1.5 Üst: daha yüksek tempo / ilk yarı çok gol sinyali.
     add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=10, min_guven=70)
     add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=13, min_guven=55)
+
+    # Özel olarak eğitilen/harmanlanan birleşik gol modeli.
+    if t.get("ust_kg_oneri") != "PAS":
+        add(
+            "2.5 Üst + KG Var",
+            t.get("ust_kg_model_p", 0),
+            "Kombo",
+            kombo_tahmini_oran("2.5 Üst + KG Var", t.get("ana_odd")),
+            bonus=14,
+            min_guven=46,
+        )
 
     # Kombo.
     if t.get("combo_var") and t.get("combo_label"):
@@ -2463,6 +2546,12 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Baz Tahmin": baz_t.get("ana_label", "—") if baz_t else "—",
             "Baz Tuttu": bool(tahmin_tuttu_mu(baz_t.get("ana_label", ""), row)) if baz_t and tahmin_tuttu_mu(baz_t.get("ana_label", ""), row) is not None else False,
             "Form Kullanıldı": bool(t.get("form_var")),
+            "Üst+KG Olasılık": int(t.get("ust_kg_model_p", 0)),
+            "Üst+KG Öneri": t.get("ust_kg_oneri", "PAS"),
+            "Üst+KG Gerçekleşti": bool(
+                (float(row["FTHG"]) + float(row["FTAG"]) >= 3)
+                and float(row["FTHG"]) > 0 and float(row["FTAG"]) > 0
+            ),
             "Oran": round(float(oran), 2) if oran is not None else None,
             "Kâr (100 TL)": kar,
         })
@@ -2649,6 +2738,7 @@ FUTBOL_LIGLERI = {
     },
     "TÜRKİYE": {
         "Süper Lig": "soccer_turkey_super_league",
+        "1. Lig": "auto_turkey_1_lig",
     },
     "İNGİLTERE": {
         "Premier League": "soccer_epl",
@@ -2734,6 +2824,7 @@ LEAGUE_EMOJIS = {
     "Avrupa Ligi": "🟠",
     "Konferans Ligi": "🟢",
     "Süper Lig": "🇹🇷",
+    "1. Lig": "🇹🇷",
     "Premier League": "🏴",
     "Championship": "🏴",
     "League 1": "🏴",
@@ -2806,40 +2897,32 @@ def filtrelenmis_lig_listesi(arama_text: str):
 
 
 KARLI_LIG_PRESETLERI = {
-    # Popup içindeki tek hızlı filtre: Kararlı çekirdek + kârlı/value ligler birlikte seçilir.
+    # Avrupa ana ligleri, mevcut alt ligleri ve UEFA kupaları.
     "cekirdek_value": [
-        # Kararlı çekirdek
-        "soccer_fifa_world_cup",
-        "soccer_epl",
-        "soccer_efl_champ",
-        "soccer_spain_la_liga",
-        "soccer_spain_segunda_division",
-        "soccer_italy_serie_a",
-        "soccer_germany_bundesliga",
-        "soccer_germany_bundesliga2",
-        "soccer_france_ligue_one",
-        "soccer_turkey_super_league",
-        "soccer_netherlands_eredivisie",
-        "soccer_norway_eliteserien",
-        "soccer_usa_mls",
-        "soccer_switzerland_superleague",
         "soccer_uefa_champs_league",
         "soccer_uefa_europa_league",
         "soccer_uefa_europa_conference_league",
-        # Kârlı / value ek ligler
+        "soccer_epl",
+        "soccer_efl_champ",
+        "soccer_england_league1",
+        "soccer_england_league2",
+        "soccer_spain_la_liga",
+        "soccer_spain_segunda_division",
+        "soccer_italy_serie_a",
+        "soccer_italy_serie_b",
+        "soccer_germany_bundesliga",
+        "soccer_germany_bundesliga2",
+        "soccer_france_ligue_one",
+        "soccer_france_ligue_two",
+        "soccer_turkey_super_league",
+        "auto_turkey_1_lig",
+        "soccer_netherlands_eredivisie",
         "soccer_portugal_primeira_liga",
         "soccer_belgium_first_div",
-        "soccer_austria_bundesliga",
-        "soccer_denmark_superliga",
         "soccer_spl",
-        "soccer_sweden_allsvenskan",
-        "soccer_finland_veikkausliiga",
-        "soccer_brazil_campeonato",
-        "soccer_argentina_primera_division",
-        "soccer_japan_j_league",
-        "soccer_korea_kleague1",
-        "soccer_china_superleague",
-        "soccer_saudi_arabia_pro_league",
+        "soccer_austria_bundesliga",
+        "soccer_switzerland_superleague",
+        "soccer_denmark_superliga",
     ],
 }
 
@@ -3144,9 +3227,6 @@ def clear_detail_and_rebuild_top_markets():
     try:
         if gecmis is not None and bulten is not None and not getattr(gecmis, "empty", True) and not getattr(bulten, "empty", True):
             ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
-            st.session_state.top10_list = gunun_en_iyi_10_uret(
-                gecmis, bulten, min_ornek=min_ornek_val, limit=10, sadece_ayni_lig=ayni_lig
-            )
             st.session_state.top50_list = gunun_en_iyi_10_uret(
                 gecmis, bulten, min_ornek=min_ornek_val, limit=50, sadece_ayni_lig=ayni_lig
             )
@@ -3195,13 +3275,13 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 10 Market", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Backtest"],
+        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
 
-    if st.session_state.get("sayfa_modu") in ["Top 10 Market", "Top 50 Market"]:
+    if st.session_state.get("sayfa_modu") == "Top 50 Market":
         st.markdown("### Market Filtreleri")
 
         # Üst satır: 3 filtre
@@ -3258,7 +3338,7 @@ with st.sidebar:
                 clear_leagues()
                 st.rerun()
 
-        if st.button('Kararlı Çekirdek + Value', use_container_width=True, key='preset_core_value_sidebar'):
+        if st.button('Avrupa Ana + Alt Ligler', use_container_width=True, key='preset_core_value_sidebar'):
             toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
             st.rerun()
 
@@ -3611,6 +3691,15 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         c4.metric("Formlu başarı", f"%{basari:.1f}", f"{basari-baz_basari:+.1f} puan")
         c5.metric("MS ROI", f"%{roi:.1f}", help="Yalnızca geçmiş B365 oranı bulunan MS 1/X/2 tahminleri, her seçime 100 TL varsayımıyla.")
 
+        ustkg_bt = bt[bt.get("Üst+KG Öneri", pd.Series(index=bt.index, dtype=str)).isin(["GÜÇLÜ", "DENENEBİLİR"])]
+        ustkg_sayi = len(ustkg_bt)
+        ustkg_tutan = int(ustkg_bt["Üst+KG Gerçekleşti"].sum()) if ustkg_sayi else 0
+        ustkg_basari = ustkg_tutan / ustkg_sayi * 100 if ustkg_sayi else 0.0
+        ug1, ug2, ug3 = st.columns(3)
+        ug1.metric("Üst+KG önerisi", ustkg_sayi)
+        ug2.metric("Üst+KG tutan", ustkg_tutan)
+        ug3.metric("Üst+KG başarı", f"%{ustkg_basari:.1f}")
+
         ozet = (
             bt.groupby("Tahmin", dropna=False)
             .agg(Tahmin_Sayısı=("Tuttu", "size"), Kazanan=("Tuttu", "sum"), Ortalama_Güven=("Güven", "mean"))
@@ -3630,7 +3719,7 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
         st.markdown("### Test edilen maçlar")
         bt_goster = bt.sort_values("Tarih", ascending=False).copy()
-        for bool_col in ["Tuttu", "Baz Tuttu", "Form Kullanıldı"]:
+        for bool_col in ["Tuttu", "Baz Tuttu", "Form Kullanıldı", "Üst+KG Gerçekleşti"]:
             if bool_col in bt_goster.columns:
                 bt_goster[bool_col] = bt_goster[bool_col].map({True: "✅ Evet", False: "❌ Hayır"}).fillna("—")
         st.dataframe(backtest_stili(bt_goster), use_container_width=True, hide_index=True)
@@ -3727,7 +3816,7 @@ if analiz_btn:
             reverse=True
         )
         st.session_state.final_list = final
-        st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10, sadece_ayni_lig=sadece_ayni_lig)
+        st.session_state.top10_list = []
         st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig)
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
@@ -4059,14 +4148,10 @@ else:
     # API kullanmaz; analizde cekilen maclar uzerinden 0.00 - 0.10 arasi en iyi toleransi secer.
     # ==========================================================
     aktif_sayfa_modu = st.session_state.get("sayfa_modu", "Maç Analizi")
-    if aktif_sayfa_modu == "Top 50 Market":
-        gunun_top_liste = st.session_state.get("top50_list", [])
-        top_baslik = "🔥 TOP 50 MARKET"
-    else:
-        gunun_top_liste = st.session_state.get("top10_list", [])
-        top_baslik = "🔥 TOP 10 MARKET"
+    gunun_top_liste = st.session_state.get("top50_list", [])
+    top_baslik = "🔥 TOP 50 MARKET"
 
-    if aktif_sayfa_modu in ["Top 10 Market", "Top 50 Market"]:
+    if aktif_sayfa_modu == "Top 50 Market":
         if gunun_top_liste:
             st.markdown(f"""<div class="list-heading">{top_baslik}</div>""", unsafe_allow_html=True)
             st.markdown(
@@ -4229,6 +4314,11 @@ else:
             )
         else:
             form_html = '<div class="mk-mini" style="color:#94a3b8">📈 Form verisi eşleştirilemedi</div>'
+        ustkg_html = (
+            f'<div class="mk-mini" style="color:#f0abfc">⚽ Üst + KG Var modeli: '
+            f'<b>%{int(t.get("ust_kg_model_p", 0))}</b> · {escape(str(t.get("ust_kg_oneri", "PAS")))} · '
+            f'{int(t.get("ust_kg_hit", 0))}/{int(t.get("ornek", 0))} örnek</div>'
+        )
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -4246,6 +4336,7 @@ else:
                 <div class="mk-dep">🟦 {m['dep']}</div>
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
                 {form_html}
+                {ustkg_html}
                 {belirsiz_html}
                 {ai_comment_html}
               </div>
