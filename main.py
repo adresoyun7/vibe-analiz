@@ -157,7 +157,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 41
+APP_SCHEMA_VERSION = 42
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -182,6 +182,25 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] label {
     font-size: 0.82rem !important;
     color: #4b5563 !important;
+}
+button[data-testid="stSidebarCollapseButton"],
+button[data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stSidebarCollapsedControl"] button {
+    background:#0b1b33 !important;
+    border:1px solid #315487 !important;
+    border-radius:9px !important;
+    opacity:1 !important;
+    box-shadow:0 3px 10px rgba(15,23,42,.18) !important;
+}
+button[data-testid="stSidebarCollapseButton"] svg,
+button[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapseButton"] svg,
+[data-testid="stSidebarCollapsedControl"] svg {
+    color:#ffffff !important;
+    fill:#ffffff !important;
+    stroke:#ffffff !important;
+    opacity:1 !important;
 }
 .main .block-container {
     background: transparent;
@@ -3502,6 +3521,7 @@ with st.container(key="sticky_analysis_controls"):
             position:sticky !important;
             top:.45rem !important;
             z-index:999 !important;
+            align-self:flex-start !important;
             background:rgba(255,255,255,.97) !important;
             border:1px solid #cbd5e1 !important;
             border-radius:14px !important;
@@ -3509,6 +3529,9 @@ with st.container(key="sticky_analysis_controls"):
             margin:0 0 14px 0 !important;
             box-shadow:0 8px 24px rgba(15,23,42,.16) !important;
             backdrop-filter:blur(8px);
+        }
+        [data-testid="stMainBlockContainer"] {
+            overflow:visible !important;
         }
         .top-analysis-controls {
             margin:0 0 2px 0;
@@ -3582,6 +3605,71 @@ with st.container(key="sticky_analysis_controls"):
         # Düğme, sidebar'da görünüm seçildikten sonra bu üst konuma yazdırılır.
         ust_analiz_buton_alani = st.empty()
 
+    tarih_lig_col, sezon_col = st.columns([2.2, 1], gap="small")
+    with tarih_lig_col:
+        with st.expander("📅 Tarih ve Lig Seçimi", expanded=False):
+            st.radio(
+                "Tarih modu",
+                options=["Bugün", "Yarın", "2 gün sonra", "Özel Tarih"],
+                index=["Bugün", "Yarın", "2 gün sonra", "Özel Tarih"].index(st.session_state.get("date_mode", "Bugün")),
+                key="date_mode",
+                on_change=clear_detail_on_filter_change,
+                horizontal=True,
+            )
+            if st.session_state.get("date_mode") == "Özel Tarih":
+                st.date_input(
+                    "Özel tarih", value=st.session_state.get("special_date", bugun),
+                    key="special_date", on_change=clear_detail_on_filter_change,
+                )
+            secili_tarih = tarih_secimine_gore_date(
+                st.session_state.get("date_mode", "Bugün"), bugun,
+                st.session_state.get("special_date", bugun),
+            )
+            st.caption(f"Seçili tarih: {format_tr_date(secili_tarih)}")
+
+            preset1, preset2, preset3 = st.columns(3, gap="small")
+            with preset1:
+                if st.button("Hepsini Aç", use_container_width=True, key="preset_all_top"):
+                    set_leagues(tum_lig_kodlari())
+                    st.rerun()
+            with preset2:
+                if st.button("Temizle", use_container_width=True, key="preset_clear_top"):
+                    clear_leagues()
+                    st.rerun()
+            with preset3:
+                if st.button("Avrupa Ana + Alt", use_container_width=True, key="preset_core_top"):
+                    toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek_value"])
+                    st.rerun()
+
+            lig_arama = st.text_input(
+                "Lig ara", placeholder="örn. Premier, Türkiye, MLS",
+                key="lig_arama_top", on_change=clear_detail_on_filter_change,
+            )
+            filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
+            st.caption(f"Gösterilen lig: {len(filtreli_ligler)} · Seçili lig: {len(selected_league_codes())}")
+            lig_box = st.container(height=300, border=True)
+            with lig_box:
+                lig_kolonlari = st.columns(3, gap="small")
+                for lig_no, lig in enumerate(filtreli_ligler):
+                    with lig_kolonlari[lig_no % 3]:
+                        st.checkbox(lig["label"], key=f"cb_{lig['kod']}", on_change=clear_detail_on_filter_change)
+
+    with sezon_col:
+        with st.expander("🧪 Sezon ve Veri Ayarları", expanded=False):
+            sezon_secenekleri = ["2122", "2223", "2324", "2425", "2526", "2627"]
+            yillar = st.multiselect(
+                "Sezonlar", options=sezon_secenekleri, default=sezon_secenekleri,
+                key="top_seasons", on_change=clear_backtest_on_change,
+            )
+            sadece_ayni_lig = st.checkbox(
+                "Sadece aynı lig verilerini kullan", value=False,
+                key="sadece_ayni_lig",
+                help="Açıkken maç yalnızca kendi liginin geçmişiyle karşılaştırılır.",
+                on_change=clear_detail_on_filter_change,
+            )
+
+    secili_kodlar = selected_league_codes()
+
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
 with st.sidebar:
@@ -3639,77 +3727,12 @@ with st.sidebar:
         with c_combo:
             st.checkbox("Kombo", value=True, key="top10_filter_combo", on_change=clear_detail_and_rebuild_top_markets)
 
-    st.markdown("### ⚙️ Analiz Filtreleri")
-
-    secili_tarih = tarih_secimine_gore_date(
-        st.session_state.get('date_mode', 'Bugün'),
-        bugun,
-        st.session_state.get('special_date', bugun)
-    )
-
-    with st.expander("📅 Tarih ve Lig Seçimi", expanded=True):
-        st.radio(
-            'Tarih modu',
-            options=['Bugün', 'Yarın', '2 gün sonra', 'Özel Tarih'],
-            index=['Bugün', 'Yarın', '2 gün sonra', 'Özel Tarih'].index(st.session_state.get('date_mode', 'Bugün')),
-            key='date_mode',
-            on_change=clear_detail_on_filter_change,
-        )
-        if st.session_state.get('date_mode') == 'Özel Tarih':
-            st.date_input('Özel tarih', value=st.session_state.get('special_date', bugun), key='special_date', on_change=clear_detail_on_filter_change)
-
-        secili_tarih = tarih_secimine_gore_date(
-            st.session_state.get('date_mode', 'Bugün'),
-            bugun,
-            st.session_state.get('special_date', bugun)
-        )
-        st.caption(f"Seçili tarih: {format_tr_date(secili_tarih)}")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button('Hepsini Aç', use_container_width=True, key='preset_all_sidebar'):
-                set_leagues(tum_lig_kodlari())
-                st.rerun()
-        with c2:
-            if st.button('Temizle', use_container_width=True, key='preset_clear_sidebar'):
-                clear_leagues()
-                st.rerun()
-
-        if st.button('Avrupa Ana + Alt Ligler', use_container_width=True, key='preset_core_value_sidebar'):
-            toggle_leagues(KARLI_LIG_PRESETLERI['cekirdek_value'])
-            st.rerun()
-
-        lig_arama = st.text_input('Lig ara', placeholder='örn. Premier, Türkiye, MLS', key='lig_arama_sidebar', on_change=clear_detail_on_filter_change)
-        filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
-        st.caption(f"Gösterilen lig: {len(filtreli_ligler)} · Seçili lig: {len(selected_league_codes())}")
-
-        lig_box = st.container(height=360, border=True)
-        with lig_box:
-            for lig in filtreli_ligler:
-                st.checkbox(lig['label'], key=f"cb_{lig['kod']}", on_change=clear_detail_on_filter_change)
-
-    with st.expander("🧪 Sezon ve Veri Ayarları", expanded=True):
-        sezon_secenekleri = ['2122', '2223', '2324', '2425', '2526', '2627']
-        yillar = st.multiselect(
-            'Sezonlar',
-            options=sezon_secenekleri,
-            default=sezon_secenekleri,
-            key='top_seasons',
-            on_change=clear_backtest_on_change,
-        )
-        sadece_ayni_lig = st.checkbox(
-            'Sadece aynı lig verilerini kullan',
-            value=False,
-            key='sadece_ayni_lig',
-            help='Açıkken maç yalnızca kendi liginin geçmişiyle karşılaştırılır. Geçmiş veri eşlemesi olmayan liglerde sonuç oluşmaz.',
-            on_change=clear_detail_on_filter_change,
-        )
-
-    secili_kodlar = selected_league_codes()
+    # Tarih, lig ve sezon ayarları üstteki yapışkan kontrol alanına taşındı.
     analiz_btn = False
     backtest_btn = False
     gecmis_btn = False
     yuksek_oran_btn = False
+    sonuc_yenile_btn = False
     if st.session_state.get('sayfa_modu') == 'Backtest':
         backtest_sezonu = st.selectbox(
             'Test sezonu',
@@ -3742,7 +3765,7 @@ with st.sidebar:
             'İki yarıda da karşılıklı gol', value=True, key='yuksek_filtre_cift_yari_kg'
         )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
-        yuksek_oran_btn = st.button('💎 YÜKSEK ORANLILARI BUL', use_container_width=True, type='primary', key='yuksek_oran_btn')
+        yuksek_oran_btn = False
     elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         st.caption("Kaydedilen analizlerin sonuçlarını buradan yenileyebilirsin.")
     else:
@@ -3787,6 +3810,24 @@ elif st.session_state.get('sayfa_modu') == 'Backtest':
             use_container_width=True,
             type='primary',
             key='backtest_baslat_btn',
+        )
+elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        yuksek_oran_btn = st.button(
+            '💎 ORANLILARI BUL',
+            use_container_width=True,
+            type='primary',
+            key='yuksek_oran_btn',
+        )
+elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        sonuc_yenile_btn = st.button(
+            '🔄 SONUÇLARI YENİLE',
+            use_container_width=True,
+            type='primary',
+            key='sonuclari_yenile_btn',
         )
 
 
@@ -4051,11 +4092,8 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         </div>
         """, unsafe_allow_html=True,
     )
-    yenile_col, bilgi_col = st.columns([1, 3])
-    with yenile_col:
-        yenile = st.button("🔄 SONUÇLARI YENİLE", use_container_width=True, type="primary")
-    with bilgi_col:
-        st.caption("Skor servisi son üç günü getirir; sonuçları en az üç günde bir yenile.")
+    yenile = sonuc_yenile_btn
+    st.caption("Skor servisi son üç günü getirir; sonuçları en az üç günde bir üstteki SONUÇLARI YENİLE düğmesiyle kontrol et.")
     if yenile:
         takip_key = get_app_api_key()
         if not takip_key:
