@@ -155,7 +155,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 33
+APP_SCHEMA_VERSION = 35
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -580,8 +580,10 @@ section[data-testid="stSidebar"] {
     border-right: 1px solid #d6e0ef !important;
 }
 section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] * {
+section[data-testid="stSidebar"] label *,
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
     color: #334155 !important;
+    -webkit-text-fill-color:#334155 !important;
 }
 
 /* Top controls */
@@ -656,6 +658,35 @@ div[data-testid="stTabs"] button * {
     color:#0f172a !important;
     -webkit-text-fill-color:#0f172a !important;
     opacity:1 !important;
+}
+div[data-testid="stDialog"] div[data-testid="stExpander"] summary,
+div[data-testid="stDialog"] div[data-testid="stExpander"] summary * {
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
+}
+div[data-testid="stDialog"] h1,
+div[data-testid="stDialog"] h2,
+div[data-testid="stDialog"] h3 {
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
+}
+.detail-form-sidebar-title {
+    background:#0b1628;
+    border:1px solid #284977;
+    border-radius:12px;
+    padding:12px 13px;
+    margin-bottom:10px;
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
+    font-weight:900;
+}
+.detail-form-sidebar-title span {
+    display:block;
+    color:#9db2d1 !important;
+    -webkit-text-fill-color:#9db2d1 !important;
+    font-size:.70rem;
+    font-weight:600;
+    margin-top:4px;
 }
 .stButton > button:hover {
     border-color: #facc15 !important;
@@ -1534,7 +1565,7 @@ def takim_adi_eslestir(takim, adaylar):
     return en_iyi if en_skor >= 0.72 else None
 
 
-def takim_son_maclari(veri, eslesen_takim, mac_tarihi, limit=5):
+def takim_son_maclari(veri, eslesen_takim, mac_tarihi, limit=10):
     if veri is None or veri.empty or not eslesen_takim:
         return pd.DataFrame()
     tarih = pd.to_datetime(mac_tarihi, errors="coerce")
@@ -3786,12 +3817,15 @@ if analiz_btn:
         st.session_state.toplam_mac = len(final)
         st.rerun()
 
-def detay_popup_icerigi():
+def secili_detay_itemi():
     if st.session_state.detay_item is not None:
-        item = st.session_state.detay_item
-    else:
-        idx = st.session_state.detay_idx
-        item = st.session_state.final_list[idx]
+        return st.session_state.detay_item
+    idx = st.session_state.detay_idx
+    return st.session_state.final_list[idx]
+
+
+def detay_ana_icerik():
+    item = secili_detay_itemi()
     m, t, b_det = item["m"], item["t"], item["b"]
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
@@ -4058,6 +4092,61 @@ def detay_popup_icerigi():
     )
 
 
+def detay_gecmis_sidebar():
+    item = secili_detay_itemi()
+    m = item["m"]
+    gecmis = st.session_state.get("last_gecmis_df")
+    if gecmis is None or getattr(gecmis, "empty", True):
+        st.info("Son maç geçmişi bulunamadı.")
+        return
+    adaylar = pd.unique(pd.concat([gecmis["HomeTeam"], gecmis["AwayTeam"]], ignore_index=True).dropna())
+    eslesen_ev = takim_adi_eslestir(m.get("ev", ""), adaylar)
+    eslesen_dep = takim_adi_eslestir(m.get("dep", ""), adaylar)
+    son_ev = takim_son_maclari(gecmis, eslesen_ev, m.get("zaman"), 10)
+    son_dep = takim_son_maclari(gecmis, eslesen_dep, m.get("zaman"), 10)
+    h2h_maclar, h2h_toplam = takimlar_arasi_maclar(
+        gecmis, eslesen_ev, eslesen_dep, m.get("zaman"), 10
+    )
+
+    st.markdown(
+        """
+        <div class="detail-form-sidebar-title">
+          <div>📈 FORM & GEÇMİŞ</div>
+          <span>Manuel kontrol · Tahmine dahil değil</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander(f"🏠 {m.get('ev', 'Ev sahibi')} · Son 10", expanded=True):
+        ev_tablo = son5_tablo_hazirla(son_ev, eslesen_ev)
+        if ev_tablo.empty:
+            st.info("Takım adı eşleştirilemedi veya maç verisi bulunamadı.")
+        else:
+            st.dataframe(ev_tablo, use_container_width=True, hide_index=True, height=385)
+    with st.expander(f"✈️ {m.get('dep', 'Deplasman')} · Son 10", expanded=False):
+        dep_tablo = son5_tablo_hazirla(son_dep, eslesen_dep)
+        if dep_tablo.empty:
+            st.info("Takım adı eşleştirilemedi veya maç verisi bulunamadı.")
+        else:
+            st.dataframe(dep_tablo, use_container_width=True, hide_index=True, height=385)
+    with st.expander(f"🤝 İkili rekabet · {h2h_toplam} maç", expanded=False):
+        h2h_tablo = h2h_tablo_hazirla(h2h_maclar)
+        if h2h_tablo.empty:
+            st.info("Geçmiş karşılaşma bulunamadı.")
+        else:
+            st.caption(f"En güncel {len(h2h_tablo)} karşılaşma")
+            st.dataframe(h2h_tablo, use_container_width=True, hide_index=True, height=350)
+
+
+def detay_popup_icerigi():
+    ana_col, side_col = st.columns([3.15, 1.35], gap="small")
+    with ana_col:
+        detay_ana_icerik()
+    with side_col:
+        with st.container(border=True):
+            detay_gecmis_sidebar()
+
+
 if st.session_state.detay_item is not None or st.session_state.detay_idx is not None:
     try:
         @st.dialog("Maç Detayı", width="large")
@@ -4244,14 +4333,6 @@ else:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""<div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>""", unsafe_allow_html=True)
 
-    kart_gecmisi = st.session_state.get("last_gecmis_df")
-    if kart_gecmisi is not None and not getattr(kart_gecmisi, "empty", True):
-        kart_takim_adaylari = pd.unique(
-            pd.concat([kart_gecmisi["HomeTeam"], kart_gecmisi["AwayTeam"]], ignore_index=True).dropna()
-        )
-    else:
-        kart_takim_adaylari = []
-
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
         gc, _, _ = guven_renk(t["ana_p"])
@@ -4336,38 +4417,6 @@ else:
             </div>
             """
             st.markdown(card_html, unsafe_allow_html=True)
-            with st.expander("📈 Son 5 maç ve ikili rekabet", expanded=False):
-                eslesen_ev = takim_adi_eslestir(m.get("ev", ""), kart_takim_adaylari)
-                eslesen_dep = takim_adi_eslestir(m.get("dep", ""), kart_takim_adaylari)
-                son_ev = takim_son_maclari(kart_gecmisi, eslesen_ev, m.get("zaman"), 5)
-                son_dep = takim_son_maclari(kart_gecmisi, eslesen_dep, m.get("zaman"), 5)
-                h2h_maclar, h2h_toplam = takimlar_arasi_maclar(
-                    kart_gecmisi, eslesen_ev, eslesen_dep, m.get("zaman"), 10
-                )
-                tab_ev, tab_dep, tab_h2h = st.tabs([
-                    f"🏠 {m.get('ev', 'Ev sahibi')}",
-                    f"✈️ {m.get('dep', 'Deplasman')}",
-                    f"🤝 İkili rekabet ({h2h_toplam})",
-                ])
-                with tab_ev:
-                    ev_tablo = son5_tablo_hazirla(son_ev, eslesen_ev)
-                    if ev_tablo.empty:
-                        st.info("Ev sahibinin geçmiş takım adı eşleştirilemedi veya maç verisi bulunamadı.")
-                    else:
-                        st.dataframe(ev_tablo, use_container_width=True, hide_index=True)
-                with tab_dep:
-                    dep_tablo = son5_tablo_hazirla(son_dep, eslesen_dep)
-                    if dep_tablo.empty:
-                        st.info("Deplasman takımının geçmiş takım adı eşleştirilemedi veya maç verisi bulunamadı.")
-                    else:
-                        st.dataframe(dep_tablo, use_container_width=True, hide_index=True)
-                with tab_h2h:
-                    h2h_tablo = h2h_tablo_hazirla(h2h_maclar)
-                    if h2h_tablo.empty:
-                        st.info("Bu iki takım arasında geçmiş karşılaşma bulunamadı.")
-                    else:
-                        st.caption(f"Toplam {h2h_toplam} karşılaşmadan en güncel {len(h2h_tablo)} tanesi gösteriliyor.")
-                        st.dataframe(h2h_tablo, use_container_width=True, hide_index=True)
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
