@@ -154,7 +154,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 26
+APP_SCHEMA_VERSION = 27
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3125,6 +3125,11 @@ def clear_detail_on_filter_change():
     st.session_state.detay_item = None
 
 
+def clear_backtest_on_change():
+    st.session_state.backtest_df = None
+    clear_detail_on_filter_change()
+
+
 def clear_detail_and_rebuild_top_markets():
     # Market filtresi değişince eski detay popup'ı açık kalmasın.
     st.session_state.detay_idx = None
@@ -3267,12 +3272,13 @@ with st.sidebar:
                 st.checkbox(lig['label'], key=f"cb_{lig['kod']}", on_change=clear_detail_on_filter_change)
 
     with st.expander("🧪 Sezon ve Veri Ayarları", expanded=True):
+        sezon_secenekleri = ['2122', '2223', '2324', '2425', '2526', '2627']
         yillar = st.multiselect(
             'Sezonlar',
-            options=['2122', '2223', '2324', '2425', '2526', '2627'],
-            default=['2122', '2223', '2324', '2425', '2526', '2627'],
+            options=sezon_secenekleri,
+            default=sezon_secenekleri,
             key='top_seasons',
-            on_change=clear_detail_on_filter_change,
+            on_change=clear_backtest_on_change,
         )
         min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, key='top_min_ornek', on_change=clear_detail_on_filter_change)
         TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, key='top_tol', on_change=clear_detail_on_filter_change)
@@ -3309,7 +3315,11 @@ with st.sidebar:
     yuksek_oran_btn = False
     if st.session_state.get('sayfa_modu') == 'Backtest':
         backtest_sezonu = st.selectbox(
-            'Test sezonu', options=yillar or ['2526'], index=max(0, len(yillar or ['2526']) - 1), key='backtest_sezonu'
+            'Test sezonu',
+            options=sezon_secenekleri,
+            index=sezon_secenekleri.index('2627'),
+            key='backtest_sezonu',
+            on_change=clear_backtest_on_change,
         )
         backtest_limit = st.number_input('En fazla test maçı', min_value=50, max_value=2000, value=500, step=50, key='backtest_limit')
         backtest_btn = st.button('🧪 BACKTESTİ BAŞLAT', use_container_width=True, type='primary', key='backtest_baslat_btn')
@@ -3527,7 +3537,8 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
 
 if backtest_btn:
     with st.spinner("🧪 Geçmiş maçlar tarih sırasıyla test ediliyor..."):
-        bt_gecmis = futbol_veri_motoru(tuple(yillar))
+        bt_sezonlar = list(dict.fromkeys(list(yillar) + [backtest_sezonu]))
+        bt_gecmis = futbol_veri_motoru(tuple(bt_sezonlar))
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
         st.session_state.backtest_df = backtest_calistir(
             bt_gecmis,
@@ -3565,8 +3576,18 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("## 🧪 Tarih Sıralı Backtest")
-    st.caption("Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.")
+    st.markdown(
+        f"""
+        <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
+          <div style="color:#0f172a !important;font-size:1.55rem;font-weight:900;line-height:1.2;">🧪 Tarih Sıralı Backtest</div>
+          <div style="color:#334155 !important;font-size:.90rem;margin-top:7px;line-height:1.5;">
+            Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
+          </div>
+          <div style="color:#1d4ed8 !important;font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     bt = st.session_state.get("backtest_df")
     if bt is None:
         st.info("Sol menüden sezon ve filtreleri seçip BACKTESTİ BAŞLAT butonuna bas.")
@@ -3608,7 +3629,11 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         st.markdown("### Market özeti")
         st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
         st.markdown("### Test edilen maçlar")
-        st.dataframe(backtest_stili(bt.sort_values("Tarih", ascending=False)), use_container_width=True, hide_index=True)
+        bt_goster = bt.sort_values("Tarih", ascending=False).copy()
+        for bool_col in ["Tuttu", "Baz Tuttu", "Form Kullanıldı"]:
+            if bool_col in bt_goster.columns:
+                bt_goster[bool_col] = bt_goster[bool_col].map({True: "✅ Evet", False: "❌ Hayır"}).fillna("—")
+        st.dataframe(backtest_stili(bt_goster), use_container_width=True, hide_index=True)
         st.download_button(
             "CSV olarak indir",
             data=bt.to_csv(index=False).encode("utf-8-sig"),
