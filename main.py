@@ -1,11 +1,13 @@
 
 import io
+import json
 import math
 import re
 import unicodedata
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 from html import escape
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -155,7 +157,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 37
+APP_SCHEMA_VERSION = 38
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -655,9 +657,13 @@ div[data-testid="stExpander"] summary,
 div[data-testid="stExpander"] summary *,
 div[data-testid="stTabs"] button,
 div[data-testid="stTabs"] button * {
-    color:#0f172a !important;
-    -webkit-text-fill-color:#0f172a !important;
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
     opacity:1 !important;
+}
+div[data-testid="stExpander"] summary svg {
+    color:#f8fafc !important;
+    fill:#f8fafc !important;
 }
 div[data-testid="stDialog"] div[data-testid="stExpander"] summary,
 div[data-testid="stDialog"] div[data-testid="stExpander"] summary * {
@@ -763,6 +769,14 @@ section[data-testid="stSidebar"] div[data-testid="stExpander"] summary,
 section[data-testid="stSidebar"] div[data-testid="stExpander"] summary * {
     color:#f8fafc !important;
     -webkit-text-fill-color:#f8fafc !important;
+    opacity:1 !important;
+}
+div[data-testid="stSpinner"],
+div[data-testid="stSpinner"] *,
+div[data-testid="stStatusWidget"],
+div[data-testid="stStatusWidget"] * {
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
     opacity:1 !important;
 }
 section[data-testid="stSidebar"] div[data-testid="stExpander"] label,
@@ -1321,6 +1335,7 @@ def bulten_cek(key, kodlar, t):
                     continue
 
                 res.append({
+                    "match_id": m.get("id", ""),
                     "sport_key": k,
                     "lig": m.get("sport_title", k),
                     "zaman": tm,
@@ -1678,16 +1693,16 @@ def son5_tablo_hazirla(maclar, takim):
     satirlar = []
     for _, r in maclar.iterrows():
         evde = str(r.get("HomeTeam")) == str(takim)
-        gf = int(float(r.get("FTHG", 0))) if pd.notna(r.get("FTHG")) else 0
-        ga = int(float(r.get("FTAG", 0))) if pd.notna(r.get("FTAG")) else 0
+        ev_gol = int(float(r.get("FTHG", 0))) if pd.notna(r.get("FTHG")) else 0
+        dep_gol = int(float(r.get("FTAG", 0))) if pd.notna(r.get("FTAG")) else 0
+        gf, ga = ev_gol, dep_gol
         if not evde:
             gf, ga = ga, gf
         sonuc = "🟢 G" if gf > ga else "🟡 B" if gf == ga else "🔴 M"
         satirlar.append({
             "Tarih": pd.to_datetime(r.get("Date"), errors="coerce").strftime("%d.%m.%Y"),
-            "Saha": "İç" if evde else "Dış",
-            "Rakip": r.get("AwayTeam") if evde else r.get("HomeTeam"),
-            "Skor": f"{gf}-{ga}",
+            "Maç": f"{r.get('HomeTeam', '')} – {r.get('AwayTeam', '')}",
+            "Skor": f"{ev_gol}-{dep_gol}",
             "Sonuç": sonuc,
         })
     return pd.DataFrame(satirlar)
@@ -1710,15 +1725,14 @@ def son_mac_kartlari_html(tablo):
         sonuc = str(r.get("Sonuç", ""))
         sonuc_cls = "win" if "G" in sonuc else "draw" if "B" in sonuc else "loss"
         tarih = escape(str(r.get("Tarih", "")))
-        saha = escape(str(r.get("Saha", "")))
-        rakip = escape(str(r.get("Rakip", "")))
+        mac_adi = escape(str(r.get("Maç", "")))
         skor = escape(str(r.get("Skor", "")))
         sonuc_guvenli = escape(sonuc)
         kartlar.append(
             f'<div class="recent-match-row">'
-            f'<div class="recent-top"><span>{tarih}</span><span>{saha}</span>'
+            f'<div class="recent-top"><span>{tarih}</span>'
             f'<b class="{sonuc_cls}">{sonuc_guvenli}</b></div>'
-            f'<div class="recent-bottom"><span title="{rakip}">{rakip}</span>'
+            f'<div class="recent-bottom"><span title="{mac_adi}">{mac_adi}</span>'
             f'<strong>{skor}</strong></div></div>'
         )
     return '<div class="recent-match-list">' + "".join(kartlar) + "</div>"
@@ -2363,6 +2377,133 @@ def mac_key(m):
         return f"{m.get('ev', '')}|{m.get('dep', '')}|{zaman}"
     except Exception:
         return str(m)
+
+
+TAHMIN_LOG_PATH = Path(__file__).with_name("vibe_tahmin_sonuclari.json")
+
+
+def tahmin_logunu_oku():
+    try:
+        if TAHMIN_LOG_PATH.exists():
+            veri = json.loads(TAHMIN_LOG_PATH.read_text(encoding="utf-8"))
+            return veri if isinstance(veri, list) else []
+    except Exception:
+        pass
+    return []
+
+
+def tahmin_logunu_yaz(kayitlar):
+    try:
+        gecici = TAHMIN_LOG_PATH.with_suffix(".tmp")
+        gecici.write_text(json.dumps(kayitlar, ensure_ascii=False, indent=2), encoding="utf-8")
+        gecici.replace(TAHMIN_LOG_PATH)
+        return True
+    except Exception:
+        return False
+
+
+def analiz_tahminlerini_kaydet(final):
+    """Analiz anındaki ana tahmini saklar; aynı maç/tahmin ikinci kez eklenmez."""
+    kayitlar = tahmin_logunu_oku()
+    mevcut = {str(x.get("kayit_id", "")): x for x in kayitlar}
+    for item in final:
+        m, t = item.get("m", {}), item.get("t", {})
+        label = str(t.get("ana_label", ""))
+        if not label or label in ["Belirsiz Maç", "Tahmin Zayıf"]:
+            continue
+        zaman = m.get("zaman")
+        zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman)
+        kayit_id = f"{m.get('match_id') or mac_key(m)}|{label}"
+        eski = mevcut.get(kayit_id, {})
+        mevcut[kayit_id] = {
+            "kayit_id": kayit_id,
+            "match_id": str(m.get("match_id", "")),
+            "sport_key": str(m.get("sport_key", "")),
+            "lig": str(m.get("lig", "")),
+            "zaman": zaman_iso,
+            "ev": str(m.get("ev", "")),
+            "dep": str(m.get("dep", "")),
+            "tahmin": label,
+            "guven": int(t.get("ana_p", 0)),
+            "oran": float(t.get("ana_odd")) if t.get("ana_odd") is not None else None,
+            "kaydedildi": eski.get("kaydedildi", datetime.now().isoformat(timespec="seconds")),
+            "durum": eski.get("durum", "Bekliyor"),
+            "ev_gol": eski.get("ev_gol"),
+            "dep_gol": eski.get("dep_gol"),
+            "tuttu": eski.get("tuttu"),
+            "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
+        }
+    return tahmin_logunu_yaz(list(mevcut.values()))
+
+
+def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol):
+    toplam = ev_gol + dep_gol
+    return {
+        "MS 1": ev_gol > dep_gol,
+        "Beraberlik": ev_gol == dep_gol,
+        "MS 2": dep_gol > ev_gol,
+        "2.5 Üst": toplam >= 3,
+        "2.5 Alt": toplam <= 2,
+        "KG Var": ev_gol > 0 and dep_gol > 0,
+        "KG Yok": ev_gol == 0 or dep_gol == 0,
+    }.get(str(label))
+
+
+def takim_anahtari(ad):
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", str(ad)).encode("ascii", "ignore").decode().lower())
+
+
+def tahmin_sonuclarini_guncelle(api_key):
+    """Odds API skorlarından son üç gündeki tamamlanan takip kayıtlarını günceller."""
+    kayitlar = tahmin_logunu_oku()
+    bekleyen = [x for x in kayitlar if x.get("durum") != "Tamamlandı"]
+    ligler = sorted({x.get("sport_key") for x in bekleyen if x.get("sport_key")})
+    skorlar = []
+    hata = None
+    for lig in ligler:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{lig}/scores/",
+                params={"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"},
+                timeout=15,
+            )
+            if r.status_code == 200 and isinstance(r.json(), list):
+                skorlar.extend(r.json())
+            else:
+                hata = f"Skor servisi HTTP {r.status_code} yanıtı verdi."
+        except Exception as exc:
+            hata = f"Skorlar alınamadı: {exc}"
+
+    id_map = {str(x.get("id", "")): x for x in skorlar if x.get("id")}
+    ad_map = {
+        (takim_anahtari(x.get("home_team")), takim_anahtari(x.get("away_team"))): x
+        for x in skorlar
+    }
+    guncellenen = 0
+    for kayit in kayitlar:
+        if kayit.get("durum") == "Tamamlandı":
+            continue
+        mac = id_map.get(str(kayit.get("match_id", "")))
+        if mac is None:
+            mac = ad_map.get((takim_anahtari(kayit.get("ev")), takim_anahtari(kayit.get("dep"))))
+        if not mac or not mac.get("completed") or not mac.get("scores"):
+            continue
+        puanlar = {takim_anahtari(x.get("name")): x.get("score") for x in mac.get("scores", [])}
+        try:
+            ev_gol = int(puanlar[takim_anahtari(kayit.get("ev"))])
+            dep_gol = int(puanlar[takim_anahtari(kayit.get("dep"))])
+        except (KeyError, TypeError, ValueError):
+            continue
+        tuttu = skor_tahmini_tuttu_mu(kayit.get("tahmin"), ev_gol, dep_gol)
+        if tuttu is None:
+            continue
+        kayit.update({
+            "durum": "Tamamlandı", "ev_gol": ev_gol, "dep_gol": dep_gol,
+            "tuttu": bool(tuttu), "sonuc_guncelleme": datetime.now().isoformat(timespec="seconds"),
+        })
+        guncellenen += 1
+    tahmin_logunu_yaz(kayitlar)
+    return guncellenen, hata
 
 
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10, sadece_ayni_lig=False):
@@ -3371,7 +3512,7 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Backtest"],
+        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -3522,6 +3663,8 @@ with st.sidebar:
         )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
         yuksek_oran_btn = st.button('💎 YÜKSEK ORANLILARI BUL', use_container_width=True, type='primary', key='yuksek_oran_btn')
+    elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
+        st.caption("Kaydedilen analizlerin sonuçlarını buradan yenileyebilirsin.")
     else:
         analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
 
@@ -3559,8 +3702,28 @@ if gecmis_btn:
             st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
-    st.markdown("## 🔎 Geçmiş Örnekleri İncele")
-    st.caption("Seçilen liglerde o gün oynanacak tüm maçları ve benzer 1-X-2 oranlarına sahip geçmiş karşılaşmaları gösterir; tahmin üretmez.")
+    st.markdown(
+        """
+        <div class="history-page-header" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
+          <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">🔎 Geçmiş Örnekleri İncele</div>
+          <div style="font-size:.90rem;margin-top:7px;line-height:1.5;">
+            Seçilen liglerde o gün oynanacak tüm maçları ve benzer 1-X-2 oranlarına sahip geçmiş karşılaşmaları gösterir; tahmin üretmez.
+          </div>
+        </div>
+        <style>
+        .history-page-header, .history-page-header * {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }
+        .history-page-header > div:last-child {
+            color:#334155 !important;
+            -webkit-text-fill-color:#334155 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     inceleme = st.session_state.get("gecmis_inceleme_list")
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
@@ -3682,8 +3845,14 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
             oneri = item.get("oneri", "PAS")
             toplam_benzer = int(item.get("toplam_benzer", len(ornekler)))
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+            oneri_baslik = {
+                "GÜÇLÜ DENENEBİLİR": "🟢 GÜÇLÜ DENENEBİLİR",
+                "DENENEBİLİR": "🔵 DENENEBİLİR",
+                "RİSKLİ DENEME": "🟠 RİSKLİ DENEME",
+                "PAS": "⚪ PAS",
+            }.get(oneri, f"⚪ {oneri}")
             with st.expander(
-                f"#{sira}  {m.get('ev', '')} – {m.get('dep', '')}  ·  {saat}",
+                f"#{sira}  {m.get('ev', '')} – {m.get('dep', '')}  ·  {saat}  ·  {oneri_baslik}",
                 expanded=(sira == 1),
             ):
                 oneri_renk = {
@@ -3730,6 +3899,93 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                     "Yüksek oran olayı": ornekler["Olay"],
                 })
                 st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+    legal_footer()
+    st.stop()
+
+
+if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
+    st.markdown(
+        """
+        <div class="history-page-header" style="background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px">
+          <div style="font-size:1.55rem;font-weight:900">📋 Sonuç Takibi</div>
+          <div style="font-size:.90rem;margin-top:7px">Maç analizinde kaydedilen ana tahminleri ve gerçekleşen sonuçları gösterir.</div>
+        </div>
+        """, unsafe_allow_html=True,
+    )
+    yenile_col, bilgi_col = st.columns([1, 3])
+    with yenile_col:
+        yenile = st.button("🔄 SONUÇLARI YENİLE", use_container_width=True, type="primary")
+    with bilgi_col:
+        st.caption("Skor servisi son üç günü getirir; sonuçları en az üç günde bir yenile.")
+    if yenile:
+        takip_key = get_app_api_key()
+        if not takip_key:
+            st.error("Sonuçları yenilemek için API key gerekli.")
+        else:
+            with st.spinner("Maç sonuçları kontrol ediliyor..."):
+                adet, hata = tahmin_sonuclarini_guncelle(takip_key)
+            if hata:
+                st.warning(hata)
+            st.success(f"{adet} tahminin sonucu güncellendi.")
+
+    takip = tahmin_logunu_oku()
+    if not takip:
+        st.info("Henüz kayıt yok. Maç Analizi çalıştırıldığında ana tahminler otomatik kaydedilir.")
+    else:
+        df = pd.DataFrame(takip)
+        df["zaman_dt"] = pd.to_datetime(df["zaman"], errors="coerce").dt.tz_localize(None)
+        baslangic = pd.Timestamp(datetime.now().date())
+        donem = st.selectbox("Dönem", ["Bugün", "Son 7 Gün", "Son 30 Gün", "Tümü"], index=2)
+        if donem == "Bugün":
+            gorunen = df[df["zaman_dt"].dt.date == baslangic.date()].copy()
+        elif donem == "Son 7 Gün":
+            gorunen = df[df["zaman_dt"] >= baslangic - pd.Timedelta(days=6)].copy()
+        elif donem == "Son 30 Gün":
+            gorunen = df[df["zaman_dt"] >= baslangic - pd.Timedelta(days=29)].copy()
+        else:
+            gorunen = df.copy()
+
+        biten = gorunen[gorunen["durum"] == "Tamamlandı"].copy()
+        kazanan = int(biten["tuttu"].fillna(False).astype(bool).sum()) if not biten.empty else 0
+        basari = kazanan / len(biten) * 100 if len(biten) else 0.0
+        oranli = biten[biten["oran"].notna()].copy() if not biten.empty else pd.DataFrame()
+        if not oranli.empty:
+            oranli["kar"] = oranli.apply(lambda x: (float(x["oran"]) - 1) * 100 if bool(x["tuttu"]) else -100, axis=1)
+            roi = float(oranli["kar"].sum()) / (len(oranli) * 100) * 100
+        else:
+            roi = None
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Tamamlanan", len(biten))
+        m2.metric("Kazanan", kazanan)
+        m3.metric("Başarı", f"%{basari:.1f}")
+        m4.metric("Bekleyen", int((gorunen["durum"] != "Tamamlandı").sum()))
+        m5.metric("ROI", f"%{roi:.1f}" if roi is not None else "—", help="Oranı bulunan tahminlere eşit tutar yatırıldığı varsayılır.")
+
+        if not biten.empty:
+            c1, c2 = st.columns(2)
+            for alan, baslik, kolon in [("tahmin", "Tahmin türü", c1), ("lig", "Lig", c2)]:
+                ozet = biten.groupby(alan, dropna=False).agg(Tahmin=("tuttu", "size"), Kazanan=("tuttu", "sum")).reset_index()
+                ozet["Başarı %"] = (ozet["Kazanan"] / ozet["Tahmin"] * 100).round(1)
+                ozet = ozet.rename(columns={alan: baslik}).sort_values(["Başarı %", "Tahmin"], ascending=False)
+                with kolon:
+                    st.markdown(f"#### {baslik} performansı")
+                    st.dataframe(ozet, use_container_width=True, hide_index=True)
+
+        if gorunen.empty:
+            st.warning("Seçilen dönemde kayıt yok.")
+        else:
+            liste = gorunen.sort_values("zaman_dt", ascending=False).copy()
+            liste["Tarih"] = liste["zaman_dt"].dt.strftime("%d.%m.%Y %H:%M")
+            liste["Maç"] = liste["ev"].astype(str) + " – " + liste["dep"].astype(str)
+            liste["Sonuç"] = liste.apply(lambda x: f"{int(x['ev_gol'])}-{int(x['dep_gol'])}" if pd.notna(x.get("ev_gol")) and pd.notna(x.get("dep_gol")) else "—", axis=1)
+            liste["Durum"] = liste.apply(
+                lambda x: "⏳ Bekliyor" if pd.isna(x.get("tuttu")) else "✅ Tuttu" if bool(x.get("tuttu")) else "❌ Tutmadı",
+                axis=1,
+            )
+            goster = liste[["Tarih", "lig", "Maç", "tahmin", "guven", "oran", "Sonuç", "Durum"]].rename(columns={"lig":"Lig", "tahmin":"Tahmin", "guven":"Güven %", "oran":"Oran"})
+            st.markdown("#### Kaydedilen tahminler")
+            st.dataframe(goster, use_container_width=True, hide_index=True)
+            st.download_button("CSV olarak indir", goster.to_csv(index=False).encode("utf-8-sig"), "vibe_sonuc_takibi.csv", "text/csv", use_container_width=True)
     legal_footer()
     st.stop()
 
@@ -3937,6 +4193,7 @@ if analiz_btn:
             reverse=True
         )
         st.session_state.final_list = final
+        analiz_tahminlerini_kaydet(final)
         st.session_state.top10_list = []
         st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig)
         st.session_state.detay_idx = None
@@ -4080,10 +4337,6 @@ def detay_ana_icerik():
             </div>
           </div>
 
-          <div class="risk-row">
-            <span class="rk">RİSK SEVİYESİ</span>
-            <span class="risk-pill {t['risk_cls']}">{t['risk_label']}</span>
-          </div>
         </div>
         """, unsafe_allow_html=True)
 
