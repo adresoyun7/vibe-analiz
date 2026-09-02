@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 20
+APP_SCHEMA_VERSION = 21
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1064,6 +1064,9 @@ def futbol_veri_motoru(sezonlar):
                 df = df[df.columns.intersection(cols)]
                 temp = df.dropna(subset=["B365H", "B365D", "B365A"]).copy()
                 temp["Date"] = pd.to_datetime(temp["Date"], dayfirst=True, errors="coerce")
+                # Güncel maçın ligiyle geçmiş ligi eşleştirebilmek için kaynağı koru.
+                temp["league_code"] = k
+                temp["season_code"] = s
                 liste.append(temp)
             except Exception:
                 continue
@@ -1145,6 +1148,7 @@ def bulten_cek(key, kodlar, t):
                     continue
 
                 res.append({
+                    "sport_key": k,
                     "lig": m.get("sport_title", k),
                     "zaman": tm,
                     "ev": home,
@@ -1435,7 +1439,21 @@ def market_label_to_odd(m_row, label):
         return m_row.get("b")
     return None
 
-def hesapla(b_df, m_row, tolerans):
+
+def ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig=False):
+    """İstenirse güncel The Odds API ligini football-data ligine daraltır."""
+    if not sadece_ayni_lig:
+        return gecmis_df
+    sport_key = m_row.get("sport_key", "") if hasattr(m_row, "get") else ""
+    history_code = ODDS_TO_HISTORY.get(str(sport_key))
+    if not history_code or "league_code" not in gecmis_df.columns:
+        return gecmis_df.iloc[0:0].copy()
+    return gecmis_df[gecmis_df["league_code"] == history_code].copy()
+
+def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False):
+    b_df = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
+    if b_df.empty:
+        return None, b_df
     rehber = tolerans_rehberi(float(tolerans))
     onerilen_min_mac = dinamik_min_mac(float(tolerans))
 
@@ -2059,7 +2077,7 @@ def mac_key(m):
         return str(m)
 
 
-def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
+def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10, sadece_ayni_lig=False):
     """
     Top10 / Top50 özel liste üretici.
 
@@ -2088,7 +2106,7 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
 
         for tol in top_toleranslar:
             try:
-                t, b_det = hesapla(gecmis_df, m, tol)
+                t, b_det = hesapla(gecmis_df, m, tol, sadece_ayni_lig=sadece_ayni_lig)
             except Exception:
                 continue
 
@@ -2278,6 +2296,71 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10):
     return secilen[:limit]
 
 
+def tahmin_tuttu_mu(label, row):
+    toplam_gol = float(row["FTHG"]) + float(row["FTAG"])
+    kg_var = float(row["FTHG"]) > 0 and float(row["FTAG"]) > 0
+    return {
+        "MS 1": row["FTR"] == "H",
+        "Beraberlik": row["FTR"] == "D",
+        "MS 2": row["FTR"] == "A",
+        "2.5 Üst": toplam_gol >= 3,
+        "2.5 Alt": toplam_gol <= 2,
+        "KG Var": kg_var,
+        "KG Yok": not kg_var,
+    }.get(str(label))
+
+
+def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
+                      sadece_ayni_lig=False, lig_kodlari=None, max_test=500):
+    """Her maçı yalnızca daha eski maçlarla analiz eden tarih sıralı backtest."""
+    if gecmis_df is None or gecmis_df.empty:
+        return pd.DataFrame()
+
+    veri = gecmis_df.copy()
+    veri["Date"] = pd.to_datetime(veri["Date"], errors="coerce")
+    veri = veri.dropna(subset=["Date", "FTHG", "FTAG", "FTR"])
+    test = veri[veri["season_code"].astype(str) == str(test_sezonu)].copy()
+    if lig_kodlari:
+        test = test[test["league_code"].isin(set(lig_kodlari))]
+    test = test.sort_values("Date").tail(int(max_test))
+
+    sonuclar = []
+    for _, row in test.iterrows():
+        train = veri[veri["Date"] < row["Date"]]
+        if sadece_ayni_lig:
+            train = train[train["league_code"] == row["league_code"]]
+        if train.empty:
+            continue
+
+        hedef = {"h": row["B365H"], "b": row["B365D"], "a": row["B365A"]}
+        t, benzerler = hesapla(train, hedef, tolerans)
+        if t is None or len(benzerler) < int(min_ornek):
+            continue
+        label = t.get("ana_label", "")
+        tuttu = tahmin_tuttu_mu(label, row)
+        if tuttu is None:
+            continue
+
+        oran = market_label_to_odd(hedef, label)
+        kar = None
+        if oran is not None:
+            kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
+
+        sonuclar.append({
+            "Tarih": row["Date"].date(),
+            "Lig": row.get("league_code", "-"),
+            "Maç": f"{row.get('HomeTeam', '')} - {row.get('AwayTeam', '')}",
+            "Tahmin": label,
+            "Güven": int(t.get("ana_p", 0)),
+            "Örnek": int(t.get("ornek", 0)),
+            "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
+            "Tuttu": bool(tuttu),
+            "Oran": round(float(oran), 2) if oran is not None else None,
+            "Kâr (100 TL)": kar,
+        })
+    return pd.DataFrame(sonuclar)
+
+
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
@@ -2289,6 +2372,7 @@ for key, default in [
     ("coupon_popup_open", False),
     ("last_gecmis_df", None),
     ("last_bulten_df", None),
+    ("backtest_df", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -2361,6 +2445,27 @@ FUTBOL_LIGLERI = {
     },
 }
 
+
+# The Odds API -> football-data.co.uk kod eşlemesi. Eşlemesi olmayan liglerde
+# "sadece aynı lig" seçeneği bilinçli olarak sonuç üretmez.
+ODDS_TO_HISTORY = {
+    "soccer_turkey_super_league": "T1",
+    "soccer_epl": "E0",
+    "soccer_efl_champ": "E1",
+    "soccer_england_league1": "E2",
+    "soccer_spain_la_liga": "SP1",
+    "soccer_spain_segunda_division": "SP2",
+    "soccer_germany_bundesliga": "D1",
+    "soccer_germany_bundesliga2": "D2",
+    "soccer_italy_serie_a": "I1",
+    "soccer_italy_serie_b": "I2",
+    "soccer_france_ligue_one": "F1",
+    "soccer_france_ligue_two": "F2",
+    "soccer_netherlands_eredivisie": "N1",
+    "soccer_belgium_first_div": "B1",
+    "soccer_portugal_primeira_liga": "P1",
+    "soccer_spl": "SC0",
+}
 
 LEAGUE_EMOJIS = {
     "Dünya Kupası": "🌍",
@@ -2772,8 +2877,13 @@ def clear_detail_and_rebuild_top_markets():
 
     try:
         if gecmis is not None and bulten is not None and not getattr(gecmis, "empty", True) and not getattr(bulten, "empty", True):
-            st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=10)
-            st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek_val, limit=50)
+            ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
+            st.session_state.top10_list = gunun_en_iyi_10_uret(
+                gecmis, bulten, min_ornek=min_ornek_val, limit=10, sadece_ayni_lig=ayni_lig
+            )
+            st.session_state.top50_list = gunun_en_iyi_10_uret(
+                gecmis, bulten, min_ornek=min_ornek_val, limit=50, sadece_ayni_lig=ayni_lig
+            )
     except Exception:
         # Filtre değişimi UI'ı bozmasın; gerekirse kullanıcı Analizi Başlat ile yeniden üretir.
         pass
@@ -2819,7 +2929,7 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 10 Market", "Top 50 Market"],
+        ["Maç Analizi", "Top 10 Market", "Top 50 Market", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -2905,6 +3015,13 @@ with st.sidebar:
         )
         min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, key='top_min_ornek', on_change=clear_detail_on_filter_change)
         TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, key='top_tol', on_change=clear_detail_on_filter_change)
+        sadece_ayni_lig = st.checkbox(
+            'Sadece aynı lig verilerini kullan',
+            value=False,
+            key='sadece_ayni_lig',
+            help='Açıkken maç yalnızca kendi liginin geçmişiyle karşılaştırılır. Geçmiş veri eşlemesi olmayan liglerde sonuç oluşmaz.',
+            on_change=clear_detail_on_filter_change,
+        )
         st.markdown(f"<div style='color:#ffd24a;font-weight:800'>Hassasiyet: {TOLERANS:.2f}</div>", unsafe_allow_html=True)
 
     with st.expander("🎯 Oynanılabilir / Canlı", expanded=True):
@@ -2925,7 +3042,16 @@ with st.sidebar:
         )
 
     secili_kodlar = selected_league_codes()
-    analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
+    analiz_btn = False
+    backtest_btn = False
+    if st.session_state.get('sayfa_modu') == 'Backtest':
+        backtest_sezonu = st.selectbox(
+            'Test sezonu', options=yillar or ['2526'], index=max(0, len(yillar or ['2526']) - 1), key='backtest_sezonu'
+        )
+        backtest_limit = st.number_input('En fazla test maçı', min_value=50, max_value=2000, value=500, step=50, key='backtest_limit')
+        backtest_btn = st.button('🧪 BACKTESTİ BAŞLAT', use_container_width=True, type='primary', key='backtest_baslat_btn')
+    else:
+        analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
 
     if st.button('🎫 Kuponlarım', use_container_width=True, key='toggle_coupon_popup'):
         st.session_state.coupon_popup_open = True
@@ -2938,6 +3064,66 @@ with st.sidebar:
         )
 
 legal_sidebar_sections()
+
+
+if backtest_btn:
+    with st.spinner("🧪 Geçmiş maçlar tarih sırasıyla test ediliyor..."):
+        bt_gecmis = futbol_veri_motoru(tuple(yillar))
+        secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
+        st.session_state.backtest_df = backtest_calistir(
+            bt_gecmis,
+            backtest_sezonu,
+            TOLERANS,
+            min_ornek,
+            sadece_ayni_lig=sadece_ayni_lig,
+            lig_kodlari=secili_history_codes or None,
+            max_test=backtest_limit,
+        )
+        st.rerun()
+
+if st.session_state.get('sayfa_modu') == 'Backtest':
+    st.markdown("## 🧪 Tarih Sıralı Backtest")
+    st.caption("Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.")
+    bt = st.session_state.get("backtest_df")
+    if bt is None:
+        st.info("Sol menüden sezon ve filtreleri seçip BACKTESTİ BAŞLAT butonuna bas.")
+    elif bt.empty:
+        st.warning("Bu ayarlarla test edilebilir tahmin bulunamadı. Sezonları, ligleri veya minimum örnek sayısını kontrol et.")
+    else:
+        toplam = len(bt)
+        kazanan = int(bt["Tuttu"].sum())
+        basari = kazanan / toplam * 100 if toplam else 0
+        ms_bt = bt[bt["Kâr (100 TL)"].notna()].copy()
+        net_kar = float(ms_bt["Kâr (100 TL)"].sum()) if not ms_bt.empty else 0.0
+        yatirilan = len(ms_bt) * 100
+        roi = net_kar / yatirilan * 100 if yatirilan else 0.0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Toplam tahmin", toplam)
+        c2.metric("Kazanan", kazanan)
+        c3.metric("Başarı", f"%{basari:.1f}")
+        c4.metric("MS ROI", f"%{roi:.1f}", help="Yalnızca geçmiş B365 oranı bulunan MS 1/X/2 tahminleri, her seçime 100 TL varsayımıyla.")
+
+        ozet = (
+            bt.groupby("Tahmin", dropna=False)
+            .agg(Tahmin_Sayısı=("Tuttu", "size"), Kazanan=("Tuttu", "sum"), Ortalama_Güven=("Güven", "mean"))
+            .reset_index()
+        )
+        ozet["Başarı %"] = (ozet["Kazanan"] / ozet["Tahmin_Sayısı"] * 100).round(1)
+        ozet["Ortalama_Güven"] = ozet["Ortalama_Güven"].round(1)
+        st.markdown("### Market özeti")
+        st.dataframe(ozet, use_container_width=True, hide_index=True)
+        st.markdown("### Test edilen maçlar")
+        st.dataframe(bt.sort_values("Tarih", ascending=False), use_container_width=True, hide_index=True)
+        st.download_button(
+            "CSV olarak indir",
+            data=bt.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"vibe_backtest_{backtest_sezonu}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    legal_footer()
+    st.stop()
 
 
 if analiz_btn:
@@ -2954,7 +3140,7 @@ if analiz_btn:
         stability_tols = [0.00, 0.03, 0.05, 0.08, 0.10]
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
-                t, b_det = hesapla(gecmis, m, TOLERANS)
+                t, b_det = hesapla(gecmis, m, TOLERANS, sadece_ayni_lig=sadece_ayni_lig)
                 if t is None:
                     continue
                 if len(b_det) < min_ornek:
@@ -2962,7 +3148,7 @@ if analiz_btn:
 
                 stable_hits = []
                 for stab_tol in stability_tols:
-                    stab_t, stab_b = hesapla(gecmis, m, stab_tol)
+                    stab_t, stab_b = hesapla(gecmis, m, stab_tol, sadece_ayni_lig=sadece_ayni_lig)
                     if stab_t is None:
                         continue
                     if (
@@ -3022,8 +3208,8 @@ if analiz_btn:
             reverse=True
         )
         st.session_state.final_list = final
-        st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10)
-        st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50)
+        st.session_state.top10_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=10, sadece_ayni_lig=sadece_ayni_lig)
+        st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig)
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
