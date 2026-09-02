@@ -157,7 +157,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 42
+APP_SCHEMA_VERSION = 43
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3512,16 +3512,14 @@ if st.session_state.get('date_mode') == '3 gün sonra':
     st.session_state['special_date'] = bugun + timedelta(days=3)
 
 
-# En sık değiştirilen analiz ayarları kaydırmada ekranın üstünde kalır.
+# En sık değiştirilen analiz ayarları ana ekranın üstünde normal akışta gösterilir.
 with st.container(key="sticky_analysis_controls"):
     st.markdown(
         """
         <style>
         .st-key-sticky_analysis_controls {
-            position:sticky !important;
-            top:.45rem !important;
-            z-index:999 !important;
-            align-self:flex-start !important;
+            position:relative !important;
+            z-index:1 !important;
             background:rgba(255,255,255,.97) !important;
             border:1px solid #cbd5e1 !important;
             border-radius:14px !important;
@@ -3529,9 +3527,6 @@ with st.container(key="sticky_analysis_controls"):
             margin:0 0 14px 0 !important;
             box-shadow:0 8px 24px rgba(15,23,42,.16) !important;
             backdrop-filter:blur(8px);
-        }
-        [data-testid="stMainBlockContainer"] {
-            overflow:visible !important;
         }
         .top-analysis-controls {
             margin:0 0 2px 0;
@@ -3553,7 +3548,7 @@ with st.container(key="sticky_analysis_controls"):
         @media (max-width:700px) {
             .st-key-sticky_analysis_controls {
                 position:relative !important;
-                top:.2rem !important;
+                top:auto !important;
                 padding:6px 9px !important;
             }
             .top-analysis-controls { display:none; }
