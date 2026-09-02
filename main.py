@@ -154,7 +154,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 28
+APP_SCHEMA_VERSION = 29
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1061,7 +1061,8 @@ def futbol_veri_motoru(sezonlar):
                 df = pd.read_csv(url)
                 cols = [
                     "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG",
-                    "FTR", "HTR", "B365H", "B365D", "B365A", "HC", "AC", "HY", "AY"
+                    "FTR", "HTR", "B365H", "B365D", "B365A", "HC", "AC", "HY", "AY",
+                    "HS", "AS", "HST", "AST", "B365>2.5", "B365<2.5", "Avg>2.5", "Avg<2.5"
                 ]
                 df = df[df.columns.intersection(cols)]
                 temp = df.dropna(subset=["B365H", "B365D", "B365A"]).copy()
@@ -1118,12 +1119,24 @@ def bulten_cek(key, kodlar, t):
                 params={
                     "apiKey": key,
                     "regions": "eu",
-                    "markets": "h2h",
+                    "markets": "h2h,totals,btts",
                     "oddsFormat": "decimal",
                 },
                 timeout=12,
             )
 
+            # Bazı lig/aboneliklerde BTTS marketi desteklenmez; bülteni tamamen kaybetme.
+            if r.status_code != 200:
+                r = requests.get(
+                    f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
+                    params={
+                        "apiKey": key,
+                        "regions": "eu",
+                        "markets": "h2h,totals",
+                        "oddsFormat": "decimal",
+                    },
+                    timeout=12,
+                )
             if r.status_code != 200:
                 continue
 
@@ -1144,19 +1157,6 @@ def bulten_cek(key, kodlar, t):
                 if not bookies:
                     continue
 
-                market = None
-                for bk in bookies:
-                    for mk in bk.get("markets", []):
-                        if mk.get("key") == "h2h":
-                            market = mk
-                            break
-                    if market:
-                        break
-
-                if not market:
-                    continue
-
-                outcomes = market.get("outcomes", [])
                 home = m.get("home_team", "")
                 away = m.get("away_team", "")
 
@@ -1167,15 +1167,47 @@ def bulten_cek(key, kodlar, t):
                             away = team
                             break
 
-                h = next((x["price"] for x in outcomes if x["name"] == home), None)
-                a = next((x["price"] for x in outcomes if x["name"] == away), None)
-                b = next((x["price"] for x in outcomes if str(x["name"]).lower() in ["draw", "tie", "beraberlik"]), None)
+                fiyatlar = {"h": [], "b": [], "a": [], "over25": [], "under25": [], "btts_yes": [], "btts_no": []}
+                for bk in bookies:
+                    for market in bk.get("markets", []):
+                        mk_key = str(market.get("key", "")).lower()
+                        for out in market.get("outcomes", []):
+                            try:
+                                price = float(out.get("price"))
+                            except (TypeError, ValueError):
+                                continue
+                            name = str(out.get("name", "")).strip()
+                            lname = name.lower()
+                            point = out.get("point")
+                            if mk_key == "h2h":
+                                if name == home:
+                                    fiyatlar["h"].append(price)
+                                elif name == away:
+                                    fiyatlar["a"].append(price)
+                                elif lname in {"draw", "tie", "beraberlik"}:
+                                    fiyatlar["b"].append(price)
+                            elif mk_key == "totals" and point is not None and abs(float(point) - 2.5) < 0.01:
+                                if lname == "over":
+                                    fiyatlar["over25"].append(price)
+                                elif lname == "under":
+                                    fiyatlar["under25"].append(price)
+                            elif mk_key in {"btts", "both_teams_to_score"}:
+                                if lname in {"yes", "var"}:
+                                    fiyatlar["btts_yes"].append(price)
+                                elif lname in {"no", "yok"}:
+                                    fiyatlar["btts_no"].append(price)
+
+                medyan = lambda xs: float(pd.Series(xs).median()) if xs else None
+                h, b, a = medyan(fiyatlar["h"]), medyan(fiyatlar["b"]), medyan(fiyatlar["a"])
+                over25, under25 = medyan(fiyatlar["over25"]), medyan(fiyatlar["under25"])
+                btts_yes, btts_no = medyan(fiyatlar["btts_yes"]), medyan(fiyatlar["btts_no"])
 
                 if h is None or a is None or b is None:
                     continue
 
                 res.append({
                     "sport_key": k,
+                    "event_id": m.get("id", ""),
                     "lig": m.get("sport_title", k),
                     "zaman": tm,
                     "ev": home,
@@ -1183,6 +1215,10 @@ def bulten_cek(key, kodlar, t):
                     "h": float(h),
                     "b": float(b),
                     "a": float(a),
+                    "over25_odd": over25,
+                    "under25_odd": under25,
+                    "btts_yes_odd": btts_yes,
+                    "btts_no_odd": btts_no,
                 })
         except Exception:
             continue
@@ -1191,6 +1227,15 @@ def bulten_cek(key, kodlar, t):
         return pd.DataFrame()
 
     df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
+    for yes_col, no_col, out_col in [
+        ("over25_odd", "under25_odd", "market_over_p"),
+        ("btts_yes_odd", "btts_no_odd", "market_btts_p"),
+    ]:
+        yes_inv = 1 / pd.to_numeric(df[yes_col], errors="coerce")
+        no_inv = 1 / pd.to_numeric(df[no_col], errors="coerce")
+        df[out_col] = yes_inv / (yes_inv + no_inv)
+    # Ayrı iki marketten türetilen yaklaşık birleşik piyasa olasılığıdır.
+    df["market_combo_p"] = df["market_over_p"] * df["market_btts_p"]
     return df.sort_values("zaman").reset_index(drop=True)
 
 
@@ -1499,7 +1544,8 @@ def _takim_eslestir(takim, adaylar):
 def takim_formu_hesapla(veri, takim, tarih=None, mekan=None, son_mac=5):
     """Takımın maçtan önceki genel ve iç/dış saha formunu hesaplar."""
     bos = {"bulundu": False, "takim": str(takim), "mac": 0, "puan": 50.0,
-           "ppg": 0.0, "gf": 0.0, "ga": 0.0, "ust25": 0.0, "kg": 0.0}
+           "ppg": 0.0, "gf": 0.0, "ga": 0.0, "ust25": 0.0, "kg": 0.0,
+           "iy_gol": 0.0, "sut": None, "isabetli_sut": None, "dinlenme": None}
     if veri is None or veri.empty or not takim:
         return bos
     adaylar = pd.unique(pd.concat([veri["HomeTeam"], veri["AwayTeam"]], ignore_index=True).dropna())
@@ -1524,7 +1570,7 @@ def takim_formu_hesapla(veri, takim, tarih=None, mekan=None, son_mac=5):
         secim = genel.head(son_mac)
     if secim.empty:
         return bos
-    puanlar, goller, yenenler, ustler, kgler = [], [], [], [], []
+    puanlar, goller, yenenler, ustler, kgler, iy_goller, sutlar, isabetliler = [], [], [], [], [], [], [], []
     for _, r in secim.iterrows():
         evde = r["HomeTeam"] == eslesen
         gf = float(r["FTHG"] if evde else r["FTAG"])
@@ -1532,12 +1578,116 @@ def takim_formu_hesapla(veri, takim, tarih=None, mekan=None, son_mac=5):
         puanlar.append(3 if gf > ga else 1 if gf == ga else 0)
         goller.append(gf); yenenler.append(ga)
         ustler.append((gf + ga) >= 3); kgler.append(gf > 0 and ga > 0)
+        iy_ev = pd.to_numeric(r.get("HTHG"), errors="coerce")
+        iy_dep = pd.to_numeric(r.get("HTAG"), errors="coerce")
+        if pd.notna(iy_ev) and pd.notna(iy_dep):
+            iy_goller.append((float(iy_ev) + float(iy_dep)) >= 1)
+        sut = pd.to_numeric(r.get("HS" if evde else "AS"), errors="coerce")
+        isabet = pd.to_numeric(r.get("HST" if evde else "AST"), errors="coerce")
+        if pd.notna(sut):
+            sutlar.append(float(sut))
+        if pd.notna(isabet):
+            isabetliler.append(float(isabet))
     ppg = sum(puanlar) / len(puanlar)
     gf_avg, ga_avg = sum(goller) / len(goller), sum(yenenler) / len(yenenler)
     form_puani = max(0.0, min(100.0, 50 + (ppg - 1.5) * 22 + (gf_avg - ga_avg) * 12))
+    mac_tarihi = pd.to_datetime(tarih, errors="coerce") if tarih is not None else pd.NaT
+    son_tarih = pd.to_datetime(genel.iloc[0]["Date"], errors="coerce") if not genel.empty else pd.NaT
+    dinlenme = int((mac_tarihi - son_tarih).days) if pd.notna(mac_tarihi) and pd.notna(son_tarih) else None
     return {"bulundu": True, "takim": str(eslesen), "mac": len(secim), "puan": round(form_puani, 1),
             "ppg": round(ppg, 2), "gf": round(gf_avg, 2), "ga": round(ga_avg, 2),
-            "ust25": sum(ustler) / len(ustler), "kg": sum(kgler) / len(kgler)}
+            "ust25": sum(ustler) / len(ustler), "kg": sum(kgler) / len(kgler),
+            "iy_gol": sum(iy_goller) / len(iy_goller) if iy_goller else 0.5,
+            "sut": round(sum(sutlar) / len(sutlar), 2) if sutlar else None,
+            "isabetli_sut": round(sum(isabetliler) / len(isabetliler), 2) if isabetliler else None,
+            "dinlenme": dinlenme}
+
+
+def poisson_ust_kg_olasiligi(lambda_ev, lambda_dep, max_gol=9):
+    """Bağımsız Poisson skor matrisiyle 2.5 Üst ve KG Var ortak olasılığı."""
+    lambda_ev = max(0.15, min(4.5, float(lambda_ev)))
+    lambda_dep = max(0.15, min(4.5, float(lambda_dep)))
+    toplam = 0.0
+    for ev_gol in range(max_gol + 1):
+        p_ev = math.exp(-lambda_ev) * (lambda_ev ** ev_gol) / math.factorial(ev_gol)
+        for dep_gol in range(max_gol + 1):
+            if ev_gol > 0 and dep_gol > 0 and ev_gol + dep_gol >= 3:
+                p_dep = math.exp(-lambda_dep) * (lambda_dep ** dep_gol) / math.factorial(dep_gol)
+                toplam += p_ev * p_dep
+    return max(0.0, min(1.0, toplam))
+
+
+def lig_gol_profili(veri, tarih=None):
+    v = veri.copy()
+    v["Date"] = pd.to_datetime(v["Date"], errors="coerce")
+    if tarih is not None:
+        v = v[v["Date"] < pd.to_datetime(tarih)]
+    hg = pd.to_numeric(v.get("FTHG"), errors="coerce")
+    ag = pd.to_numeric(v.get("FTAG"), errors="coerce")
+    valid = hg.notna() & ag.notna()
+    if valid.sum() < 20:
+        return {"mac": int(valid.sum()), "gol": 2.6, "ust_kg": 0.45}
+    total = hg[valid] + ag[valid]
+    combo = (total >= 3) & (hg[valid] > 0) & (ag[valid] > 0)
+    return {"mac": int(valid.sum()), "gol": float(total.mean()), "ust_kg": float(combo.mean())}
+
+
+_USTKG_ML_CACHE = {}
+
+
+def gradient_boost_ustkg_olasiligi(veri, m_row):
+    """Yalnızca maç öncesi oranlarla eğitilen gerçek Gradient Boosting bileşeni."""
+    # Tarihsel backtest döngüsünde tekrar tekrar model eğitmeyip yalnız canlı bültende kullanılır.
+    if not m_row.get("event_id"):
+        return None, "Canlı bülten dışında devre dışı"
+    try:
+        from sklearn.ensemble import HistGradientBoostingClassifier
+    except Exception:
+        return None, "scikit-learn kurulu değil"
+    v = veri.copy()
+    v["Date"] = pd.to_datetime(v["Date"], errors="coerce")
+    hedef_tarih = pd.to_datetime(m_row.get("zaman"), errors="coerce")
+    if pd.notna(hedef_tarih):
+        v = v[v["Date"] < hedef_tarih]
+    temel = ["B365H", "B365D", "B365A"]
+    for c in temel + ["FTHG", "FTAG"]:
+        v[c] = pd.to_numeric(v.get(c), errors="coerce")
+    v = v.dropna(subset=temel + ["FTHG", "FTAG"])
+    if len(v) < 250:
+        return None, "En az 250 eğitim maçı gerekli"
+    # Football-data kaynaklarında bulunan gerçek kapanış totals oranı varsa modele girer.
+    over_col = "Avg>2.5" if "Avg>2.5" in v.columns else "B365>2.5"
+    under_col = "Avg<2.5" if "Avg<2.5" in v.columns else "B365<2.5"
+    for c in [over_col, under_col]:
+        if c not in v:
+            v[c] = math.nan
+        v[c] = pd.to_numeric(v[c], errors="coerce")
+    med_over = float(v[over_col].median()) if v[over_col].notna().any() else 2.0
+    med_under = float(v[under_col].median()) if v[under_col].notna().any() else 2.0
+    v[over_col] = v[over_col].fillna(med_over)
+    v[under_col] = v[under_col].fillna(med_under)
+    features = temel + [over_col, under_col]
+    gun_key = hedef_tarih.date().isoformat() if pd.notna(hedef_tarih) else "all"
+    cache_key = (len(v), gun_key, round(float(v["Date"].max().timestamp()), -3))
+    if cache_key not in _USTKG_ML_CACHE:
+        x = v[features].astype(float)
+        y = (((v["FTHG"] + v["FTAG"]) >= 3) & (v["FTHG"] > 0) & (v["FTAG"] > 0)).astype(int)
+        if y.nunique() < 2:
+            return None, "Tek sınıflı eğitim verisi"
+        model = HistGradientBoostingClassifier(
+            learning_rate=0.045, max_iter=120, max_leaf_nodes=15,
+            min_samples_leaf=30, l2_regularization=1.0, random_state=42,
+        )
+        model.fit(x, y)
+        _USTKG_ML_CACHE.clear()
+        _USTKG_ML_CACHE[cache_key] = (model, med_over, med_under, features)
+    model, med_over, med_under, features = _USTKG_ML_CACHE[cache_key]
+    satir = pd.DataFrame([{
+        "B365H": float(m_row["h"]), "B365D": float(m_row["b"]), "B365A": float(m_row["a"]),
+        over_col: float(m_row.get("over25_odd") or med_over),
+        under_col: float(m_row.get("under25_odd") or med_under),
+    }])[features]
+    return float(model.predict_proba(satir)[0, 1]), "Hazır"
 
 
 def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
@@ -1610,44 +1760,74 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         ms_raw = float(form_ms_dagilim[ms_mod])
         ms_side = "MS 1" if ms_mod == "H" else "MS 2" if ms_mod == "A" else "Beraberlik"
 
-    # 2.5 Üst + KG Var özel birleşik modeli.
+    # 2.5 Üst + KG Var: benzer maç + Poisson + Gradient Boosting + gerçek piyasa.
     ust_kg_raw = float(((toplam_gol >= 3) & (b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
-    form_ust_sinyal = (
-        (float(ev_form.get("ust25", 0.5)) + float(dep_form.get("ust25", 0.5))) / 2
-        if form_var else ms25_raw
-    )
-    form_kg_sinyal = (
-        (float(ev_form.get("kg", 0.5)) + float(dep_form.get("kg", 0.5))) / 2
-        if form_var else kg_raw
-    )
-    if form_var:
-        toplam_gol_proxy = (
-            float(ev_form.get("gf", 0)) + float(ev_form.get("ga", 0))
-            + float(dep_form.get("gf", 0)) + float(dep_form.get("ga", 0))
-        ) / 2
-        gol_sinyali = max(0.0, min(1.0, toplam_gol_proxy / 3.5))
+    ev_form10 = takim_formu_hesapla(form_kaynagi, m_row.get("ev", ""), m_row.get("zaman"), "home", 10)
+    dep_form10 = takim_formu_hesapla(form_kaynagi, m_row.get("dep", ""), m_row.get("zaman"), "away", 10)
+    zengin_form_var = bool(form_var and ev_form10.get("bulundu") and dep_form10.get("bulundu"))
+    lig_profil = lig_gol_profili(form_kaynagi, m_row.get("zaman"))
+    lig_takim_gol = max(0.7, float(lig_profil["gol"]) / 2)
+    if zengin_form_var:
+        lambda_ev = (float(ev_form["gf"]) * .30 + float(dep_form["ga"]) * .25
+                     + float(ev_form10["gf"]) * .15 + float(dep_form10["ga"]) * .10
+                     + lig_takim_gol * .20)
+        lambda_dep = (float(dep_form["gf"]) * .30 + float(ev_form["ga"]) * .25
+                      + float(dep_form10["gf"]) * .15 + float(ev_form10["ga"]) * .10
+                      + lig_takim_gol * .20)
     else:
-        gol_sinyali = max(0.0, min(1.0, float(toplam_gol.mean()) / 3.5))
-    ornek_guveni = min(sample / 25.0, 1.0)
-    ust_kg_model_prob = (
-        ust_kg_raw * 0.40
-        + form_ust_sinyal * 0.18
-        + form_kg_sinyal * 0.18
-        + gol_sinyali * 0.12
-        + iy05_raw * 0.12
-    )
-    # Az örnekli maçlarda sonucu nötr seviyeye yaklaştır.
-    ust_kg_model_prob = ust_kg_model_prob * (0.65 + 0.35 * ornek_guveni)
+        lambda_ev = max(.3, float(b["FTHG"].mean()))
+        lambda_dep = max(.3, float(b["FTAG"].mean()))
+    poisson_prob = poisson_ust_kg_olasiligi(lambda_ev, lambda_dep)
+    ml_prob, ml_durum = gradient_boost_ustkg_olasiligi(form_kaynagi, m_row)
+    market_prob = pd.to_numeric(m_row.get("market_combo_p"), errors="coerce")
+    market_var = pd.notna(market_prob)
+
+    # Form yalnız ana iki veri bileşeninin yönünü destekliyorsa sınırlı ağırlık alır.
+    form_prob = None
+    form_kullanildi = False
+    if zengin_form_var:
+        form_prob = (
+            (float(ev_form["ust25"]) + float(dep_form["ust25"])) * .20
+            + (float(ev_form["kg"]) + float(dep_form["kg"])) * .20
+            + (float(ev_form10["ust25"]) + float(dep_form10["ust25"])) * .15
+            + (float(ev_form10["kg"]) + float(dep_form10["kg"])) * .15
+            + (float(ev_form["iy_gol"]) + float(dep_form["iy_gol"])) * .10
+        ) / 1.60
+        ana_yon = (ust_kg_raw + poisson_prob) / 2
+        form_kullanildi = (form_prob >= .50) == (ana_yon >= .50)
+
+    model_probs = [ust_kg_raw, poisson_prob]
+    agirliklar = [.32, .28]
+    if ml_prob is not None:
+        model_probs.append(float(ml_prob)); agirliklar.append(.25)
+    if market_var:
+        model_probs.append(float(market_prob)); agirliklar.append(.15)
+    ust_kg_model_prob = sum(p * w for p, w in zip(model_probs, agirliklar)) / sum(agirliklar)
+    if form_kullanildi:
+        ust_kg_model_prob = ust_kg_model_prob * .90 + float(form_prob) * .10
+    # Basit kalibrasyon: küçük örneği lig taban oranına doğru küçült.
+    kalibrasyon_guveni = min(1.0, sample / 35.0)
+    ust_kg_model_prob = ust_kg_model_prob * kalibrasyon_guveni + float(lig_profil["ust_kg"]) * (1 - kalibrasyon_guveni)
     ust_kg_model_p = int(round(max(0.0, min(0.95, ust_kg_model_prob)) * 100))
     ust_kg_hit = int(((toplam_gol >= 3) & (b["FTHG"] > 0) & (b["FTAG"] > 0)).sum())
-    if sample >= 20 and ust_kg_model_p >= 62 and ust_kg_hit >= 7:
-        ust_kg_oneri = "GÜÇLÜ"
-    elif sample >= 12 and ust_kg_model_p >= 54 and ust_kg_hit >= 4:
-        ust_kg_oneri = "DENENEBİLİR"
-    elif ust_kg_model_p >= 46 and ust_kg_hit >= 2:
-        ust_kg_oneri = "RİSKLİ"
-    else:
+    model_uyusmazlik = max(model_probs) - min(model_probs)
+    piyasa_edge = (ust_kg_model_prob - float(market_prob)) if market_var else None
+    pas_nedenleri = []
+    if sample < 20: pas_nedenleri.append("Benzer örnek 20'nin altında")
+    if not zengin_form_var: pas_nedenleri.append("Son 5/10 takım verisi eşleşmedi")
+    if ml_prob is None: pas_nedenleri.append(f"Gradient Boosting yok: {ml_durum}")
+    if not market_var: pas_nedenleri.append("Gerçek totals/BTTS oranı eksik")
+    if model_uyusmazlik > .18: pas_nedenleri.append("Modeller farklı yönde")
+    if piyasa_edge is not None and piyasa_edge < .05: pas_nedenleri.append("Piyasa avantajı %5'in altında")
+    if lig_profil["mac"] < 80 or lig_profil["ust_kg"] < .40: pas_nedenleri.append("Lig geçmiş testi yetersiz")
+    if pas_nedenleri or ust_kg_model_p < 55:
         ust_kg_oneri = "PAS"
+    elif ust_kg_model_p >= 70:
+        ust_kg_oneri = "GÜÇLÜ"
+    elif ust_kg_model_p >= 62:
+        ust_kg_oneri = "DENENEBİLİR"
+    else:
+        ust_kg_oneri = "RİSKLİ"
 
     htft_s = b["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + b["FTR"].replace({"H": "1", "A": "2", "D": "X"})
     htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
@@ -1944,6 +2124,17 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         f"2.5 Üst + KG Var özel modeli: %{ust_kg_model_p} ({ust_kg_oneri}); "
         f"benzerlerde {ust_kg_hit}/{sample} gerçekleşme."
     )
+    nedenler.append(
+        f"Model bileşenleri — Poisson %{poisson_prob*100:.1f}, "
+        f"Gradient Boosting {('%' + format(ml_prob*100, '.1f')) if ml_prob is not None else 'yok'}, "
+        f"piyasa {('%' + format(float(market_prob)*100, '.1f')) if market_var else 'yok'}."
+    )
+    if form_kullanildi:
+        nedenler.append("Son 5/10 form sinyali ana modelleri desteklediği için sınırlı ağırlıkla kullanıldı.")
+    elif zengin_form_var:
+        nedenler.append("Form ana modelleri desteklemediği için birleşik tahmini değiştirmedi.")
+    if pas_nedenleri:
+        nedenler.append("PAS nedenleri: " + "; ".join(pas_nedenleri) + ".")
 
     playable_score = ana_p
     if combo_var:
@@ -2054,6 +2245,19 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         "ust_kg_oneri": ust_kg_oneri,
         "ust_kg_hit": ust_kg_hit,
         "ust_kg_raw_p": int(round(ust_kg_raw * 100)),
+        "ust_kg_poisson_p": int(round(poisson_prob * 100)),
+        "ust_kg_ml_p": int(round(ml_prob * 100)) if ml_prob is not None else None,
+        "ust_kg_market_p": int(round(float(market_prob) * 100)) if market_var else None,
+        "ust_kg_edge": round(float(piyasa_edge) * 100, 1) if piyasa_edge is not None else None,
+        "ust_kg_model_uyusmazlik": round(model_uyusmazlik * 100, 1),
+        "ust_kg_pas_nedenleri": pas_nedenleri,
+        "ust_kg_form_kullanildi": form_kullanildi,
+        "lambda_ev": round(lambda_ev, 2),
+        "lambda_dep": round(lambda_dep, 2),
+        "lig_gol_ort": round(float(lig_profil["gol"]), 2),
+        "ev_form10": ev_form10,
+        "dep_form10": dep_form10,
+        "kadro_durumu": "API-Football anahtarı ve eşleşen kadro verisi gerekli",
         "score": score,
         "stability_tols": [],
         "stability_count": 0,
@@ -3275,7 +3479,7 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Backtest"],
+        ["Üst+KG Modeli", "Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -3287,7 +3491,7 @@ with st.sidebar:
         # Üst satır: 3 filtre
         c_ms, c_25, c_kg = st.columns([1, 1, 1], gap="small")
         with c_ms:
-            st.checkbox("MS", value=True, key="top10_filter_ms", on_change=clear_detail_and_rebuild_top_markets)
+            st.checkbox("MS", value=False, key="top10_filter_ms", on_change=clear_detail_and_rebuild_top_markets)
         with c_25:
             st.checkbox("2.5", value=True, key="top10_filter_25", on_change=clear_detail_and_rebuild_top_markets)
         with c_kg:
@@ -4138,6 +4342,13 @@ if not fl:
     </div>
     """, unsafe_allow_html=True)
 else:
+    if st.session_state.get("sayfa_modu") == "Üst+KG Modeli":
+        st.markdown("## 🎯 2.5 Üst + KG Var Karar Modeli")
+        st.caption(
+            "Poisson, Gradient Boosting, marjdan arındırılmış gerçek market olasılığı ve koşullu form "
+            "birlikte değerlendirilir. Liste model olasılığına göre sıralanır; PAS maçları gerekçesiyle gösterilir."
+        )
+        fl = sorted(fl, key=lambda x: int(x["t"].get("ust_kg_model_p", 0)), reverse=True)
     indexed_fl = list(enumerate(fl))
     yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
     orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
@@ -4317,7 +4528,11 @@ else:
         ustkg_html = (
             f'<div class="mk-mini" style="color:#f0abfc">⚽ Üst + KG Var modeli: '
             f'<b>%{int(t.get("ust_kg_model_p", 0))}</b> · {escape(str(t.get("ust_kg_oneri", "PAS")))} · '
-            f'{int(t.get("ust_kg_hit", 0))}/{int(t.get("ornek", 0))} örnek</div>'
+            f'{int(t.get("ust_kg_hit", 0))}/{int(t.get("ornek", 0))} örnek<br>'
+            f'<span style="color:#cbd5e1">Poisson %{int(t.get("ust_kg_poisson_p", 0))} · '
+            f'GB {"%" + str(t.get("ust_kg_ml_p")) if t.get("ust_kg_ml_p") is not None else "yok"} · '
+            f'Piyasa {"%" + str(t.get("ust_kg_market_p")) if t.get("ust_kg_market_p") is not None else "yok"} · '
+            f'Edge {str(t.get("ust_kg_edge")) + " puan" if t.get("ust_kg_edge") is not None else "yok"}</span></div>'
         )
 
         kc, bc = st.columns([9, 1.4])
