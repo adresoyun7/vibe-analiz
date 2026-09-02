@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 23
+APP_SCHEMA_VERSION = 24
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2469,6 +2469,49 @@ def gecmis_tablo_stili(tablo):
     return stil
 
 
+def yuksek_oran_istatistikleri(tum_ornekler, filtre_12=True, filtre_21=True,
+                               filtre_cift_yari_kg=True):
+    """Nadir senaryoları örnek büyüklüğünü de dikkate alarak sıralar."""
+    toplam = len(tum_ornekler)
+    tanimlar = [
+        ("1/2", "olay_12", filtre_12),
+        ("2/1", "olay_21", filtre_21),
+        ("İki yarıda da KG", "olay_cift_yari_kg", filtre_cift_yari_kg),
+    ]
+    istatistikler = []
+    for label, kolon, aktif in tanimlar:
+        if not aktif or toplam == 0 or kolon not in tum_ornekler.columns:
+            continue
+        hit = int(tum_ornekler[kolon].sum())
+        ham_oran = hit / toplam
+        # Laplace düzeltmesi tek/az örnekli sonuçların gereksiz yükselmesini önler.
+        duzeltilmis = (hit + 1) / (toplam + 2)
+        ornek_guveni = min(toplam / 30.0, 1.0)
+        denenebilirlik = duzeltilmis * 100 * (0.65 + 0.35 * ornek_guveni)
+        istatistikler.append({
+            "label": label,
+            "hit": hit,
+            "toplam": toplam,
+            "oran": round(ham_oran * 100, 1),
+            "puan": round(denenebilirlik, 1),
+        })
+
+    istatistikler.sort(key=lambda x: (x["puan"], x["hit"]), reverse=True)
+    if not istatistikler:
+        return [], {"label": "—", "hit": 0, "toplam": toplam, "oran": 0.0, "puan": 0.0}, "PAS"
+
+    en_iyi = istatistikler[0]
+    if toplam >= 20 and en_iyi["hit"] >= 5 and en_iyi["oran"] >= 10:
+        oneri = "GÜÇLÜ DENENEBİLİR"
+    elif toplam >= 12 and en_iyi["hit"] >= 3 and en_iyi["oran"] >= 6:
+        oneri = "DENENEBİLİR"
+    elif en_iyi["hit"] >= 2:
+        oneri = "RİSKLİ DENEME"
+    else:
+        oneri = "PAS"
+    return istatistikler, en_iyi, oneri
+
+
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
@@ -3265,6 +3308,13 @@ if yuksek_oran_btn:
             yo_bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             yuksek_liste = []
             for _, yo_mac in yo_bulten.iterrows():
+                tum_ornekler = gecmis_ornekleri_bul(
+                    yo_gecmis,
+                    yo_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    limit=100000,
+                )
                 ornekler = gecmis_ornekleri_bul(
                     yo_gecmis,
                     yo_mac,
@@ -3276,7 +3326,24 @@ if yuksek_oran_btn:
                     limit=yuksek_limit,
                 )
                 if not ornekler.empty:
-                    yuksek_liste.append({"m": yo_mac.to_dict(), "ornekler": ornekler})
+                    istatistikler, en_iyi, oneri = yuksek_oran_istatistikleri(
+                        tum_ornekler,
+                        filtre_12=yuksek_filtre_12,
+                        filtre_21=yuksek_filtre_21,
+                        filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
+                    )
+                    yuksek_liste.append({
+                        "m": yo_mac.to_dict(),
+                        "ornekler": ornekler,
+                        "istatistikler": istatistikler,
+                        "en_iyi": en_iyi,
+                        "oneri": oneri,
+                        "toplam_benzer": len(tum_ornekler),
+                    })
+            yuksek_liste.sort(
+                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
+                reverse=True,
+            )
             st.session_state.yuksek_oran_list = yuksek_liste
             st.rerun()
 
@@ -3293,17 +3360,46 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
         for sira, item in enumerate(yuksek_liste, start=1):
             m = item["m"]
             ornekler = item["ornekler"]
-            olay_sayilari = {
-                "1/2": int(ornekler["olay_12"].sum()),
-                "2/1": int(ornekler["olay_21"].sum()),
-                "İki yarıda da KG": int(ornekler["olay_cift_yari_kg"].sum()),
-            }
-            olay_ozeti = " · ".join(f"{k}: {v}" for k, v in olay_sayilari.items() if v)
+            istatistik_map = {x["label"]: x for x in item.get("istatistikler", [])}
+            en_iyi = item.get("en_iyi", {})
+            oneri = item.get("oneri", "PAS")
+            toplam_benzer = int(item.get("toplam_benzer", len(ornekler)))
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
             with st.expander(
-                f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · {olay_ozeti}",
+                f"#{sira}  {m.get('ev', '')} – {m.get('dep', '')}  ·  {saat}",
                 expanded=(sira == 1),
             ):
+                oneri_renk = {
+                    "GÜÇLÜ DENENEBİLİR": "#16a34a",
+                    "DENENEBİLİR": "#2563eb",
+                    "RİSKLİ DENEME": "#d97706",
+                    "PAS": "#64748b",
+                }.get(oneri, "#64748b")
+                st.markdown(
+                    f"""
+                    <div style="background:#0f172a;border:1px solid #263650;border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+                      <div style="font-size:.72rem;color:#94a3b8;font-weight:800;letter-spacing:.08em;">İSTATİSTİKSEL ÖNERİ</div>
+                      <div style="font-size:1.08rem;color:{oneri_renk};font-weight:900;margin-top:3px;">{escape(oneri)}</div>
+                      <div style="font-size:.80rem;color:#cbd5e1;margin-top:4px;">
+                        En uygun: <b>{escape(str(en_iyi.get('label', '—')))}</b> ·
+                        Denenebilirlik puanı: <b>{float(en_iyi.get('puan', 0)):.1f}</b> ·
+                        Toplam benzer maç: <b>{toplam_benzer}</b>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                metrik_kolonlari = st.columns(3)
+                for metrik_col, label in zip(metrik_kolonlari, ["1/2", "2/1", "İki yarıda da KG"]):
+                    bilgi = istatistik_map.get(label, {"hit": 0, "toplam": toplam_benzer, "oran": 0.0})
+                    with metrik_col:
+                        st.metric(
+                            label,
+                            f"{int(bilgi.get('hit', 0))} adet",
+                            f"%{float(bilgi.get('oran', 0)):.1f} / {int(bilgi.get('toplam', toplam_benzer))} maç",
+                            delta_color="off",
+                        )
                 st.markdown(
                     f"**Güncel oran:** `{m.get('h', 0):.2f} / {m.get('b', 0):.2f} / {m.get('a', 0):.2f}`"
                 )
