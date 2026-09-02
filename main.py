@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 31
+APP_SCHEMA_VERSION = 32
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -622,7 +622,29 @@ input, textarea {
 .stButton > button {
     background: linear-gradient(180deg,#0d1a2f 0%, #0b1526 100%) !important;
     color: #f8fafc !important;
+    -webkit-text-fill-color: #f8fafc !important;
     border: 1px solid #284977 !important;
+}
+.stButton > button *,
+section[data-testid="stSidebar"] .stButton > button,
+section[data-testid="stSidebar"] .stButton > button * {
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
+    opacity:1 !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] > div,
+section[data-testid="stSidebar"] div[data-baseweb="select"] > div *,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] button,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] button * {
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
+    opacity:1 !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] svg,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] svg {
+    fill:#cbd5e1 !important;
+    color:#cbd5e1 !important;
 }
 .stButton > button:hover {
     border-color: #facc15 !important;
@@ -3377,8 +3399,24 @@ if yuksek_oran_btn:
             st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
-    st.markdown("## 💎 Yüksek Oran Filtresi")
-    st.caption("Tahmin üretmez; yalnızca benzer geçmiş maçlarda seçilen yüksek oran senaryoları gerçekleşmiş güncel karşılaşmaları listeler.")
+    st.markdown(
+        """
+        <div class="high-filter-header-fix" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
+          <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">💎 Yüksek Oran Filtresi</div>
+          <div style="font-size:.90rem;margin-top:7px;line-height:1.5;">
+            Tahmin üretmez; yalnızca benzer geçmiş maçlarda seçilen yüksek oran senaryoları gerçekleşmiş güncel karşılaşmaları listeler.
+          </div>
+        </div>
+        <style>
+        .high-filter-header-fix, .high-filter-header-fix * {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     yuksek_liste = st.session_state.get("yuksek_oran_list")
     if yuksek_liste is None:
         st.info("Lig, tarih ve marketleri seçip YÜKSEK ORANLILARI BUL butonuna bas.")
@@ -3489,13 +3527,28 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     )
     st.markdown(
         f"""
-        <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
-          <div style="color:#0f172a !important;font-size:1.55rem;font-weight:900;line-height:1.2;">🧪 Tarih Sıralı Backtest</div>
-          <div style="color:#334155 !important;font-size:.90rem;margin-top:7px;line-height:1.5;">
+        <div class="backtest-header-fix" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
+          <div class="backtest-title-fix" style="font-size:1.55rem;font-weight:900;line-height:1.2;">🧪 Tarih Sıralı Backtest</div>
+          <div class="backtest-desc-fix" style="font-size:.90rem;margin-top:7px;line-height:1.5;">
             Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
           </div>
-          <div style="color:#1d4ed8 !important;font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
+          <div class="backtest-season-fix" style="font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
         </div>
+        <style>
+        .backtest-header-fix, .backtest-header-fix * {{
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }}
+        .backtest-header-fix .backtest-desc-fix {{
+            color:#334155 !important;
+            -webkit-text-fill-color:#334155 !important;
+        }}
+        .backtest-header-fix .backtest-season-fix {{
+            color:#1d4ed8 !important;
+            -webkit-text-fill-color:#1d4ed8 !important;
+        }}
+        </style>
         """,
         unsafe_allow_html=True,
     )
@@ -3869,15 +3922,23 @@ def detay_popup_icerigi():
     </div>
     """, unsafe_allow_html=True)
 
+    toplam_gecmis_ornek = len(b_det)
+    gosterim_secimi = st.selectbox(
+        "Gösterilecek geçmiş örnek",
+        options=[10, 25, 50, "Tümü"],
+        index=0,
+        key=f"history_limit_{abs(hash(mac_key(m)))}",
+    )
+    gosterim_adedi = toplam_gecmis_ornek if gosterim_secimi == "Tümü" else min(int(gosterim_secimi), toplam_gecmis_ornek)
+
     st.markdown(f"""
     <div class="history-card">
-      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar ({len(b_det)} örnek)</div>
+      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar (Gösterilen {gosterim_adedi} / Toplam {toplam_gecmis_ornek})</div>
       <div class="history-sub" style="color:#f8fbff !important">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Sabit 10 sınırı yok: bulunan bütün benzer maçlar kaydırılabilir tabloda gösterilir.
-    bd = b_det.copy()
+    bd = b_det.head(gosterim_adedi).copy()
     dt = pd.DataFrame()
     dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
     dt["Ev Sahibi"] = bd["HomeTeam"]
