@@ -1,6 +1,9 @@
 
 import io
 import math
+import re
+import unicodedata
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 from html import escape
 
@@ -152,7 +155,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 32
+APP_SCHEMA_VERSION = 33
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -645,6 +648,14 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] svg,
 section[data-testid="stSidebar"] div[data-testid="stNumberInput"] svg {
     fill:#cbd5e1 !important;
     color:#cbd5e1 !important;
+}
+div[data-testid="stExpander"] summary,
+div[data-testid="stExpander"] summary *,
+div[data-testid="stTabs"] button,
+div[data-testid="stTabs"] button * {
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
+    opacity:1 !important;
 }
 .stButton > button:hover {
     border-color: #facc15 !important;
@@ -1496,6 +1507,86 @@ def ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig=False):
     if not history_code or "league_code" not in gecmis_df.columns:
         return gecmis_df.iloc[0:0].copy()
     return gecmis_df[gecmis_df["league_code"] == history_code].copy()
+
+
+def takim_adi_norm(value):
+    metin = unicodedata.normalize("NFKD", str(value).casefold())
+    metin = "".join(ch for ch in metin if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]", "", metin)
+
+
+def takim_adi_eslestir(takim, adaylar):
+    """Odds API takım adını geçmiş veri kaynağındaki takım adıyla eşleştirir."""
+    hedef = takim_adi_norm(takim)
+    if not hedef:
+        return None
+    norm_map = {takim_adi_norm(x): x for x in adaylar if str(x).strip()}
+    if hedef in norm_map:
+        return norm_map[hedef]
+    for norm, orijinal in norm_map.items():
+        if min(len(hedef), len(norm)) >= 5 and (hedef in norm or norm in hedef):
+            return orijinal
+    en_iyi, en_skor = None, 0.0
+    for norm, orijinal in norm_map.items():
+        skor = SequenceMatcher(None, hedef, norm).ratio()
+        if skor > en_skor:
+            en_iyi, en_skor = orijinal, skor
+    return en_iyi if en_skor >= 0.72 else None
+
+
+def takim_son_maclari(veri, eslesen_takim, mac_tarihi, limit=5):
+    if veri is None or veri.empty or not eslesen_takim:
+        return pd.DataFrame()
+    tarih = pd.to_datetime(mac_tarihi, errors="coerce")
+    v = veri[(veri["HomeTeam"] == eslesen_takim) | (veri["AwayTeam"] == eslesen_takim)].copy()
+    if pd.notna(tarih):
+        v = v[pd.to_datetime(v["Date"], errors="coerce") < tarih]
+    return v.sort_values("Date", ascending=False).head(int(limit))
+
+
+def takimlar_arasi_maclar(veri, ev_takim, dep_takim, mac_tarihi, limit=10):
+    if veri is None or veri.empty or not ev_takim or not dep_takim:
+        return pd.DataFrame(), 0
+    maske = (
+        ((veri["HomeTeam"] == ev_takim) & (veri["AwayTeam"] == dep_takim))
+        | ((veri["HomeTeam"] == dep_takim) & (veri["AwayTeam"] == ev_takim))
+    )
+    v = veri[maske].copy()
+    tarih = pd.to_datetime(mac_tarihi, errors="coerce")
+    if pd.notna(tarih):
+        v = v[pd.to_datetime(v["Date"], errors="coerce") < tarih]
+    v = v.sort_values("Date", ascending=False)
+    return v.head(int(limit)), len(v)
+
+
+def son5_tablo_hazirla(maclar, takim):
+    satirlar = []
+    for _, r in maclar.iterrows():
+        evde = str(r.get("HomeTeam")) == str(takim)
+        gf = int(float(r.get("FTHG", 0))) if pd.notna(r.get("FTHG")) else 0
+        ga = int(float(r.get("FTAG", 0))) if pd.notna(r.get("FTAG")) else 0
+        if not evde:
+            gf, ga = ga, gf
+        sonuc = "🟢 G" if gf > ga else "🟡 B" if gf == ga else "🔴 M"
+        satirlar.append({
+            "Tarih": pd.to_datetime(r.get("Date"), errors="coerce").strftime("%d.%m.%Y"),
+            "Saha": "İç" if evde else "Dış",
+            "Rakip": r.get("AwayTeam") if evde else r.get("HomeTeam"),
+            "Skor": f"{gf}-{ga}",
+            "Sonuç": sonuc,
+        })
+    return pd.DataFrame(satirlar)
+
+
+def h2h_tablo_hazirla(maclar):
+    if maclar is None or maclar.empty:
+        return pd.DataFrame()
+    return pd.DataFrame({
+        "Tarih": pd.to_datetime(maclar["Date"], errors="coerce").dt.strftime("%d.%m.%Y"),
+        "Ev sahibi": maclar["HomeTeam"].astype(str),
+        "Skor": maclar["FTHG"].astype(int).astype(str) + "-" + maclar["FTAG"].astype(int).astype(str),
+        "Deplasman": maclar["AwayTeam"].astype(str),
+    })
 
 def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False):
     b_df = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
@@ -4153,6 +4244,14 @@ else:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""<div class="list-heading">⚡ ANLIK MAÇ TAHMİNLERİ</div>""", unsafe_allow_html=True)
 
+    kart_gecmisi = st.session_state.get("last_gecmis_df")
+    if kart_gecmisi is not None and not getattr(kart_gecmisi, "empty", True):
+        kart_takim_adaylari = pd.unique(
+            pd.concat([kart_gecmisi["HomeTeam"], kart_gecmisi["AwayTeam"]], ignore_index=True).dropna()
+        )
+    else:
+        kart_takim_adaylari = []
+
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
         gc, _, _ = guven_renk(t["ana_p"])
@@ -4237,6 +4336,38 @@ else:
             </div>
             """
             st.markdown(card_html, unsafe_allow_html=True)
+            with st.expander("📈 Son 5 maç ve ikili rekabet", expanded=False):
+                eslesen_ev = takim_adi_eslestir(m.get("ev", ""), kart_takim_adaylari)
+                eslesen_dep = takim_adi_eslestir(m.get("dep", ""), kart_takim_adaylari)
+                son_ev = takim_son_maclari(kart_gecmisi, eslesen_ev, m.get("zaman"), 5)
+                son_dep = takim_son_maclari(kart_gecmisi, eslesen_dep, m.get("zaman"), 5)
+                h2h_maclar, h2h_toplam = takimlar_arasi_maclar(
+                    kart_gecmisi, eslesen_ev, eslesen_dep, m.get("zaman"), 10
+                )
+                tab_ev, tab_dep, tab_h2h = st.tabs([
+                    f"🏠 {m.get('ev', 'Ev sahibi')}",
+                    f"✈️ {m.get('dep', 'Deplasman')}",
+                    f"🤝 İkili rekabet ({h2h_toplam})",
+                ])
+                with tab_ev:
+                    ev_tablo = son5_tablo_hazirla(son_ev, eslesen_ev)
+                    if ev_tablo.empty:
+                        st.info("Ev sahibinin geçmiş takım adı eşleştirilemedi veya maç verisi bulunamadı.")
+                    else:
+                        st.dataframe(ev_tablo, use_container_width=True, hide_index=True)
+                with tab_dep:
+                    dep_tablo = son5_tablo_hazirla(son_dep, eslesen_dep)
+                    if dep_tablo.empty:
+                        st.info("Deplasman takımının geçmiş takım adı eşleştirilemedi veya maç verisi bulunamadı.")
+                    else:
+                        st.dataframe(dep_tablo, use_container_width=True, hide_index=True)
+                with tab_h2h:
+                    h2h_tablo = h2h_tablo_hazirla(h2h_maclar)
+                    if h2h_tablo.empty:
+                        st.info("Bu iki takım arasında geçmiş karşılaşma bulunamadı.")
+                    else:
+                        st.caption(f"Toplam {h2h_toplam} karşılaşmadan en güncel {len(h2h_tablo)} tanesi gösteriliyor.")
+                        st.dataframe(h2h_tablo, use_container_width=True, hide_index=True)
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
