@@ -157,7 +157,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 39
+APP_SCHEMA_VERSION = 40
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3469,7 +3469,7 @@ def clear_detail_and_rebuild_top_markets():
     # geçmiş analiz verisi varsa listeyi anında yeniden üret.
     gecmis = st.session_state.get("last_gecmis_df")
     bulten = st.session_state.get("last_bulten_df")
-    min_ornek_val = st.session_state.get("min_ornek", 1)
+    min_ornek_val = st.session_state.get("top_min_ornek", 1)
 
     try:
         if gecmis is not None and bulten is not None and not getattr(gecmis, "empty", True) and not getattr(bulten, "empty", True):
@@ -3491,6 +3491,61 @@ if 'special_date' not in st.session_state:
 if st.session_state.get('date_mode') == '3 gün sonra':
     st.session_state['date_mode'] = 'Özel Tarih'
     st.session_state['special_date'] = bugun + timedelta(days=3)
+
+
+# En sık değiştirilen iki analiz ayarı ana ekranın en üstünde tutulur.
+st.markdown(
+    """
+    <style>
+    .top-analysis-controls {
+        background:#ffffff;
+        border:1px solid #cbd5e1;
+        border-radius:14px;
+        padding:11px 16px 8px 16px;
+        margin:0 0 14px 0;
+        box-shadow:0 3px 10px rgba(15,23,42,.06);
+    }
+    .top-analysis-controls b {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        font-size:1rem;
+    }
+    [data-testid="stMain"] div[data-testid="stSlider"] label,
+    [data-testid="stMain"] div[data-testid="stSlider"] label *,
+    [data-testid="stMain"] div[data-testid="stNumberInput"] label,
+    [data-testid="stMain"] div[data-testid="stNumberInput"] label * {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        opacity:1 !important;
+        font-weight:800 !important;
+    }
+    </style>
+    <div class="top-analysis-controls"><b>🎛️ Ana Analiz Ayarları</b></div>
+    """,
+    unsafe_allow_html=True,
+)
+ayar_tol_col, ayar_ornek_col, ayar_buton_col = st.columns([2.2, 1, 1.15], gap="medium")
+with ayar_tol_col:
+    TOLERANS = st.slider(
+        "Oran Hassasiyeti",
+        0.00, 0.30, 0.08,
+        step=0.01,
+        key="top_tol",
+        on_change=clear_detail_on_filter_change,
+        help="Düşük değerler oranı daha yakın maçları; yüksek değerler daha fazla geçmiş örneği kapsar.",
+    )
+with ayar_ornek_col:
+    min_ornek = st.number_input(
+        "Minimum Örnek Sayısı",
+        min_value=1,
+        value=1,
+        step=1,
+        key="top_min_ornek",
+        on_change=clear_detail_on_filter_change,
+    )
+with ayar_buton_col:
+    # Düğme, sidebar'da görünüm seçildikten sonra bu üst konuma yazdırılır.
+    ust_analiz_buton_alani = st.empty()
 
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
@@ -3607,8 +3662,6 @@ with st.sidebar:
             key='top_seasons',
             on_change=clear_backtest_on_change,
         )
-        min_ornek = st.number_input('Min. Örnek Sayısı', min_value=1, value=1, key='top_min_ornek', on_change=clear_detail_on_filter_change)
-        TOLERANS = st.slider('Oran Hassasiyeti', 0.00, 0.30, 0.08, step=0.01, key='top_tol', on_change=clear_detail_on_filter_change)
         sadece_ayni_lig = st.checkbox(
             'Sadece aynı lig verilerini kullan',
             value=False,
@@ -3616,7 +3669,6 @@ with st.sidebar:
             help='Açıkken maç yalnızca kendi liginin geçmişiyle karşılaştırılır. Geçmiş veri eşlemesi olmayan liglerde sonuç oluşmaz.',
             on_change=clear_detail_on_filter_change,
         )
-        st.markdown(f"<div style='color:#ffd24a;font-weight:800'>Hassasiyet: {TOLERANS:.2f}</div>", unsafe_allow_html=True)
 
     with st.expander("🎯 Oynanılabilir / Canlı", expanded=True):
         oynanabilir_esik = st.selectbox(
@@ -3676,7 +3728,7 @@ with st.sidebar:
     elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         st.caption("Kaydedilen analizlerin sonuçlarını buradan yenileyebilirsin.")
     else:
-        analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
+        analiz_btn = False
 
     if st.button('🎫 Kuponlarım', use_container_width=True, key='toggle_coupon_popup'):
         st.session_state.coupon_popup_open = True
@@ -3689,6 +3741,17 @@ with st.sidebar:
         )
 
 legal_sidebar_sections()
+
+# Ana analiz eylemi, sık kullanılan ayarlarla aynı üst satırda gösterilir.
+if st.session_state.get('sayfa_modu') in ['Maç Analizi', 'Top 50 Market']:
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        analiz_btn = st.button(
+            '▶ ANALİZİ BAŞLAT',
+            use_container_width=True,
+            type='primary',
+            key='analiz_baslat_btn',
+        )
 
 
 if gecmis_btn:
