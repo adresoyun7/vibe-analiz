@@ -155,7 +155,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 35
+APP_SCHEMA_VERSION = 36
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -688,6 +688,90 @@ div[data-testid="stDialog"] h3 {
     font-weight:600;
     margin-top:4px;
 }
+.recent-match-list {
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    width:100%;
+}
+.recent-match-row {
+    background:#0b1628;
+    border:1px solid #223c63;
+    border-radius:9px;
+    padding:7px 9px;
+    min-width:0;
+}
+.recent-top, .recent-bottom {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+}
+.recent-top {
+    color:#9db2d1 !important;
+    -webkit-text-fill-color:#9db2d1 !important;
+    font-size:.68rem;
+}
+.recent-bottom {
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
+    font-size:.76rem;
+    font-weight:700;
+    margin-top:3px;
+}
+.recent-bottom span {
+    min-width:0;
+    white-space:normal;
+    overflow-wrap:anywhere;
+}
+.recent-bottom strong { color:#ffd24a !important;-webkit-text-fill-color:#ffd24a !important;white-space:nowrap; }
+.recent-top .win { color:#3ddb7c !important;-webkit-text-fill-color:#3ddb7c !important; }
+.recent-top .draw { color:#facc15 !important;-webkit-text-fill-color:#facc15 !important; }
+.recent-top .loss { color:#ff6b6b !important;-webkit-text-fill-color:#ff6b6b !important; }
+.h2h-teams { align-items:flex-start; }
+.h2h-teams span:last-child { text-align:right; }
+.sidebar-high-market-title {
+    background:#dbeafe;
+    border:1px solid #93c5fd;
+    border-radius:12px;
+    padding:11px 12px;
+    margin:4px 0 12px 0;
+}
+.sidebar-high-market-title b {
+    display:block;
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
+    font-size:.95rem;
+}
+.sidebar-high-market-title span {
+    display:block;
+    color:#334155 !important;
+    -webkit-text-fill-color:#334155 !important;
+    font-size:.75rem;
+    font-weight:700;
+    line-height:1.4;
+    margin-top:4px;
+}
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3,
+section[data-testid="stSidebar"] h4 {
+    color:#0f172a !important;
+    -webkit-text-fill-color:#0f172a !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stExpander"] summary,
+section[data-testid="stSidebar"] div[data-testid="stExpander"] summary * {
+    color:#f8fafc !important;
+    -webkit-text-fill-color:#f8fafc !important;
+    opacity:1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stExpander"] label,
+section[data-testid="stSidebar"] div[data-testid="stExpander"] label *,
+section[data-testid="stSidebar"] div[data-testid="stExpander"] [data-testid="stCaptionContainer"],
+section[data-testid="stSidebar"] div[data-testid="stExpander"] [data-testid="stMarkdownContainer"] p {
+    color:#cbd5e1 !important;
+    -webkit-text-fill-color:#cbd5e1 !important;
+}
 .stButton > button:hover {
     border-color: #facc15 !important;
 }
@@ -918,8 +1002,8 @@ div[data-testid="stExpander"] * {
 
 /* === DETAIL POPUP / MODAL === */
 div[data-testid="stDialog"] div[role="dialog"] {
-    width: min(1180px, 94vw) !important;
-    max-width: 94vw !important;
+    width: min(1540px, 98vw) !important;
+    max-width: 98vw !important;
     max-height: 92vh !important;
     overflow-y: auto !important;
     background: linear-gradient(180deg,#07111f 0%, #0a1830 100%) !important;
@@ -1618,6 +1702,36 @@ def h2h_tablo_hazirla(maclar):
         "Skor": maclar["FTHG"].astype(int).astype(str) + "-" + maclar["FTAG"].astype(int).astype(str),
         "Deplasman": maclar["AwayTeam"].astype(str),
     })
+
+
+def son_mac_kartlari_html(tablo):
+    kartlar = []
+    for _, r in tablo.iterrows():
+        sonuc = str(r.get("Sonuç", ""))
+        sonuc_cls = "win" if "G" in sonuc else "draw" if "B" in sonuc else "loss"
+        kartlar.append(
+            f"""
+            <div class="recent-match-row">
+              <div class="recent-top"><span>{escape(str(r.get('Tarih', '')))}</span><span>{escape(str(r.get('Saha', '')))}</span><b class="{sonuc_cls}">{escape(sonuc)}</b></div>
+              <div class="recent-bottom"><span title="{escape(str(r.get('Rakip', '')))}">{escape(str(r.get('Rakip', '')))}</span><strong>{escape(str(r.get('Skor', '')))}</strong></div>
+            </div>
+            """
+        )
+    return '<div class="recent-match-list">' + "".join(kartlar) + "</div>"
+
+
+def h2h_kartlari_html(tablo):
+    kartlar = []
+    for _, r in tablo.iterrows():
+        kartlar.append(
+            f"""
+            <div class="recent-match-row h2h-row">
+              <div class="recent-top"><span>{escape(str(r.get('Tarih', '')))}</span><b>{escape(str(r.get('Skor', '')))}</b></div>
+              <div class="recent-bottom h2h-teams"><span>{escape(str(r.get('Ev sahibi', '')))}</span><span>{escape(str(r.get('Deplasman', '')))}</span></div>
+            </div>
+            """
+        )
+    return '<div class="recent-match-list">' + "".join(kartlar) + "</div>"
 
 def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False):
     b_df = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
@@ -3382,8 +3496,15 @@ with st.sidebar:
         gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
         gecmis_btn = st.button('🔎 GEÇMİŞ ÖRNEKLERİ GETİR', use_container_width=True, type='primary', key='gecmis_getir_btn')
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
-        st.markdown("### 💎 Yüksek Oran Marketleri")
-        st.caption("Birden fazla seçim açılırsa koşullardan herhangi birini sağlayan geçmiş örnekler gösterilir.")
+        st.markdown(
+            """
+            <div class="sidebar-high-market-title">
+              <b>💎 Yüksek Oran Marketleri</b>
+              <span>Birden fazla seçim açılırsa koşullardan herhangi birini sağlayan geçmiş örnekler gösterilir.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         yf1, yf2 = st.columns(2)
         with yf1:
             yuksek_filtre_12 = st.checkbox('1/2', value=True, key='yuksek_filtre_12')
@@ -4122,20 +4243,20 @@ def detay_gecmis_sidebar():
         if ev_tablo.empty:
             st.info("Takım adı eşleştirilemedi veya maç verisi bulunamadı.")
         else:
-            st.dataframe(ev_tablo, use_container_width=True, hide_index=True, height=385)
+            st.markdown(son_mac_kartlari_html(ev_tablo), unsafe_allow_html=True)
     with st.expander(f"✈️ {m.get('dep', 'Deplasman')} · Son 10", expanded=False):
         dep_tablo = son5_tablo_hazirla(son_dep, eslesen_dep)
         if dep_tablo.empty:
             st.info("Takım adı eşleştirilemedi veya maç verisi bulunamadı.")
         else:
-            st.dataframe(dep_tablo, use_container_width=True, hide_index=True, height=385)
+            st.markdown(son_mac_kartlari_html(dep_tablo), unsafe_allow_html=True)
     with st.expander(f"🤝 İkili rekabet · {h2h_toplam} maç", expanded=False):
         h2h_tablo = h2h_tablo_hazirla(h2h_maclar)
         if h2h_tablo.empty:
             st.info("Geçmiş karşılaşma bulunamadı.")
         else:
             st.caption(f"En güncel {len(h2h_tablo)} karşılaşma")
-            st.dataframe(h2h_tablo, use_container_width=True, hide_index=True, height=350)
+            st.markdown(h2h_kartlari_html(h2h_tablo), unsafe_allow_html=True)
 
 
 def detay_popup_icerigi():
