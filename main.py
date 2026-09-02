@@ -154,7 +154,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 28
+APP_SCHEMA_VERSION = 29
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1541,6 +1541,8 @@ def takim_formu_hesapla(veri, takim, tarih=None, mekan=None, son_mac=5):
 
 
 def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
+    # Güncel form kullanıcı tarafından manuel kontrol edilecek; modele dahil edilmez.
+    form_aktif = False
     b_df = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
     if b_df.empty:
         return None, b_df
@@ -1934,17 +1936,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         nedenler.append("Düşük örnek + yüksek güven görüldüğü için fake confidence freni uygulandı.")
     if flip_p >= 0.12:
         nedenler.append(f"HT/FT sürpriz riski %{int(round(flip_p * 100))}.")
-    if form_var:
-        yon = "ev sahibi" if form_etkisi > 0.008 else "deplasman" if form_etkisi < -0.008 else "dengeli"
-        nedenler.append(
-            f"Güncel form desteği: {yon}; {ev_form.get('takim')} {ev_form.get('puan')}/100, "
-            f"{dep_form.get('takim')} {dep_form.get('puan')}/100."
-        )
-    nedenler.append(
-        f"2.5 Üst + KG Var özel modeli: %{ust_kg_model_p} ({ust_kg_oneri}); "
-        f"benzerlerde {ust_kg_hit}/{sample} gerçekleşme."
-    )
-
     playable_score = ana_p
     if combo_var:
         playable_score += min(combo_p, 20) * 0.35
@@ -2207,17 +2198,6 @@ def top10_market_adaylari(t):
     # İY 0.5 Üst: erken gol sinyali. İY 1.5 Üst: daha yüksek tempo / ilk yarı çok gol sinyali.
     add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=10, min_guven=70)
     add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=13, min_guven=55)
-
-    # Özel olarak eğitilen/harmanlanan birleşik gol modeli.
-    if t.get("ust_kg_oneri") != "PAS":
-        add(
-            "2.5 Üst + KG Var",
-            t.get("ust_kg_model_p", 0),
-            "Kombo",
-            kombo_tahmini_oran("2.5 Üst + KG Var", t.get("ana_odd")),
-            bonus=14,
-            min_guven=46,
-        )
 
     # Kombo.
     if t.get("combo_var") and t.get("combo_label"):
@@ -2520,8 +2500,7 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
             "zaman": row["Date"],
         }
-        baz_t, _ = hesapla(train, hedef, tolerans, form_aktif=False)
-        t, benzerler = hesapla(train, hedef, tolerans, form_aktif=True)
+        t, benzerler = hesapla(train, hedef, tolerans, form_aktif=False)
         if t is None or len(benzerler) < int(min_ornek):
             continue
         label = t.get("ana_label", "")
@@ -2543,15 +2522,6 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Örnek": int(t.get("ornek", 0)),
             "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
             "Tuttu": bool(tuttu),
-            "Baz Tahmin": baz_t.get("ana_label", "—") if baz_t else "—",
-            "Baz Tuttu": bool(tahmin_tuttu_mu(baz_t.get("ana_label", ""), row)) if baz_t and tahmin_tuttu_mu(baz_t.get("ana_label", ""), row) is not None else False,
-            "Form Kullanıldı": bool(t.get("form_var")),
-            "Üst+KG Olasılık": int(t.get("ust_kg_model_p", 0)),
-            "Üst+KG Öneri": t.get("ust_kg_oneri", "PAS"),
-            "Üst+KG Gerçekleşti": bool(
-                (float(row["FTHG"]) + float(row["FTAG"]) >= 3)
-                and float(row["FTHG"]) > 0 and float(row["FTAG"]) > 0
-            ),
             "Oran": round(float(oran), 2) if oran is not None else None,
             "Kâr (100 TL)": kar,
         })
@@ -3677,28 +3647,15 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         toplam = len(bt)
         kazanan = int(bt["Tuttu"].sum())
         basari = kazanan / toplam * 100 if toplam else 0
-        baz_kazanan = int(bt["Baz Tuttu"].sum()) if "Baz Tuttu" in bt.columns else 0
-        baz_basari = baz_kazanan / toplam * 100 if toplam else 0
         ms_bt = bt[bt["Kâr (100 TL)"].notna()].copy()
         net_kar = float(ms_bt["Kâr (100 TL)"].sum()) if not ms_bt.empty else 0.0
         yatirilan = len(ms_bt) * 100
         roi = net_kar / yatirilan * 100 if yatirilan else 0.0
 
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Toplam tahmin", toplam)
         c2.metric("Kazanan", kazanan)
-        c3.metric("Formsuz başarı", f"%{baz_basari:.1f}")
-        c4.metric("Formlu başarı", f"%{basari:.1f}", f"{basari-baz_basari:+.1f} puan")
-        c5.metric("MS ROI", f"%{roi:.1f}", help="Yalnızca geçmiş B365 oranı bulunan MS 1/X/2 tahminleri, her seçime 100 TL varsayımıyla.")
-
-        ustkg_bt = bt[bt.get("Üst+KG Öneri", pd.Series(index=bt.index, dtype=str)).isin(["GÜÇLÜ", "DENENEBİLİR"])]
-        ustkg_sayi = len(ustkg_bt)
-        ustkg_tutan = int(ustkg_bt["Üst+KG Gerçekleşti"].sum()) if ustkg_sayi else 0
-        ustkg_basari = ustkg_tutan / ustkg_sayi * 100 if ustkg_sayi else 0.0
-        ug1, ug2, ug3 = st.columns(3)
-        ug1.metric("Üst+KG önerisi", ustkg_sayi)
-        ug2.metric("Üst+KG tutan", ustkg_tutan)
-        ug3.metric("Üst+KG başarı", f"%{ustkg_basari:.1f}")
+        c3.metric("MS ROI", f"%{roi:.1f}", help="Yalnızca geçmiş B365 oranı bulunan MS 1/X/2 tahminleri, her seçime 100 TL varsayımıyla.")
 
         ozet = (
             bt.groupby("Tahmin", dropna=False)
@@ -3719,7 +3676,7 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
         st.markdown("### Test edilen maçlar")
         bt_goster = bt.sort_values("Tarih", ascending=False).copy()
-        for bool_col in ["Tuttu", "Baz Tuttu", "Form Kullanıldı", "Üst+KG Gerçekleşti"]:
+        for bool_col in ["Tuttu"]:
             if bool_col in bt_goster.columns:
                 bt_goster[bool_col] = bt_goster[bool_col].map({True: "✅ Evet", False: "❌ Hayır"}).fillna("—")
         st.dataframe(backtest_stili(bt_goster), use_container_width=True, hide_index=True)
@@ -4304,22 +4261,6 @@ else:
             stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
-        form_html = ""
-        if t.get("form_var"):
-            ef, dfm = t.get("ev_form", {}), t.get("dep_form", {})
-            form_html = (
-                f'<div class="mk-mini" style="color:#93c5fd">📈 Form: '
-                f'{escape(str(ef.get("takim", m["ev"])))} {ef.get("puan", 0):.0f} · '
-                f'{escape(str(dfm.get("takim", m["dep"])))} {dfm.get("puan", 0):.0f}</div>'
-            )
-        else:
-            form_html = '<div class="mk-mini" style="color:#94a3b8">📈 Form verisi eşleştirilemedi</div>'
-        ustkg_html = (
-            f'<div class="mk-mini" style="color:#f0abfc">⚽ Üst + KG Var modeli: '
-            f'<b>%{int(t.get("ust_kg_model_p", 0))}</b> · {escape(str(t.get("ust_kg_oneri", "PAS")))} · '
-            f'{int(t.get("ust_kg_hit", 0))}/{int(t.get("ornek", 0))} örnek</div>'
-        )
-
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
@@ -4335,8 +4276,6 @@ else:
                 <div class="mk-ev">⬜ {m['ev']}</div>
                 <div class="mk-dep">🟦 {m['dep']}</div>
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
-                {form_html}
-                {ustkg_html}
                 {belirsiz_html}
                 {ai_comment_html}
               </div>
