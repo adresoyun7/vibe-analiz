@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 30
+APP_SCHEMA_VERSION = 31
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3871,12 +3871,13 @@ def detay_popup_icerigi():
 
     st.markdown(f"""
     <div class="history-card">
-      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar (Son {min(len(b_det), 10)})</div>
+      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar ({len(b_det)} örnek)</div>
       <div class="history-sub" style="color:#f8fbff !important">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
     </div>
     """, unsafe_allow_html=True)
 
-    bd = b_det.head(10)
+    # Sabit 10 sınırı yok: bulunan bütün benzer maçlar kaydırılabilir tabloda gösterilir.
+    bd = b_det.copy()
     dt = pd.DataFrame()
     dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
     dt["Ev Sahibi"] = bd["HomeTeam"]
@@ -3901,6 +3902,7 @@ def detay_popup_icerigi():
         dt.style.map(color_cell, subset=["2.5 GOL", "KG", "HT/FT"]),
         use_container_width=True,
         hide_index=True,
+        height=min(700, 38 + len(dt) * 35),
     )
 
 
