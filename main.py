@@ -154,7 +154,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 25
+APP_SCHEMA_VERSION = 26
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3541,6 +3541,30 @@ if backtest_btn:
         st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Backtest':
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stMetric"] {
+            background:#ffffff !important;
+            border:1px solid #cbd5e1 !important;
+            border-radius:12px !important;
+            padding:12px 14px !important;
+            box-shadow:0 3px 10px rgba(15,23,42,.08) !important;
+        }
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] label *,
+        div[data-testid="stMetric"] div[data-testid="stMetricValue"],
+        div[data-testid="stMetric"] div[data-testid="stMetricValue"] *,
+        div[data-testid="stMetric"] div[data-testid="stMetricDelta"],
+        div[data-testid="stMetric"] div[data-testid="stMetricDelta"] * {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("## 🧪 Tarih Sıralı Backtest")
     st.caption("Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.")
     bt = st.session_state.get("backtest_df")
@@ -3573,10 +3597,18 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         )
         ozet["Başarı %"] = (ozet["Kazanan"] / ozet["Tahmin_Sayısı"] * 100).round(1)
         ozet["Ortalama_Güven"] = ozet["Ortalama_Güven"].round(1)
+        def backtest_stili(df):
+            return (
+                df.style
+                .set_properties(**{"background-color": "#ffffff", "color": "#0f172a", "font-weight": "600"})
+                .set_table_styles([
+                    {"selector": "th", "props": [("background-color", "#e2e8f0"), ("color", "#0f172a"), ("font-weight", "800")]},
+                ])
+            )
         st.markdown("### Market özeti")
-        st.dataframe(ozet, use_container_width=True, hide_index=True)
+        st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
         st.markdown("### Test edilen maçlar")
-        st.dataframe(bt.sort_values("Tarih", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(backtest_stili(bt.sort_values("Tarih", ascending=False)), use_container_width=True, hide_index=True)
         st.download_button(
             "CSV olarak indir",
             data=bt.to_csv(index=False).encode("utf-8-sig"),
@@ -4170,6 +4202,8 @@ else:
                 f'{escape(str(ef.get("takim", m["ev"])))} {ef.get("puan", 0):.0f} · '
                 f'{escape(str(dfm.get("takim", m["dep"])))} {dfm.get("puan", 0):.0f}</div>'
             )
+        else:
+            form_html = '<div class="mk-mini" style="color:#94a3b8">📈 Form verisi eşleştirilemedi</div>'
 
         kc, bc = st.columns([9, 1.4])
         with kc:
