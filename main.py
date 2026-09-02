@@ -157,7 +157,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 38
+APP_SCHEMA_VERSION = 39
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1706,6 +1706,16 @@ def son5_tablo_hazirla(maclar, takim):
             "Sonuç": sonuc,
         })
     return pd.DataFrame(satirlar)
+
+
+def takim_maclarini_sahaya_gore_filtrele(maclar, takim, secim):
+    if maclar is None or maclar.empty or secim == "Tümü":
+        return maclar
+    if secim == "Sadece iç saha":
+        return maclar[maclar["HomeTeam"].astype(str) == str(takim)].copy()
+    if secim == "Sadece deplasman":
+        return maclar[maclar["AwayTeam"].astype(str) == str(takim)].copy()
+    return maclar
 
 
 def h2h_tablo_hazirla(maclar):
@@ -3906,7 +3916,37 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
 if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     st.markdown(
         """
-        <div class="history-page-header" style="background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px">
+        <style>
+        .result-track-header, .result-track-header * {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }
+        .result-track-header > div:last-child {
+            color:#334155 !important;
+            -webkit-text-fill-color:#334155 !important;
+        }
+        div[data-testid="stMetric"] {
+            background:#ffffff !important;
+            border:1px solid #cbd5e1 !important;
+            border-radius:12px !important;
+            padding:12px 14px !important;
+        }
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] label *,
+        div[data-testid="stMetric"] [data-testid="stMetricValue"],
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }
+        div[data-testid="stMarkdownContainer"] h4 {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }
+        </style>
+        <div class="result-track-header" style="background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px">
           <div style="font-size:1.55rem;font-weight:900">📋 Sonuç Takibi</div>
           <div style="font-size:.90rem;margin-top:7px">Maç analizinde kaydedilen ana tahminleri ve gerçekleşen sonuçları gösterir.</div>
         </div>
@@ -4483,8 +4523,10 @@ def detay_gecmis_sidebar():
     adaylar = pd.unique(pd.concat([gecmis["HomeTeam"], gecmis["AwayTeam"]], ignore_index=True).dropna())
     eslesen_ev = takim_adi_eslestir(m.get("ev", ""), adaylar)
     eslesen_dep = takim_adi_eslestir(m.get("dep", ""), adaylar)
-    son_ev = takim_son_maclari(gecmis, eslesen_ev, m.get("zaman"), 10)
-    son_dep = takim_son_maclari(gecmis, eslesen_dep, m.get("zaman"), 10)
+    # Saha filtresi seçildiğinde de gerçekten son 10 iç/deplasman maçını bulabilmek
+    # için daha geniş geçmiş çekilir, filtre sonrasında 10 maçla sınırlandırılır.
+    son_ev = takim_son_maclari(gecmis, eslesen_ev, m.get("zaman"), 100)
+    son_dep = takim_son_maclari(gecmis, eslesen_dep, m.get("zaman"), 100)
     h2h_maclar, h2h_toplam = takimlar_arasi_maclar(
         gecmis, eslesen_ev, eslesen_dep, m.get("zaman"), 10
     )
@@ -4498,25 +4540,46 @@ def detay_gecmis_sidebar():
         """,
         unsafe_allow_html=True,
     )
-    with st.expander(f"🏠 {m.get('ev', 'Ev sahibi')} · Son 10", expanded=True):
-        ev_tablo = son5_tablo_hazirla(son_ev, eslesen_ev)
-        if ev_tablo.empty:
-            st.info("Takım adı eşleştirilemedi veya maç verisi bulunamadı.")
-        else:
-            st.markdown(son_mac_kartlari_html(ev_tablo), unsafe_allow_html=True)
-    with st.expander(f"✈️ {m.get('dep', 'Deplasman')} · Son 10", expanded=False):
-        dep_tablo = son5_tablo_hazirla(son_dep, eslesen_dep)
-        if dep_tablo.empty:
-            st.info("Takım adı eşleştirilemedi veya maç verisi bulunamadı.")
-        else:
-            st.markdown(son_mac_kartlari_html(dep_tablo), unsafe_allow_html=True)
-    with st.expander(f"🤝 İkili rekabet · {h2h_toplam} maç", expanded=False):
-        h2h_tablo = h2h_tablo_hazirla(h2h_maclar)
-        if h2h_tablo.empty:
-            st.info("Geçmiş karşılaşma bulunamadı.")
-        else:
-            st.caption(f"En güncel {len(h2h_tablo)} karşılaşma")
-            st.markdown(h2h_kartlari_html(h2h_tablo), unsafe_allow_html=True)
+    mac_kimligi = abs(hash(mac_key(m)))
+    ev_col, dep_col, h2h_col = st.columns(3, gap="small")
+
+    with ev_col:
+        with st.container(border=True):
+            st.markdown(f"**🏠 {m.get('ev', 'Ev sahibi')} · Son 10**")
+            ev_saha = st.selectbox(
+                "Saha filtresi", ["Tümü", "Sadece iç saha", "Sadece deplasman"],
+                key=f"ev_saha_filtre_{mac_kimligi}", label_visibility="collapsed",
+            )
+            ev_filtreli = takim_maclarini_sahaya_gore_filtrele(son_ev, eslesen_ev, ev_saha).head(10)
+            ev_tablo = son5_tablo_hazirla(ev_filtreli, eslesen_ev)
+            if ev_tablo.empty:
+                st.info("Bu filtrede maç bulunamadı.")
+            else:
+                st.markdown(son_mac_kartlari_html(ev_tablo), unsafe_allow_html=True)
+
+    with dep_col:
+        with st.container(border=True):
+            st.markdown(f"**✈️ {m.get('dep', 'Deplasman')} · Son 10**")
+            dep_saha = st.selectbox(
+                "Saha filtresi", ["Tümü", "Sadece iç saha", "Sadece deplasman"],
+                key=f"dep_saha_filtre_{mac_kimligi}", label_visibility="collapsed",
+            )
+            dep_filtreli = takim_maclarini_sahaya_gore_filtrele(son_dep, eslesen_dep, dep_saha).head(10)
+            dep_tablo = son5_tablo_hazirla(dep_filtreli, eslesen_dep)
+            if dep_tablo.empty:
+                st.info("Bu filtrede maç bulunamadı.")
+            else:
+                st.markdown(son_mac_kartlari_html(dep_tablo), unsafe_allow_html=True)
+
+    with h2h_col:
+        with st.container(border=True):
+            st.markdown(f"**🤝 İkili rekabet · {h2h_toplam} maç**")
+            h2h_tablo = h2h_tablo_hazirla(h2h_maclar)
+            if h2h_tablo.empty:
+                st.info("Geçmiş karşılaşma bulunamadı.")
+            else:
+                st.caption(f"En güncel {len(h2h_tablo)} karşılaşma")
+                st.markdown(h2h_kartlari_html(h2h_tablo), unsafe_allow_html=True)
 
 
 def detay_popup_icerigi():
@@ -4533,7 +4596,7 @@ def detay_popup_icerigi():
         detay_ana_icerik()
         return
 
-    ana_col, side_col = st.columns([3.15, 1.35], gap="small")
+    ana_col, side_col = st.columns([1.8, 2.2], gap="small")
     with ana_col:
         detay_ana_icerik()
     with side_col:
