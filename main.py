@@ -152,7 +152,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 21
+APP_SCHEMA_VERSION = 22
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2361,6 +2361,63 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
     return pd.DataFrame(sonuclar)
 
 
+def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
+                         filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
+                         limit=25):
+    """Bir güncel maç için benzer oranlı geçmiş maçları ve özel senaryoları getirir."""
+    kaynak = ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig)
+    if kaynak.empty:
+        return pd.DataFrame()
+
+    b = kaynak[
+        kaynak["B365H"].between(float(m_row["h"]) - tolerans, float(m_row["h"]) + tolerans)
+        & kaynak["B365D"].between(float(m_row["b"]) - tolerans, float(m_row["b"]) + tolerans)
+        & kaynak["B365A"].between(float(m_row["a"]) - tolerans, float(m_row["a"]) + tolerans)
+    ].copy()
+    gerekli = ["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG", "FTR", "HTR"]
+    if b.empty or any(c not in b.columns for c in gerekli):
+        return pd.DataFrame()
+    for c in ["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A"]:
+        b[c] = pd.to_numeric(b[c], errors="coerce")
+    b = b.dropna(subset=gerekli + ["B365H", "B365D", "B365A"])
+
+    b["olay_12"] = (b["HTR"] == "H") & (b["FTR"] == "A")
+    b["olay_21"] = (b["HTR"] == "A") & (b["FTR"] == "H")
+    ev_ikinci_yari = b["FTHG"] - b["HTHG"]
+    dep_ikinci_yari = b["FTAG"] - b["HTAG"]
+    b["olay_cift_yari_kg"] = (
+        (b["HTHG"] > 0) & (b["HTAG"] > 0)
+        & (ev_ikinci_yari > 0) & (dep_ikinci_yari > 0)
+    )
+
+    secili_maskeler = []
+    if filtre_12:
+        secili_maskeler.append(b["olay_12"])
+    if filtre_21:
+        secili_maskeler.append(b["olay_21"])
+    if filtre_cift_yari_kg:
+        secili_maskeler.append(b["olay_cift_yari_kg"])
+    if secili_maskeler:
+        maske = secili_maskeler[0].copy()
+        for ek_maske in secili_maskeler[1:]:
+            maske = maske | ek_maske
+        b = b[maske]
+
+    if b.empty:
+        return b
+    b["Olay"] = b.apply(
+        lambda r: " · ".join(
+            x for x, ok in [
+                ("1/2", r["olay_12"]),
+                ("2/1", r["olay_21"]),
+                ("İki yarıda da KG", r["olay_cift_yari_kg"]),
+            ] if bool(ok)
+        ) or "—",
+        axis=1,
+    )
+    return b.sort_values("Date", ascending=False).head(int(limit))
+
+
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
@@ -2373,6 +2430,8 @@ for key, default in [
     ("last_gecmis_df", None),
     ("last_bulten_df", None),
     ("backtest_df", None),
+    ("gecmis_inceleme_list", None),
+    ("yuksek_oran_list", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -2929,7 +2988,7 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 10 Market", "Top 50 Market", "Backtest"],
+        ["Maç Analizi", "Top 10 Market", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -3044,12 +3103,30 @@ with st.sidebar:
     secili_kodlar = selected_league_codes()
     analiz_btn = False
     backtest_btn = False
+    gecmis_btn = False
+    yuksek_oran_btn = False
     if st.session_state.get('sayfa_modu') == 'Backtest':
         backtest_sezonu = st.selectbox(
             'Test sezonu', options=yillar or ['2526'], index=max(0, len(yillar or ['2526']) - 1), key='backtest_sezonu'
         )
         backtest_limit = st.number_input('En fazla test maçı', min_value=50, max_value=2000, value=500, step=50, key='backtest_limit')
         backtest_btn = st.button('🧪 BACKTESTİ BAŞLAT', use_container_width=True, type='primary', key='backtest_baslat_btn')
+    elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
+        gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
+        gecmis_btn = st.button('🔎 GEÇMİŞ ÖRNEKLERİ GETİR', use_container_width=True, type='primary', key='gecmis_getir_btn')
+    elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
+        st.markdown("### 💎 Yüksek Oran Marketleri")
+        st.caption("Birden fazla seçim açılırsa koşullardan herhangi birini sağlayan geçmiş örnekler gösterilir.")
+        yf1, yf2 = st.columns(2)
+        with yf1:
+            yuksek_filtre_12 = st.checkbox('1/2', value=True, key='yuksek_filtre_12')
+        with yf2:
+            yuksek_filtre_21 = st.checkbox('2/1', value=True, key='yuksek_filtre_21')
+        yuksek_filtre_cift_yari_kg = st.checkbox(
+            'İki yarıda da karşılıklı gol', value=True, key='yuksek_filtre_cift_yari_kg'
+        )
+        yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
+        yuksek_oran_btn = st.button('💎 YÜKSEK ORANLILARI BUL', use_container_width=True, type='primary', key='yuksek_oran_btn')
     else:
         analiz_btn = st.button('▶ ANALİZİ BAŞLAT', use_container_width=True, type='primary', key='analiz_baslat_btn')
 
@@ -3064,6 +3141,133 @@ with st.sidebar:
         )
 
 legal_sidebar_sections()
+
+
+if gecmis_btn:
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
+    else:
+        with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
+            gi_gecmis = futbol_veri_motoru(tuple(yillar))
+            gi_bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
+            inceleme = []
+            for _, gi_mac in gi_bulten.iterrows():
+                ornekler = gecmis_ornekleri_bul(
+                    gi_gecmis,
+                    gi_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    limit=gecmis_limit,
+                )
+                inceleme.append({"m": gi_mac.to_dict(), "ornekler": ornekler})
+            st.session_state.gecmis_inceleme_list = inceleme
+            st.rerun()
+
+if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
+    st.markdown("## 🔎 Geçmiş Örnekleri İncele")
+    st.caption("Seçilen liglerde o gün oynanacak tüm maçları ve benzer 1-X-2 oranlarına sahip geçmiş karşılaşmaları gösterir; tahmin üretmez.")
+    inceleme = st.session_state.get("gecmis_inceleme_list")
+    if inceleme is None:
+        st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
+    elif not inceleme:
+        st.warning("Bu tarih ve özel filtrelerle eşleşen maç bulunamadı.")
+    else:
+        st.success(f"{len(inceleme)} güncel maç bulundu.")
+        for sira, item in enumerate(inceleme, start=1):
+            m = item["m"]
+            ornekler = item["ornekler"]
+            saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+            with st.expander(
+                f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · "
+                f"Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f} · {len(ornekler)} örnek",
+                expanded=(sira == 1),
+            ):
+                if ornekler.empty:
+                    st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
+                    continue
+                tablo = pd.DataFrame({
+                    "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
+                    "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
+                    "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
+                    "1": ornekler["B365H"].round(2),
+                    "X": ornekler["B365D"].round(2),
+                    "2": ornekler["B365A"].round(2),
+                    "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
+                    "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
+                    "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
+                    "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
+                    "Özel olay": ornekler["Olay"],
+                })
+                st.dataframe(tablo, use_container_width=True, hide_index=True)
+    legal_footer()
+    st.stop()
+
+
+if yuksek_oran_btn:
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
+    elif not (yuksek_filtre_12 or yuksek_filtre_21 or yuksek_filtre_cift_yari_kg):
+        st.error("⚠️ En az bir yüksek oran marketi seçin.")
+    else:
+        with st.spinner("💎 1/2, 2/1 ve iki yarıda da KG örnekleri taranıyor..."):
+            yo_gecmis = futbol_veri_motoru(tuple(yillar))
+            yo_bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
+            yuksek_liste = []
+            for _, yo_mac in yo_bulten.iterrows():
+                ornekler = gecmis_ornekleri_bul(
+                    yo_gecmis,
+                    yo_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    filtre_12=yuksek_filtre_12,
+                    filtre_21=yuksek_filtre_21,
+                    filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
+                    limit=yuksek_limit,
+                )
+                if not ornekler.empty:
+                    yuksek_liste.append({"m": yo_mac.to_dict(), "ornekler": ornekler})
+            st.session_state.yuksek_oran_list = yuksek_liste
+            st.rerun()
+
+if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
+    st.markdown("## 💎 Yüksek Oran Filtresi")
+    st.caption("Tahmin üretmez; yalnızca benzer geçmiş maçlarda seçilen yüksek oran senaryoları gerçekleşmiş güncel karşılaşmaları listeler.")
+    yuksek_liste = st.session_state.get("yuksek_oran_list")
+    if yuksek_liste is None:
+        st.info("Lig, tarih ve marketleri seçip YÜKSEK ORANLILARI BUL butonuna bas.")
+    elif not yuksek_liste:
+        st.warning("Seçilen koşullarda 1/2, 2/1 veya iki yarıda da KG geçmiş örneği bulunan güncel maç yok.")
+    else:
+        st.success(f"{len(yuksek_liste)} güncel maç filtreye takıldı.")
+        for sira, item in enumerate(yuksek_liste, start=1):
+            m = item["m"]
+            ornekler = item["ornekler"]
+            olay_sayilari = {
+                "1/2": int(ornekler["olay_12"].sum()),
+                "2/1": int(ornekler["olay_21"].sum()),
+                "İki yarıda da KG": int(ornekler["olay_cift_yari_kg"].sum()),
+            }
+            olay_ozeti = " · ".join(f"{k}: {v}" for k, v in olay_sayilari.items() if v)
+            saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+            with st.expander(
+                f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · {olay_ozeti}",
+                expanded=(sira == 1),
+            ):
+                st.markdown(
+                    f"**Güncel oran:** `{m.get('h', 0):.2f} / {m.get('b', 0):.2f} / {m.get('a', 0):.2f}`"
+                )
+                tablo = pd.DataFrame({
+                    "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
+                    "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
+                    "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
+                    "1/X/2": ornekler["B365H"].round(2).astype(str) + " / " + ornekler["B365D"].round(2).astype(str) + " / " + ornekler["B365A"].round(2).astype(str),
+                    "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
+                    "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
+                    "Yüksek oran olayı": ornekler["Olay"],
+                })
+                st.dataframe(tablo, use_container_width=True, hide_index=True)
+    legal_footer()
+    st.stop()
 
 
 if backtest_btn:
