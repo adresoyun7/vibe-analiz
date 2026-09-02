@@ -1,6 +1,8 @@
 
 import io
 import math
+import re
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 from html import escape
 
@@ -152,7 +154,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 24
+APP_SCHEMA_VERSION = 25
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1450,10 +1452,74 @@ def ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig=False):
         return gecmis_df.iloc[0:0].copy()
     return gecmis_df[gecmis_df["league_code"] == history_code].copy()
 
-def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False):
+def _takim_adi_norm(value):
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def _takim_eslestir(takim, adaylar):
+    hedef = _takim_adi_norm(takim)
+    if not hedef:
+        return None
+    norm_map = {_takim_adi_norm(x): x for x in adaylar if str(x).strip()}
+    if hedef in norm_map:
+        return norm_map[hedef]
+    en_iyi, en_skor = None, 0.0
+    for norm, orijinal in norm_map.items():
+        skor = SequenceMatcher(None, hedef, norm).ratio()
+        if skor > en_skor:
+            en_iyi, en_skor = orijinal, skor
+    return en_iyi if en_skor >= 0.72 else None
+
+
+def takim_formu_hesapla(veri, takim, tarih=None, mekan=None, son_mac=5):
+    """Takımın maçtan önceki genel ve iç/dış saha formunu hesaplar."""
+    bos = {"bulundu": False, "takim": str(takim), "mac": 0, "puan": 50.0,
+           "ppg": 0.0, "gf": 0.0, "ga": 0.0, "ust25": 0.0, "kg": 0.0}
+    if veri is None or veri.empty or not takim:
+        return bos
+    adaylar = pd.unique(pd.concat([veri["HomeTeam"], veri["AwayTeam"]], ignore_index=True).dropna())
+    eslesen = _takim_eslestir(takim, adaylar)
+    if not eslesen:
+        return bos
+    v = veri.copy()
+    v["Date"] = pd.to_datetime(v["Date"], errors="coerce")
+    for c in ["FTHG", "FTAG"]:
+        v[c] = pd.to_numeric(v[c], errors="coerce")
+    v = v.dropna(subset=["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"])
+    if tarih is not None:
+        v = v[v["Date"] < pd.to_datetime(tarih)]
+    genel = v[(v["HomeTeam"] == eslesen) | (v["AwayTeam"] == eslesen)].sort_values("Date", ascending=False)
+    mekan_df = genel
+    if mekan == "home":
+        mekan_df = genel[genel["HomeTeam"] == eslesen]
+    elif mekan == "away":
+        mekan_df = genel[genel["AwayTeam"] == eslesen]
+    secim = mekan_df.head(son_mac)
+    if len(secim) < 3:
+        secim = genel.head(son_mac)
+    if secim.empty:
+        return bos
+    puanlar, goller, yenenler, ustler, kgler = [], [], [], [], []
+    for _, r in secim.iterrows():
+        evde = r["HomeTeam"] == eslesen
+        gf = float(r["FTHG"] if evde else r["FTAG"])
+        ga = float(r["FTAG"] if evde else r["FTHG"])
+        puanlar.append(3 if gf > ga else 1 if gf == ga else 0)
+        goller.append(gf); yenenler.append(ga)
+        ustler.append((gf + ga) >= 3); kgler.append(gf > 0 and ga > 0)
+    ppg = sum(puanlar) / len(puanlar)
+    gf_avg, ga_avg = sum(goller) / len(goller), sum(yenenler) / len(yenenler)
+    form_puani = max(0.0, min(100.0, 50 + (ppg - 1.5) * 22 + (gf_avg - ga_avg) * 12))
+    return {"bulundu": True, "takim": str(eslesen), "mac": len(secim), "puan": round(form_puani, 1),
+            "ppg": round(ppg, 2), "gf": round(gf_avg, 2), "ga": round(ga_avg, 2),
+            "ust25": sum(ustler) / len(ustler), "kg": sum(kgler) / len(kgler)}
+
+
+def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
     b_df = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
     if b_df.empty:
         return None, b_df
+    form_kaynagi = b_df.copy()
     rehber = tolerans_rehberi(float(tolerans))
     onerilen_min_mac = dinamik_min_mac(float(tolerans))
 
@@ -1494,6 +1560,30 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False):
     kg_raw = float(((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
     iy05_raw = float((ilk_yari_gol >= 1).mean())
     iy15_raw = float((ilk_yari_gol >= 2).mean())
+
+    ev_form = takim_formu_hesapla(
+        form_kaynagi, m_row.get("ev", ""), m_row.get("zaman"), mekan="home", son_mac=5
+    ) if form_aktif else {"bulundu": False, "puan": 50, "ust25": 0.5, "kg": 0.5}
+    dep_form = takim_formu_hesapla(
+        form_kaynagi, m_row.get("dep", ""), m_row.get("zaman"), mekan="away", son_mac=5
+    ) if form_aktif else {"bulundu": False, "puan": 50, "ust25": 0.5, "kg": 0.5}
+    form_var = bool(ev_form.get("bulundu") and dep_form.get("bulundu"))
+    form_etkisi = 0.0
+    if form_var:
+        # Form ana modeli ezmez: MS yönünde en fazla 6 puanlık kayma, gol/KG'de %20 harman.
+        form_etkisi = max(-0.06, min(0.06, (ev_form["puan"] - dep_form["puan"]) / 1000.0))
+        ms1_raw = max(0.01, ms1_raw + form_etkisi)
+        ms2_raw = max(0.01, ms2_raw - form_etkisi)
+        ms_toplam = ms1_raw + msx_raw + ms2_raw
+        ms1_raw, msx_raw, ms2_raw = ms1_raw / ms_toplam, msx_raw / ms_toplam, ms2_raw / ms_toplam
+        form_ust = (float(ev_form["ust25"]) + float(dep_form["ust25"])) / 2
+        form_kg = (float(ev_form["kg"]) + float(dep_form["kg"])) / 2
+        ms25_raw = ms25_raw * 0.80 + form_ust * 0.20
+        kg_raw = kg_raw * 0.80 + form_kg * 0.20
+        form_ms_dagilim = {"H": ms1_raw, "D": msx_raw, "A": ms2_raw}
+        ms_mod = max(form_ms_dagilim, key=form_ms_dagilim.get)
+        ms_raw = float(form_ms_dagilim[ms_mod])
+        ms_side = "MS 1" if ms_mod == "H" else "MS 2" if ms_mod == "A" else "Beraberlik"
 
     htft_s = b["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + b["FTR"].replace({"H": "1", "A": "2", "D": "X"})
     htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
@@ -1780,6 +1870,12 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False):
         nedenler.append("Düşük örnek + yüksek güven görüldüğü için fake confidence freni uygulandı.")
     if flip_p >= 0.12:
         nedenler.append(f"HT/FT sürpriz riski %{int(round(flip_p * 100))}.")
+    if form_var:
+        yon = "ev sahibi" if form_etkisi > 0.008 else "deplasman" if form_etkisi < -0.008 else "dengeli"
+        nedenler.append(
+            f"Güncel form desteği: {yon}; {ev_form.get('takim')} {ev_form.get('puan')}/100, "
+            f"{dep_form.get('takim')} {dep_form.get('puan')}/100."
+        )
 
     playable_score = ana_p
     if combo_var:
@@ -1882,6 +1978,10 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False):
         "oynanabilir": oynanabilir,
         "oynanabilir_esik_ok": (ana_p >= 55),
         "fake_drop": fake_drop,
+        "form_var": form_var,
+        "form_etkisi": round(form_etkisi * 100, 1),
+        "ev_form": ev_form,
+        "dep_form": dep_form,
         "score": score,
         "stability_tols": [],
         "stability_count": 0,
@@ -2332,8 +2432,13 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         if train.empty:
             continue
 
-        hedef = {"h": row["B365H"], "b": row["B365D"], "a": row["B365A"]}
-        t, benzerler = hesapla(train, hedef, tolerans)
+        hedef = {
+            "h": row["B365H"], "b": row["B365D"], "a": row["B365A"],
+            "ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
+            "zaman": row["Date"],
+        }
+        baz_t, _ = hesapla(train, hedef, tolerans, form_aktif=False)
+        t, benzerler = hesapla(train, hedef, tolerans, form_aktif=True)
         if t is None or len(benzerler) < int(min_ornek):
             continue
         label = t.get("ana_label", "")
@@ -2355,6 +2460,9 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Örnek": int(t.get("ornek", 0)),
             "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
             "Tuttu": bool(tuttu),
+            "Baz Tahmin": baz_t.get("ana_label", "—") if baz_t else "—",
+            "Baz Tuttu": bool(tahmin_tuttu_mu(baz_t.get("ana_label", ""), row)) if baz_t and tahmin_tuttu_mu(baz_t.get("ana_label", ""), row) is not None else False,
+            "Form Kullanıldı": bool(t.get("form_var")),
             "Oran": round(float(oran), 2) if oran is not None else None,
             "Kâr (100 TL)": kar,
         })
@@ -3161,8 +3269,8 @@ with st.sidebar:
     with st.expander("🧪 Sezon ve Veri Ayarları", expanded=True):
         yillar = st.multiselect(
             'Sezonlar',
-            options=['2122', '2223', '2324', '2425', '2526'],
-            default=['2122', '2223', '2324', '2425', '2526'],
+            options=['2122', '2223', '2324', '2425', '2526', '2627'],
+            default=['2122', '2223', '2324', '2425', '2526', '2627'],
             key='top_seasons',
             on_change=clear_detail_on_filter_change,
         )
@@ -3444,16 +3552,19 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         toplam = len(bt)
         kazanan = int(bt["Tuttu"].sum())
         basari = kazanan / toplam * 100 if toplam else 0
+        baz_kazanan = int(bt["Baz Tuttu"].sum()) if "Baz Tuttu" in bt.columns else 0
+        baz_basari = baz_kazanan / toplam * 100 if toplam else 0
         ms_bt = bt[bt["Kâr (100 TL)"].notna()].copy()
         net_kar = float(ms_bt["Kâr (100 TL)"].sum()) if not ms_bt.empty else 0.0
         yatirilan = len(ms_bt) * 100
         roi = net_kar / yatirilan * 100 if yatirilan else 0.0
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Toplam tahmin", toplam)
         c2.metric("Kazanan", kazanan)
-        c3.metric("Başarı", f"%{basari:.1f}")
-        c4.metric("MS ROI", f"%{roi:.1f}", help="Yalnızca geçmiş B365 oranı bulunan MS 1/X/2 tahminleri, her seçime 100 TL varsayımıyla.")
+        c3.metric("Formsuz başarı", f"%{baz_basari:.1f}")
+        c4.metric("Formlu başarı", f"%{basari:.1f}", f"{basari-baz_basari:+.1f} puan")
+        c5.metric("MS ROI", f"%{roi:.1f}", help="Yalnızca geçmiş B365 oranı bulunan MS 1/X/2 tahminleri, her seçime 100 TL varsayımıyla.")
 
         ozet = (
             bt.groupby("Tahmin", dropna=False)
@@ -4051,6 +4162,14 @@ else:
             stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
+        form_html = ""
+        if t.get("form_var"):
+            ef, dfm = t.get("ev_form", {}), t.get("dep_form", {})
+            form_html = (
+                f'<div class="mk-mini" style="color:#93c5fd">📈 Form: '
+                f'{escape(str(ef.get("takim", m["ev"])))} {ef.get("puan", 0):.0f} · '
+                f'{escape(str(dfm.get("takim", m["dep"])))} {dfm.get("puan", 0):.0f}</div>'
+            )
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -4067,6 +4186,7 @@ else:
                 <div class="mk-ev">⬜ {m['ev']}</div>
                 <div class="mk-dep">🟦 {m['dep']}</div>
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
+                {form_html}
                 {belirsiz_html}
                 {ai_comment_html}
               </div>
