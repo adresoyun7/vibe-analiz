@@ -157,7 +157,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 40
+APP_SCHEMA_VERSION = 41
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3493,59 +3493,94 @@ if st.session_state.get('date_mode') == '3 gün sonra':
     st.session_state['special_date'] = bugun + timedelta(days=3)
 
 
-# En sık değiştirilen iki analiz ayarı ana ekranın en üstünde tutulur.
-st.markdown(
-    """
-    <style>
-    .top-analysis-controls {
-        background:#ffffff;
-        border:1px solid #cbd5e1;
-        border-radius:14px;
-        padding:11px 16px 8px 16px;
-        margin:0 0 14px 0;
-        box-shadow:0 3px 10px rgba(15,23,42,.06);
-    }
-    .top-analysis-controls b {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        font-size:1rem;
-    }
-    [data-testid="stMain"] div[data-testid="stSlider"] label,
-    [data-testid="stMain"] div[data-testid="stSlider"] label *,
-    [data-testid="stMain"] div[data-testid="stNumberInput"] label,
-    [data-testid="stMain"] div[data-testid="stNumberInput"] label * {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        opacity:1 !important;
-        font-weight:800 !important;
-    }
-    </style>
-    <div class="top-analysis-controls"><b>🎛️ Ana Analiz Ayarları</b></div>
-    """,
-    unsafe_allow_html=True,
-)
-ayar_tol_col, ayar_ornek_col, ayar_buton_col = st.columns([2.2, 1, 1.15], gap="medium")
-with ayar_tol_col:
-    TOLERANS = st.slider(
-        "Oran Hassasiyeti",
-        0.00, 0.30, 0.08,
-        step=0.01,
-        key="top_tol",
-        on_change=clear_detail_on_filter_change,
-        help="Düşük değerler oranı daha yakın maçları; yüksek değerler daha fazla geçmiş örneği kapsar.",
+# En sık değiştirilen analiz ayarları kaydırmada ekranın üstünde kalır.
+with st.container(key="sticky_analysis_controls"):
+    st.markdown(
+        """
+        <style>
+        .st-key-sticky_analysis_controls {
+            position:sticky !important;
+            top:.45rem !important;
+            z-index:999 !important;
+            background:rgba(255,255,255,.97) !important;
+            border:1px solid #cbd5e1 !important;
+            border-radius:14px !important;
+            padding:9px 16px 7px 16px !important;
+            margin:0 0 14px 0 !important;
+            box-shadow:0 8px 24px rgba(15,23,42,.16) !important;
+            backdrop-filter:blur(8px);
+        }
+        .top-analysis-controls {
+            margin:0 0 2px 0;
+        }
+        .top-analysis-controls b {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            font-size:1rem;
+        }
+        [data-testid="stMain"] div[data-testid="stSlider"] label,
+        [data-testid="stMain"] div[data-testid="stSlider"] label *,
+        [data-testid="stMain"] div[data-testid="stNumberInput"] label,
+        [data-testid="stMain"] div[data-testid="stNumberInput"] label * {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+            font-weight:800 !important;
+        }
+        @media (max-width:700px) {
+            .st-key-sticky_analysis_controls {
+                position:relative !important;
+                top:.2rem !important;
+                padding:6px 9px !important;
+            }
+            .top-analysis-controls { display:none; }
+        }
+        </style>
+        <div class="top-analysis-controls"><b>🎛️ Ana Analiz Ayarları</b></div>
+        """,
+        unsafe_allow_html=True,
     )
-with ayar_ornek_col:
-    min_ornek = st.number_input(
-        "Minimum Örnek Sayısı",
-        min_value=1,
-        value=1,
-        step=1,
-        key="top_min_ornek",
-        on_change=clear_detail_on_filter_change,
+    ayar_tol_col, ayar_ornek_col, ayar_oynanabilir_col, ayar_canli_col, ayar_buton_col = st.columns(
+        [2.1, .9, 1.25, 1.05, 1.15], gap="small"
     )
-with ayar_buton_col:
-    # Düğme, sidebar'da görünüm seçildikten sonra bu üst konuma yazdırılır.
-    ust_analiz_buton_alani = st.empty()
+    with ayar_tol_col:
+        TOLERANS = st.slider(
+            "Oran Hassasiyeti",
+            0.00, 0.30, 0.08,
+            step=0.01,
+            key="top_tol",
+            on_change=clear_detail_on_filter_change,
+            help="Düşük değerler oranı daha yakın maçları; yüksek değerler daha fazla geçmiş örneği kapsar.",
+        )
+    with ayar_ornek_col:
+        min_ornek = st.number_input(
+            "Minimum Örnek Sayısı",
+            min_value=1,
+            value=1,
+            step=1,
+            key="top_min_ornek",
+            on_change=clear_detail_on_filter_change,
+        )
+    with ayar_oynanabilir_col:
+        oynanabilir_esik = st.selectbox(
+            "Oynanılabilir eşik",
+            options=[0, 55, 60, 65, 70, 75],
+            index=2,
+            format_func=lambda x: "Tümü" if x == 0 else f"Güven ≥ %{x}",
+            key="oynanabilir_esik",
+            on_change=clear_detail_on_filter_change,
+        )
+    with ayar_canli_col:
+        canli_filtre = st.selectbox(
+            "Canlı filtre",
+            options=["Tümü", "Canlı", "Başlamamış", "Bitti"],
+            index=0,
+            key="canli_filtre",
+            on_change=clear_detail_on_filter_change,
+        )
+    with ayar_buton_col:
+        # Düğme, sidebar'da görünüm seçildikten sonra bu üst konuma yazdırılır.
+        ust_analiz_buton_alani = st.empty()
 
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
@@ -3670,23 +3705,6 @@ with st.sidebar:
             on_change=clear_detail_on_filter_change,
         )
 
-    with st.expander("🎯 Oynanılabilir / Canlı", expanded=True):
-        oynanabilir_esik = st.selectbox(
-            'Oynanılabilir eşik',
-            options=[0, 55, 60, 65, 70, 75],
-            index=2,
-            format_func=lambda x: 'Tümü' if x == 0 else f'Güven ≥ %{x}',
-            key='oynanabilir_esik',
-            on_change=clear_detail_on_filter_change,
-        )
-        canli_filtre = st.selectbox(
-            'Canlı filtre',
-            options=['Tümü', 'Canlı', 'Başlamamış', 'Bitti'],
-            index=0,
-            key='canli_filtre',
-            on_change=clear_detail_on_filter_change,
-        )
-
     secili_kodlar = selected_league_codes()
     analiz_btn = False
     backtest_btn = False
@@ -3701,10 +3719,10 @@ with st.sidebar:
             on_change=clear_backtest_on_change,
         )
         backtest_limit = st.number_input('En fazla test maçı', min_value=50, max_value=2000, value=500, step=50, key='backtest_limit')
-        backtest_btn = st.button('🧪 BACKTESTİ BAŞLAT', use_container_width=True, type='primary', key='backtest_baslat_btn')
+        backtest_btn = False
     elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
-        gecmis_btn = st.button('🔎 GEÇMİŞ ÖRNEKLERİ GETİR', use_container_width=True, type='primary', key='gecmis_getir_btn')
+        gecmis_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
         st.markdown(
             """
@@ -3751,6 +3769,24 @@ if st.session_state.get('sayfa_modu') in ['Maç Analizi', 'Top 50 Market']:
             use_container_width=True,
             type='primary',
             key='analiz_baslat_btn',
+        )
+elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        gecmis_btn = st.button(
+            '🔎 ÖRNEKLERİ GETİR',
+            use_container_width=True,
+            type='primary',
+            key='gecmis_getir_btn',
+        )
+elif st.session_state.get('sayfa_modu') == 'Backtest':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        backtest_btn = st.button(
+            '🧪 BACKTESTİ BAŞLAT',
+            use_container_width=True,
+            type='primary',
+            key='backtest_baslat_btn',
         )
 
 
