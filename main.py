@@ -155,7 +155,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 36
+APP_SCHEMA_VERSION = 37
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1709,13 +1709,17 @@ def son_mac_kartlari_html(tablo):
     for _, r in tablo.iterrows():
         sonuc = str(r.get("Sonuç", ""))
         sonuc_cls = "win" if "G" in sonuc else "draw" if "B" in sonuc else "loss"
+        tarih = escape(str(r.get("Tarih", "")))
+        saha = escape(str(r.get("Saha", "")))
+        rakip = escape(str(r.get("Rakip", "")))
+        skor = escape(str(r.get("Skor", "")))
+        sonuc_guvenli = escape(sonuc)
         kartlar.append(
-            f"""
-            <div class="recent-match-row">
-              <div class="recent-top"><span>{escape(str(r.get('Tarih', '')))}</span><span>{escape(str(r.get('Saha', '')))}</span><b class="{sonuc_cls}">{escape(sonuc)}</b></div>
-              <div class="recent-bottom"><span title="{escape(str(r.get('Rakip', '')))}">{escape(str(r.get('Rakip', '')))}</span><strong>{escape(str(r.get('Skor', '')))}</strong></div>
-            </div>
-            """
+            f'<div class="recent-match-row">'
+            f'<div class="recent-top"><span>{tarih}</span><span>{saha}</span>'
+            f'<b class="{sonuc_cls}">{sonuc_guvenli}</b></div>'
+            f'<div class="recent-bottom"><span title="{rakip}">{rakip}</span>'
+            f'<strong>{skor}</strong></div></div>'
         )
     return '<div class="recent-match-list">' + "".join(kartlar) + "</div>"
 
@@ -1723,13 +1727,15 @@ def son_mac_kartlari_html(tablo):
 def h2h_kartlari_html(tablo):
     kartlar = []
     for _, r in tablo.iterrows():
+        tarih = escape(str(r.get("Tarih", "")))
+        skor = escape(str(r.get("Skor", "")))
+        ev = escape(str(r.get("Ev sahibi", "")))
+        dep = escape(str(r.get("Deplasman", "")))
         kartlar.append(
-            f"""
-            <div class="recent-match-row h2h-row">
-              <div class="recent-top"><span>{escape(str(r.get('Tarih', '')))}</span><b>{escape(str(r.get('Skor', '')))}</b></div>
-              <div class="recent-bottom h2h-teams"><span>{escape(str(r.get('Ev sahibi', '')))}</span><span>{escape(str(r.get('Deplasman', '')))}</span></div>
-            </div>
-            """
+            f'<div class="recent-match-row h2h-row">'
+            f'<div class="recent-top"><span>{tarih}</span><b>{skor}</b></div>'
+            f'<div class="recent-bottom h2h-teams"><span>{ev}</span>'
+            f'<span>{dep}</span></div></div>'
         )
     return '<div class="recent-match-list">' + "".join(kartlar) + "</div>"
 
@@ -2802,6 +2808,7 @@ for key, default in [
     ("final_list", []),
     ("detay_idx", None),
     ("detay_item", None),
+    ("detay_gecmis_acik", False),
     ("top10_list", []),
     ("top50_list", []),
     ("filtre", "tumu"),
@@ -4260,6 +4267,19 @@ def detay_gecmis_sidebar():
 
 
 def detay_popup_icerigi():
+    panel_acik = bool(st.session_state.get("detay_gecmis_acik", False))
+    dugme_metni = "✕ Form & Geçmişi Kapat" if panel_acik else "📈 Form & Geçmişi Aç"
+
+    _, dugme_col = st.columns([3.2, 1.3], gap="small")
+    with dugme_col:
+        if st.button(dugme_metni, key="toggle_detail_history", use_container_width=True):
+            st.session_state.detay_gecmis_acik = not panel_acik
+            st.rerun()
+
+    if not panel_acik:
+        detay_ana_icerik()
+        return
+
     ana_col, side_col = st.columns([3.15, 1.35], gap="small")
     with ana_col:
         detay_ana_icerik()
