@@ -2095,6 +2095,108 @@ def market_label_to_odd(m_row, label):
     return None
 
 
+
+def ms_fair_probability(m_row, label):
+    """1-X-2 bookmaker marjını normalize ederek fair piyasa olasılığını döndürür."""
+    try:
+        h = float(m_row.get("h"))
+        d = float(m_row.get("b"))
+        a = float(m_row.get("a"))
+    except Exception:
+        return None
+
+    if min(h, d, a) <= 1.0:
+        return None
+
+    inv_h, inv_d, inv_a = 1.0 / h, 1.0 / d, 1.0 / a
+    toplam = inv_h + inv_d + inv_a
+    if toplam <= 0:
+        return None
+
+    label = str(label or "").strip()
+    if label in ("MS 1", "MS1"):
+        return inv_h / toplam
+    if label in ("Beraberlik", "MS X", "MSX"):
+        return inv_d / toplam
+    if label in ("MS 2", "MS2"):
+        return inv_a / toplam
+    return None
+
+
+def value_edge_hesapla(m_row, label, model_guven):
+    """MS 1/X/2 için model olasılığı - marjsız piyasa olasılığı.
+    Non-MS marketlerde gerçek bookmaker oranı olmadığı için None döner.
+    """
+    odd = market_label_to_odd(m_row, label)
+    fair = ms_fair_probability(m_row, label)
+    if odd is None or fair is None:
+        return {
+            "odd": None,
+            "fair_prob": None,
+            "raw_implied": None,
+            "edge": None,
+            "ev": None,
+            "value_label": "N/A",
+        }
+
+    try:
+        odd = float(odd)
+        model = float(model_guven) / 100.0
+    except Exception:
+        return {
+            "odd": None,
+            "fair_prob": None,
+            "raw_implied": None,
+            "edge": None,
+            "ev": None,
+            "value_label": "N/A",
+        }
+
+    if odd <= 1.0:
+        return {
+            "odd": None,
+            "fair_prob": None,
+            "raw_implied": None,
+            "edge": None,
+            "ev": None,
+            "value_label": "N/A",
+        }
+
+    raw_implied = 1.0 / odd
+    edge = model - fair
+    ev = model * odd - 1.0
+
+    if edge >= 0.05:
+        value_label = "Güçlü Value"
+    elif edge >= 0.02:
+        value_label = "Value"
+    elif edge > 0:
+        value_label = "Hafif Value"
+    elif edge >= -0.02:
+        value_label = "Nötr"
+    else:
+        value_label = "Negatif Value"
+
+    return {
+        "odd": round(odd, 3),
+        "fair_prob": round(fair * 100.0, 2),
+        "raw_implied": round(raw_implied * 100.0, 2),
+        "edge": round(edge * 100.0, 2),
+        "ev": round(ev * 100.0, 2),
+        "value_label": value_label,
+    }
+
+
+def value_skor_bonusu(edge):
+    """Top 50 için hafif edge etkisi. Maksimum ±4 puan."""
+    if edge is None:
+        return 0.0
+    try:
+        return max(-4.0, min(4.0, float(edge) * 0.45))
+    except Exception:
+        return 0.0
+
+
 def ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig=False):
     """İstenirse güncel The Odds API ligini football-data ligine daraltır."""
     if not sadece_ayni_lig:
@@ -2780,6 +2882,13 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         nedenler.append(f"Güçlü kombo bulundu: {combo_label} (%{combo_raw_p}, {combo_hit} maç).")
     if fake_drop:
         nedenler.append("Düşük örnek + yüksek güven görüldüğü için fake confidence freni uygulandı.")
+    ana_value_preview = value_edge_hesapla(m_row, ana_label, ana_p)
+    if ana_value_preview.get("edge") is not None:
+        nedenler.append(
+            f"Value/Edge: model %{ana_p} · marjsız piyasa %{ana_value_preview['fair_prob']:.1f} · "
+            f"edge {ana_value_preview['edge']:+.1f} puan · EV {ana_value_preview['ev']:+.1f}%."
+        )
+
     if form_profili.get("aktif"):
         nedenler.append(
             f"{form_ozet_yazi(form_profili)} · Ana market form çarpanı "
@@ -2834,12 +2943,22 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True):
         score += 6
     score = round(score, 1)
 
+    ana_value = value_edge_hesapla(m_row, ana_label, ana_p)
+
     return {
         "ana_label": ana_label,
         "ana_p": ana_p,
         "playable_score": playable_score,
         "ana_raw_p": ana_raw_p,
         "ana_odd": ana_odd,
+        "odds_h": round(oran_ev, 3),
+        "odds_d": round(oran_ber, 3),
+        "odds_a": round(oran_dep, 3),
+        "value_edge": ana_value.get("edge"),
+        "value_ev": ana_value.get("ev"),
+        "value_fair_prob": ana_value.get("fair_prob"),
+        "value_raw_implied": ana_value.get("raw_implied"),
+        "value_label": ana_value.get("value_label", "N/A"),
         "alt_label": alt_label,
         "alt_p": alt_p,
         "kg_label": kg_label,
@@ -2955,7 +3074,7 @@ def top10_market_adaylari(t):
     """
     Top 10 için gerçek multi-market aday havuzu.
     Sadece MS'e kilitlenmez; MS / Alt-Üst / KG / İlk Yarı / Kombo marketlerini aynı havuza alır.
-    Non-MS marketlere bilinçli bonus verir ki Top 10 sadece MS1-MS2 dolmasın.
+    Market türüne göre keyfi bonus vermez; Value/Edge yalnızca gerçek MS oranı varsa hafif sinyal olur.
     """
     adaylar = []
 
@@ -3027,7 +3146,31 @@ def top10_market_adaylari(t):
             if a["label"] == label and a["tip"] == tip:
                 if guven + bonus > a["guven"] + a["bonus"]:
                     a.update({"guven": guven, "oran": oran, "bonus": bonus})
+                    if tip == "MS" and oran is not None:
+                        vm = value_edge_hesapla(
+                            {"h": t.get("odds_h"), "b": t.get("odds_d"), "a": t.get("odds_a")},
+                            label,
+                            guven,
+                        )
+                        a.update({
+                            "value_edge": vm.get("edge"),
+                            "value_ev": vm.get("ev"),
+                            "value_fair_prob": vm.get("fair_prob"),
+                            "value_label": vm.get("value_label", "N/A"),
+                        })
                 return
+
+        # Value sadece gerçek 1-X-2 bookmaker oranı bulunan MS marketlerinde hesaplanır.
+        value_m = {
+            "edge": None, "ev": None, "fair_prob": None,
+            "raw_implied": None, "value_label": "N/A"
+        }
+        if tip == "MS" and oran is not None:
+            value_m = value_edge_hesapla(
+                {"h": t.get("odds_h"), "b": t.get("odds_d"), "a": t.get("odds_a")},
+                label,
+                guven,
+            )
 
         adaylar.append({
             "label": label,
@@ -3035,6 +3178,10 @@ def top10_market_adaylari(t):
             "tip": tip,
             "oran": oran,
             "bonus": bonus,
+            "value_edge": value_m.get("edge"),
+            "value_ev": value_m.get("ev"),
+            "value_fair_prob": value_m.get("fair_prob"),
+            "value_label": value_m.get("value_label", "N/A"),
         })
 
     # Ana tahmin hangi market olursa olsun havuza girsin.
@@ -3050,9 +3197,9 @@ def top10_market_adaylari(t):
     add(alt_label, t.get("alt_p", 0), alt_tip, None, bonus=alt_bonus, min_guven=50)
 
     # MS marketleri: diğer marketlerle aynı skor kuralları uygulanır.
-    add("MS 1", t.get("ms1_p", 0), "MS", None, bonus=0, min_guven=52)
-    add("Beraberlik", t.get("msx_p", 0), "MS", None, bonus=0, min_guven=52)
-    add("MS 2", t.get("ms2_p", 0), "MS", None, bonus=0, min_guven=52)
+    add("MS 1", t.get("ms1_p", 0), "MS", t.get("odds_h"), bonus=0, min_guven=52)
+    add("Beraberlik", t.get("msx_p", 0), "MS", t.get("odds_d"), bonus=0, min_guven=52)
+    add("MS 2", t.get("ms2_p", 0), "MS", t.get("odds_a"), bonus=0, min_guven=52)
 
     # Alt / Üst marketleri: market türüne özel bonus yok.
     add("2.5 Üst", t.get("ms25_p", 0), "Alt/Üst", None, bonus=0, min_guven=50)
@@ -3427,11 +3574,14 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                 guven = int(mk.get("guven", 0) or 0)
 
                 # Tek toleranstaki ham skor.
+                # Value/Edge yalnızca gerçek MS 1-X-2 oranı varsa en fazla ±4 puan etkiler.
+                value_bonus = value_skor_bonusu(mk.get("value_edge"))
                 tekil_skor = (
                     guven * 1.00
                     + playable * 0.22
                     + sample_bonus
                     + float(mk.get("bonus", 0) or 0)
+                    + value_bonus
                     + dusuk_tol_bonus
                     - tol_ceza
                     - risk_ceza
@@ -3452,6 +3602,10 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                 t_secili["top10_market_guven"] = guven
                 t_secili["top10_market_oran"] = mk.get("oran")
                 t_secili["top10_market_oran_tahmini"] = bool("+" in label and mk.get("oran") is not None)
+                t_secili["top10_value_edge"] = mk.get("value_edge")
+                t_secili["top10_value_ev"] = mk.get("value_ev")
+                t_secili["top10_value_fair_prob"] = mk.get("value_fair_prob")
+                t_secili["top10_value_label"] = mk.get("value_label", "N/A")
 
                 # Detay ekranı ve kartlar seçilen marketi ana tahmin gibi gösterebilsin.
                 t_secili["ana_label"] = label
@@ -3682,6 +3836,7 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             continue
 
         oran = market_label_to_odd(hedef, label)
+        value_m = value_edge_hesapla(hedef, label, t.get("ana_p", 0))
         kar = None
         if oran is not None:
             kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
@@ -3706,6 +3861,10 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Tuttu": bool(tuttu),
             "Oran": round(float(oran), 2) if oran is not None else None,
             "Kâr (100 TL)": kar,
+            "Piyasa Fair %": value_m.get("fair_prob"),
+            "Edge (puan)": value_m.get("edge"),
+            "Model EV %": value_m.get("ev"),
+            "Value Durumu": value_m.get("value_label", "N/A"),
             "Form": t.get("form_text", "—"),
             "Form Çarpanı": t.get("form_factor", 1.0),
             "Formsuz Tahmin": formsuz_label or "—",
@@ -5212,6 +5371,7 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
             Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
             Backtest yalnızca güveni %60'ın üstünde olan (%61+) tahminleri değerlendirir.
             Aynı maç ayrıca formsuz modelle de test edilerek form katkısı doğrudan karşılaştırılır; formsuz kıyas da %61+ eşiğini kullanır.
+            MS 1/X/2 seçimlerinde bookmaker marjı temizlenmiş piyasa olasılığına göre Value/Edge de ölçülür.
           </div>
           <div class="backtest-season-fix" style="font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
         </div>
@@ -5284,6 +5444,45 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
             )
         st.markdown("### Market özeti")
         st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
+
+        # Value/Edge testi yalnızca gerçek 1-X-2 oranı bulunan MS seçimlerinde yapılır.
+        value_bt = bt[bt["Edge (puan)"].notna()].copy() if "Edge (puan)" in bt.columns else pd.DataFrame()
+        if not value_bt.empty:
+            value_bt["Edge Grubu"] = value_bt["Edge (puan)"].apply(
+                lambda x: "✅ Pozitif edge" if float(x) > 0 else "❌ Sıfır / negatif edge"
+            )
+            value_ozet = (
+                value_bt.groupby("Edge Grubu", dropna=False)
+                .agg(
+                    Tahmin=("Tuttu", "size"),
+                    Kazanan=("Tuttu", "sum"),
+                    Ortalama_Güven=("Güven", "mean"),
+                    Ortalama_Edge=("Edge (puan)", "mean"),
+                    Net_Kar=("Kâr (100 TL)", "sum"),
+                )
+                .reset_index()
+            )
+            value_ozet["Başarı %"] = (value_ozet["Kazanan"] / value_ozet["Tahmin"] * 100).round(1)
+            value_ozet["ROI %"] = (value_ozet["Net_Kar"] / (value_ozet["Tahmin"] * 100) * 100).round(1)
+            value_ozet["Ortalama_Güven"] = value_ozet["Ortalama_Güven"].round(1)
+            value_ozet["Ortalama_Edge"] = value_ozet["Ortalama_Edge"].round(1)
+            value_ozet = value_ozet[
+                ["Edge Grubu", "Tahmin", "Kazanan", "Başarı %", "Ortalama_Güven", "Ortalama_Edge", "ROI %"]
+            ]
+
+            poz = value_bt[value_bt["Edge (puan)"] > 0]
+            neg = value_bt[value_bt["Edge (puan)"] <= 0]
+            poz_roi = float(poz["Kâr (100 TL)"].sum()) / (len(poz) * 100) * 100 if len(poz) else 0.0
+            neg_roi = float(neg["Kâr (100 TL)"].sum()) / (len(neg) * 100) * 100 if len(neg) else 0.0
+
+            st.markdown("### Value / Edge özeti")
+            vc1, vc2, vc3 = st.columns(3)
+            vc1.metric("Pozitif edge MS", len(poz))
+            vc2.metric("Pozitif edge ROI", f"%{poz_roi:.1f}")
+            vc3.metric("Edge ROI farkı", f"{poz_roi - neg_roi:+.1f} puan", help=f"Pozitif edge ROI %{poz_roi:.1f} · sıfır/negatif edge ROI %{neg_roi:.1f}")
+            st.dataframe(backtest_stili(value_ozet), use_container_width=True, hide_index=True)
+            st.caption("Edge = model olasılığı − bookmaker marjı temizlenmiş 1-X-2 piyasa olasılığı. Bu sürümde tahminleri elemez; ölçüm ve Top 50 sıralamasında hafif sinyal olarak kullanılır.")
+
         st.markdown("### Test edilen maçlar")
         bt_goster = bt.sort_values("Tarih", ascending=False).copy()
         for bool_col in ["Tuttu", "Formsuz Tuttu"]:
@@ -5889,7 +6088,7 @@ else:
             st.markdown(
                 """
                 <div style="font-size:0.86rem;color:#64748b;margin:0 0 12px 0;">
-                    Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00 / 0.02 / 0.04 / 0.06 / 0.08 / 0.10 ile denenir.
+                    Bu bölüm seçili hassasiyete bağlı değildir. Her maç 0.00–0.10 arasında 0.01 adımlarla denenir.
                     MS, Alt/Üst, KG, İlk Yarı ve Kombo adayları arasından en güçlü market seçilir.
                 </div>
                 """,
@@ -5926,6 +6125,16 @@ else:
                     hassasiyet_text = f"{en_iyi_tol:.2f}"
                 hassasiyet_sayisi = int(item.get("top10_hassasiyet_sayisi", t.get("top10_hassasiyet_sayisi", len(hassasiyetler))) or 0)
                 stabilite_skoru = item.get("top10_stabilite_skoru", t.get("top10_stabilite_skoru", top10_skor))
+                edge_val = t.get("top10_value_edge")
+                edge_ev = t.get("top10_value_ev")
+                edge_lbl = t.get("top10_value_label", "N/A")
+                if edge_val is not None:
+                    edge_html = (
+                        f' · Value: <b>{escape(str(edge_lbl))}</b> '
+                        f'(<b>{float(edge_val):+.1f}</b> puan edge, EV <b>{float(edge_ev):+.1f}%</b>)'
+                    )
+                else:
+                    edge_html = ""
 
                 kart_col, btn_col = st.columns([7, 1])
                 with kart_col:
@@ -5951,7 +6160,7 @@ else:
                             <div style="margin-top:7px;font-size:0.78rem;color:#9db2d1;">
                                 Çıktığı hassasiyetler: <b style="color:#facc15;">{escape(str(hassasiyet_text))}</b> ·
                                 Güven hassasiyet skoru: <b>{stabilite_skoru}</b> ·
-                                Stabilite: <b>{hassasiyet_sayisi}/11</b>
+                                Stabilite: <b>{hassasiyet_sayisi}/11</b>{edge_html}
                             </div>
                         </div>
                         """,
@@ -6035,6 +6244,16 @@ else:
             stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
+        if t.get("value_edge") is not None:
+            value_html = (
+                f'<div style="margin-top:6px;font-size:0.72rem;color:#2563eb">'
+                f'💎 {escape(str(t.get("value_label", "Value")))} · '
+                f'Edge <b>{float(t.get("value_edge")):+.1f}</b> puan · '
+                f'EV <b>{float(t.get("value_ev")):+.1f}%</b> · '
+                f'Piyasa <b>%{float(t.get("value_fair_prob")):.1f}</b></div>'
+            )
+        else:
+            value_html = ''
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
@@ -6082,6 +6301,7 @@ else:
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
+                {value_html}
                 {stability_html}
               </div>
             </div>
