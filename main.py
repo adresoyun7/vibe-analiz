@@ -2337,59 +2337,95 @@ def ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig=False):
 
 
 def takim_adi_norm(value):
-    metin = unicodedata.normalize("NFKD", str(value).casefold())
-    metin = "".join(ch for ch in metin if not unicodedata.combining(ch))
-    return re.sub(r"[^a-z0-9]", "", metin)
+    """Takım adını veri eşleştirmesi için kanonik hale getirir.
+    FC Basel == Basel, FC Sion == Sion gibi kulüp öneklerini yok sayar.
+    """
+    s = unicodedata.normalize("NFKD", str(value).casefold())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^a-z0-9]+", " ", s).strip()
+    tokens = [t for t in s.split() if t]
+
+    kulup_ekleri = {"fc", "cf", "afc", "sc", "ac", "fk"}
+    tokens = [t for t in tokens if t not in kulup_ekleri]
+
+    return "".join(tokens)
 
 
 def takim_adi_eslestir(takim, adaylar):
-    """Odds API takım adını geçmiş veri kaynağındaki takım adıyla eşleştirir."""
     hedef = takim_adi_norm(takim)
     if not hedef:
         return None
-    norm_map = {takim_adi_norm(x): x for x in adaylar if str(x).strip()}
+
+    norm_map = {}
+    for x in adaylar:
+        if not str(x).strip():
+            continue
+        n = takim_adi_norm(x)
+        if n and n not in norm_map:
+            norm_map[n] = x
+
     if hedef in norm_map:
         return norm_map[hedef]
+
     for norm, orijinal in norm_map.items():
         if min(len(hedef), len(norm)) >= 5 and (hedef in norm or norm in hedef):
             return orijinal
+
     en_iyi, en_skor = None, 0.0
     for norm, orijinal in norm_map.items():
         skor = SequenceMatcher(None, hedef, norm).ratio()
         if skor > en_skor:
             en_iyi, en_skor = orijinal, skor
-    return en_iyi if en_skor >= 0.72 else None
+    return en_iyi if en_skor >= 0.78 else None
+
+
+def _takim_maskesi(series, takim):
+    hedef = takim_adi_norm(takim)
+    if not hedef:
+        return pd.Series(False, index=series.index)
+    return series.astype(str).map(takim_adi_norm).eq(hedef)
 
 
 def takim_son_maclari(veri, eslesen_takim, mac_tarihi, limit=10):
     if veri is None or veri.empty or not eslesen_takim:
         return pd.DataFrame()
+
     tarih = pd.to_datetime(mac_tarihi, errors="coerce")
-    v = veri[(veri["HomeTeam"] == eslesen_takim) | (veri["AwayTeam"] == eslesen_takim)].copy()
+    ev_mask = _takim_maskesi(veri["HomeTeam"], eslesen_takim)
+    dep_mask = _takim_maskesi(veri["AwayTeam"], eslesen_takim)
+    v = veri[ev_mask | dep_mask].copy()
+
     if pd.notna(tarih):
         v = v[pd.to_datetime(v["Date"], errors="coerce") < tarih]
+
     return v.sort_values("Date", ascending=False).head(int(limit))
 
 
 def takimlar_arasi_maclar(veri, ev_takim, dep_takim, mac_tarihi, limit=10):
     if veri is None or veri.empty or not ev_takim or not dep_takim:
         return pd.DataFrame(), 0
-    maske = (
-        ((veri["HomeTeam"] == ev_takim) & (veri["AwayTeam"] == dep_takim))
-        | ((veri["HomeTeam"] == dep_takim) & (veri["AwayTeam"] == ev_takim))
-    )
+
+    ev_home = _takim_maskesi(veri["HomeTeam"], ev_takim)
+    ev_away = _takim_maskesi(veri["AwayTeam"], ev_takim)
+    dep_home = _takim_maskesi(veri["HomeTeam"], dep_takim)
+    dep_away = _takim_maskesi(veri["AwayTeam"], dep_takim)
+
+    maske = (ev_home & dep_away) | (dep_home & ev_away)
     v = veri[maske].copy()
+
     tarih = pd.to_datetime(mac_tarihi, errors="coerce")
     if pd.notna(tarih):
         v = v[pd.to_datetime(v["Date"], errors="coerce") < tarih]
+
     v = v.sort_values("Date", ascending=False)
     return v.head(int(limit)), len(v)
 
 
 def son5_tablo_hazirla(maclar, takim):
     satirlar = []
+    hedef_norm = takim_adi_norm(takim)
     for _, r in maclar.iterrows():
-        evde = str(r.get("HomeTeam")) == str(takim)
+        evde = takim_adi_norm(r.get("HomeTeam")) == hedef_norm
         ev_gol = int(float(r.get("FTHG", 0))) if pd.notna(r.get("FTHG")) else 0
         dep_gol = int(float(r.get("FTAG", 0))) if pd.notna(r.get("FTAG")) else 0
         gf, ga = ev_gol, dep_gol
@@ -2398,7 +2434,7 @@ def son5_tablo_hazirla(maclar, takim):
         sonuc = "🟢 G" if gf > ga else "🟡 B" if gf == ga else "🔴 M"
         satirlar.append({
             "Tarih": pd.to_datetime(r.get("Date"), errors="coerce").strftime("%d.%m.%Y"),
-            "Maç": f"{r.get('HomeTeam', '')} – {r.get('AwayTeam', '')}",
+            "Maç": f"{kart_takim_adi(r.get('HomeTeam', ''))} – {kart_takim_adi(r.get('AwayTeam', ''))}",
             "Skor": f"{ev_gol}-{dep_gol}",
             "Sonuç": sonuc,
         })
@@ -2409,9 +2445,9 @@ def takim_maclarini_sahaya_gore_filtrele(maclar, takim, secim):
     if maclar is None or maclar.empty or secim == "Tümü":
         return maclar
     if secim == "Sadece iç saha":
-        return maclar[maclar["HomeTeam"].astype(str) == str(takim)].copy()
+        return maclar[_takim_maskesi(maclar["HomeTeam"], takim)].copy()
     if secim == "Sadece deplasman":
-        return maclar[maclar["AwayTeam"].astype(str) == str(takim)].copy()
+        return maclar[_takim_maskesi(maclar["AwayTeam"], takim)].copy()
     return maclar
 
 
@@ -2420,9 +2456,9 @@ def h2h_tablo_hazirla(maclar):
         return pd.DataFrame()
     return pd.DataFrame({
         "Tarih": pd.to_datetime(maclar["Date"], errors="coerce").dt.strftime("%d.%m.%Y"),
-        "Ev sahibi": maclar["HomeTeam"].astype(str),
+        "Ev sahibi": maclar["HomeTeam"].astype(str).map(kart_takim_adi),
         "Skor": maclar["FTHG"].astype(int).astype(str) + "-" + maclar["FTAG"].astype(int).astype(str),
-        "Deplasman": maclar["AwayTeam"].astype(str),
+        "Deplasman": maclar["AwayTeam"].astype(str).map(kart_takim_adi),
     })
 
 
@@ -6064,7 +6100,7 @@ def detay_gecmis_sidebar():
 
     with ev_col:
         with st.container(border=True):
-            st.markdown(f"**🏠 {m.get('ev', 'Ev sahibi')} · Son 10**")
+            st.markdown(f"**🏠 {kart_takim_adi(m.get('ev', 'Ev sahibi'))} · Son 10**")
             ev_saha = st.selectbox(
                 "Saha filtresi", ["Tümü", "Sadece iç saha", "Sadece deplasman"],
                 key=f"ev_saha_filtre_{mac_kimligi}", label_visibility="collapsed",
@@ -6072,13 +6108,13 @@ def detay_gecmis_sidebar():
             ev_filtreli = takim_maclarini_sahaya_gore_filtrele(son_ev, eslesen_ev, ev_saha).head(10)
             ev_tablo = son5_tablo_hazirla(ev_filtreli, eslesen_ev)
             if ev_tablo.empty:
-                st.info("Bu filtrede maç bulunamadı.")
+                st.info(f"Bu filtrede maç bulunamadı. Eşleşen takım: {kart_takim_adi(eslesen_ev) if eslesen_ev else 'yok'}")
             else:
                 st.markdown(son_mac_kartlari_html(ev_tablo), unsafe_allow_html=True)
 
     with dep_col:
         with st.container(border=True):
-            st.markdown(f"**✈️ {m.get('dep', 'Deplasman')} · Son 10**")
+            st.markdown(f"**✈️ {kart_takim_adi(m.get('dep', 'Deplasman'))} · Son 10**")
             dep_saha = st.selectbox(
                 "Saha filtresi", ["Tümü", "Sadece iç saha", "Sadece deplasman"],
                 key=f"dep_saha_filtre_{mac_kimligi}", label_visibility="collapsed",
@@ -6086,7 +6122,7 @@ def detay_gecmis_sidebar():
             dep_filtreli = takim_maclarini_sahaya_gore_filtrele(son_dep, eslesen_dep, dep_saha).head(10)
             dep_tablo = son5_tablo_hazirla(dep_filtreli, eslesen_dep)
             if dep_tablo.empty:
-                st.info("Bu filtrede maç bulunamadı.")
+                st.info(f"Bu filtrede maç bulunamadı. Eşleşen takım: {kart_takim_adi(eslesen_dep) if eslesen_dep else 'yok'}")
             else:
                 st.markdown(son_mac_kartlari_html(dep_tablo), unsafe_allow_html=True)
 
