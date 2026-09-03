@@ -84,7 +84,7 @@ def api_key_panel():
         if get_app_api_key():
             st.success("API key aktif ✅")
         else:
-            st.warning("Maçları çekmek için API key girmen gerekiyor.")
+            st.warning("API key yok. Kayıtlı bülten varsa açılır; yeni veri çekmek için API key gerekir.")
 
 
 def require_api_key():
@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 49
+APP_SCHEMA_VERSION = 51
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1306,14 +1306,25 @@ def bulten_onbellegini_yaz(veri):
 
 
 def kayitli_bulteni_getir(kodlar, tarih):
-    kayit = bulten_onbellegini_oku().get(_bulten_cache_key(kodlar, tarih), {})
+    tum_kayitlar = bulten_onbellegini_oku()
+    kayit = tum_kayitlar.get(_bulten_cache_key(kodlar, tarih), {})
     satirlar = kayit.get("maclar", []) if isinstance(kayit, dict) else []
+    # Gizli pencere veya yeni oturumda lig seçimi birebir aynı olmayabilir.
+    # Tam anahtar bulunamazsa aynı tarihte daha önce çekilmiş bütün bültenleri birleştir.
+    if not satirlar:
+        tarih_on_eki = f"{tarih.isoformat()}|"
+        for anahtar, eski_kayit in tum_kayitlar.items():
+            if str(anahtar).startswith(tarih_on_eki) and isinstance(eski_kayit, dict):
+                satirlar.extend(eski_kayit.get("maclar", []) or [])
     if not satirlar:
         return pd.DataFrame()
     df = pd.DataFrame(satirlar)
     if "zaman" in df.columns:
         df["zaman"] = pd.to_datetime(df["zaman"], errors="coerce")
-    return df.dropna(subset=["zaman"]).sort_values("zaman").reset_index(drop=True)
+    df = df.dropna(subset=["zaman"])
+    if all(c in df.columns for c in ["ev", "dep", "zaman"]):
+        df = df.drop_duplicates(subset=["ev", "dep", "zaman"])
+    return df.sort_values("zaman").reset_index(drop=True)
 
 
 def bulten_onbellegi_var(kodlar, tarih):
@@ -1696,9 +1707,9 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
 def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
     """Hassasiyet uzlaşması bulunan analizlerden kupon taslağı üretir."""
     ayarlar = {
-        "Temkinli": {"min_guven": 62, "taban": 2, "maks": 4, "min_stabil": 4, "ek_stabil": 5, "min_oran": 1.0},
-        "Dengeli": {"min_guven": 60, "taban": 3, "maks": 6, "min_stabil": 3, "ek_stabil": 4, "min_oran": 1.0},
-        "Yüksek Oran": {"min_guven": 58, "taban": 3, "maks": 5, "min_stabil": 2, "ek_stabil": 3, "min_oran": 1.70},
+        "Temkinli": {"min_guven": 62, "taban": 2, "maks": 4, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
+        "Dengeli": {"min_guven": 60, "taban": 3, "maks": 6, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
+        "Yüksek Oran": {"min_guven": 58, "taban": 3, "maks": 5, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.70},
     }
     cfg = ayarlar.get(profil, ayarlar["Dengeli"])
     simdi = datetime.now()
@@ -2777,7 +2788,18 @@ def tahmin_sonuclarini_guncelle(api_key):
     return guncellenen, hata
 
 
-def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10, sadece_ayni_lig=False):
+def kupon_marketi_uygun(label):
+    """Kuponda yalnızca MS, 2.5 Alt/Üst, KG ve bunların kombinasyonlarına izin ver."""
+    parcalar = [x.strip() for x in str(label or "").split("+")]
+    izinli = {
+        "MS 1", "MS1", "Beraberlik", "MS X", "MSX", "MS 2", "MS2",
+        "2.5 Üst", "2.5 Alt", "KG Var", "KG Yok",
+    }
+    return bool(parcalar) and all(parca in izinli for parca in parcalar)
+
+
+def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
+                         sadece_ayni_lig=False, kupon_modu=False):
     """
     Top10 / Top50 özel liste üretici.
 
@@ -2832,6 +2854,8 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10, sadece_ayn
                 label = str(mk.get("label", "")).strip()
                 tip = str(mk.get("tip", "")).strip()
                 if not label:
+                    continue
+                if kupon_modu and not kupon_marketi_uygun(label):
                     continue
 
                 guven = int(mk.get("guven", 0) or 0)
@@ -2913,8 +2937,15 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10, sadece_ayn
                 + stabilite_bonus
             )
 
+            # Kupon modunda herhangi bir toleransta yüksek güven bulan marketi
+            # sırf diğer toleranslarda tekrarlanmadı diye kaybetme. Bu bonus
+            # 0.00 dahil taranan bütün hassasiyetlere eşit uygulanır.
+            tekil_yuksek_guven = kupon_modu and max_guven >= 70
+            if tekil_yuksek_guven:
+                stabilite_skoru += 30 + (max_guven - 70) * 3
+
             # Tek hassasiyette çıkan ama skoru çok yüksek olanları biraz törpüle.
-            if stabilite_sayisi == 1:
+            if stabilite_sayisi == 1 and not tekil_yuksek_guven:
                 stabilite_skoru -= 14
             elif stabilite_sayisi == 2:
                 stabilite_skoru -= 5
@@ -5283,7 +5314,9 @@ else:
         with bilgi_col:
             st.caption(
                 "Her maç 0.00, 0.02, 0.04, 0.06, 0.08 ve 0.10 hassasiyetlerinde taranır. "
-                "Farklı tahmin varsa en çok hassasiyette desteklenen, en kararlı market seçilir."
+                "Farklı tahmin varsa en iyi puanlanan market seçilir; 3/6 desteği zorunlu değildir. "
+                "Tek hassasiyetteki yüksek güven de aday olabilir. Yalnızca MS, 2.5 Alt/Üst, KG ve "
+                "bunların kombinasyonları kullanılır."
             )
         with olustur_col:
             gunun_kupon_btn = st.button(
@@ -5300,6 +5333,7 @@ else:
                 min_ornek=min_ornek,
                 limit=50,
                 sadece_ayni_lig=sadece_ayni_lig,
+                kupon_modu=True,
             )
             for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
                 otomatik_secimler = gunun_kuponunu_olustur(kupon_kaynagi, profil_adi)
