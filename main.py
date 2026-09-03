@@ -5822,61 +5822,88 @@ else:
                                 f'{escape(destek_yazi)} ({len(destekler)}/6)</div>'
                                 if destekler else ""
                             )
-                            # Aksiyonlar kartın üstünde; maç kartı profil sütununun tamamını kullanır.
-                            ust_bosluk, detay_col, ekle_col = st.columns([5.8, 2.7, 1.5], gap="small")
-                            with detay_col:
-                                if st.button(
-                                    "Detay",
-                                    key=f"auto_coupon_detail_{kayit.get('kupon_id')}_{secim_no}",
-                                    use_container_width=True,
-                                ):
-                                    detay_item = kupon_seciminden_detay_itemi(
-                                        secim, sadece_ayni_lig=sadece_ayni_lig
-                                    )
-                                    if detay_item is None:
-                                        st.warning("Bu kupon kaydı için detay verisi yeniden oluşturulamadı.")
-                                    else:
-                                        st.session_state.detay_item = detay_item
-                                        st.session_state.detay_idx = None
-                                        st.rerun()
-                            with ekle_col:
-                                if st.button(
-                                    "＋",
-                                    key=f"auto_to_manual_{kayit.get('kupon_id')}_{secim_no}",
-                                    use_container_width=True,
-                                    help="Kendi Kuponuma ekle",
-                                ):
-                                    secim_m = {
-                                        "ev": secim.get("ev", ""),
-                                        "dep": secim.get("dep", ""),
-                                        "lig": secim.get("lig", ""),
-                                        "sport_key": secim.get("sport_key", ""),
-                                        "h": secim.get("h"),
-                                        "b": secim.get("b"),
-                                        "a": secim.get("a"),
-                                        "zaman": parse_mac_datetime(secim.get("zaman_iso", "")),
-                                    }
-                                    manuel_kupona_ekle(
-                                        secim_m, {}, secim.get("tahmin", "-"), secim.get("guven", 0),
-                                        oran=secim.get("oran"),
-                                        oran_tahmini=bool(secim.get("oran_tahmini", False)),
-                                    )
-                                    st.rerun()
-
+                            # Maç bilgileri ve aksiyonlar aynı görsel kartın içinde.
+                            kart_key = f"auto_coupon_match_{abs(hash(str(kayit.get('kupon_id'))))}_{secim_no}"
                             st.markdown(
                                 f"""
-                                <div style="background:{arka};border:1px solid rgba(255,255,255,.16);
-                                            border-radius:11px;padding:12px 14px;min-height:76px;
-                                            width:100%;box-sizing:border-box;color:#f8fafc;margin:0 0 12px 0">
-                                  <b style="font-size:.94rem">{escape(str(secim.get('ev', '')))} – {escape(str(secim.get('dep', '')))}</b>
-                                  <div style="font-size:.80rem;color:#dbeafe;margin-top:5px">
-                                    {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
-                                  </div>
-                                  {hassasiyet_alt}
-                                </div>
+                                <style>
+                                .st-key-{kart_key} {{
+                                    background: {arka};
+                                    border: 1px solid rgba(255,255,255,.16);
+                                    border-radius: 12px;
+                                    padding: 10px 12px 9px 14px;
+                                    margin: 0 0 12px 0;
+                                }}
+                                .st-key-{kart_key} [data-testid="stHorizontalBlock"] {{
+                                    align-items: center;
+                                }}
+                                .st-key-{kart_key} .stButton > button {{
+                                    min-height: 42px;
+                                    margin: 0;
+                                }}
+                                </style>
                                 """,
                                 unsafe_allow_html=True,
                             )
+
+                            with st.container(key=kart_key, border=False):
+                                bilgi_col, detay_col, ekle_col = st.columns([6.4, 2.3, 1.3], gap="small")
+
+                                with bilgi_col:
+                                    st.markdown(
+                                        f"""
+                                        <div style="color:#f8fafc;padding:2px 0">
+                                          <b style="font-size:.94rem">
+                                            {escape(str(secim.get('ev', '')))} – {escape(str(secim.get('dep', '')))}
+                                          </b>
+                                          <div style="font-size:.80rem;color:#dbeafe;margin-top:5px">
+                                            {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
+                                          </div>
+                                          {hassasiyet_alt}
+                                        </div>
+                                        """,
+                                        unsafe_allow_html=True,
+                                    )
+
+                                with detay_col:
+                                    if st.button(
+                                        "Detay",
+                                        key=f"auto_coupon_detail_{kayit.get('kupon_id')}_{secim_no}",
+                                        use_container_width=True,
+                                    ):
+                                        detay_item = kupon_seciminden_detay_itemi(
+                                            secim, sadece_ayni_lig=sadece_ayni_lig
+                                        )
+                                        if detay_item is None:
+                                            st.warning("Bu kupon kaydı için detay verisi yeniden oluşturulamadı.")
+                                        else:
+                                            st.session_state.detay_item = detay_item
+                                            st.session_state.detay_idx = None
+                                            st.rerun()
+
+                                with ekle_col:
+                                    if st.button(
+                                        "＋",
+                                        key=f"auto_to_manual_{kayit.get('kupon_id')}_{secim_no}",
+                                        use_container_width=True,
+                                        help="Kendi Kuponuma ekle",
+                                    ):
+                                        secim_m = {
+                                            "ev": secim.get("ev", ""),
+                                            "dep": secim.get("dep", ""),
+                                            "lig": secim.get("lig", ""),
+                                            "sport_key": secim.get("sport_key", ""),
+                                            "h": secim.get("h"),
+                                            "b": secim.get("b"),
+                                            "a": secim.get("a"),
+                                            "zaman": parse_mac_datetime(secim.get("zaman_iso", "")),
+                                        }
+                                        manuel_kupona_ekle(
+                                            secim_m, {}, secim.get("tahmin", "-"), secim.get("guven", 0),
+                                            oran=secim.get("oran"),
+                                            oran_tahmini=bool(secim.get("oran_tahmini", False)),
+                                        )
+                                        st.rerun()
 
                         kart_col, sil_col = st.columns([8, 2])
                         with kart_col:
