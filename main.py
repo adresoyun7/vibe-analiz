@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 67
+APP_SCHEMA_VERSION = 68
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3037,6 +3037,92 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     }, b.sort_values("Date", ascending=False)
 
 
+def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False):
+    """0.00–0.10 sonuçlarını güven, örnek kalitesi ve kararlılıkla sıralar."""
+    market_alanlari = {
+        "MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
+        "2.5 Üst": "ms25_p", "2.5 Alt": "ms25a_p",
+        "KG Var": "kg_var_p", "KG Yok": "kg_yok_p",
+    }
+    marketler = {}
+    for tol in [round(i / 100, 2) for i in range(11)]:
+        tol_t, tol_b = hesapla(
+            b_df, m_row, tol, sadece_ayni_lig=sadece_ayni_lig,
+            form_aktif=False, kalibrasyon_aktif=False,
+        )
+        if tol_t is None:
+            continue
+        ornek = int(tol_t.get("ornek", len(tol_b)) or 0)
+        gerekli = max(int(min_ornek), int(tol_t.get("onerilen_min_mac", dinamik_min_mac(tol)) or 0))
+        if ornek < gerekli:
+            continue
+        for etiket, alan in market_alanlari.items():
+            guven = int(tol_t.get(alan, 0) or 0)
+            if guven > 60:
+                marketler.setdefault(etiket, []).append({
+                    "guven": guven, "ornek": ornek, "tol": tol,
+                    "t": tol_t, "b": tol_b,
+                })
+
+    sirali = []
+    for etiket, kayitlar in marketler.items():
+        if len(kayitlar) < 3:
+            continue
+        agirlik_toplami = sum(math.sqrt(max(1, x["ornek"])) for x in kayitlar)
+        ort_guven = sum(x["guven"] * math.sqrt(max(1, x["ornek"])) for x in kayitlar) / agirlik_toplami
+        ornekler = sorted(x["ornek"] for x in kayitlar)
+        orta = len(ornekler) // 2
+        medyan_ornek = ornekler[orta] if len(ornekler) % 2 else (ornekler[orta - 1] + ornekler[orta]) / 2
+        ornek_kalitesi = min(float(medyan_ornek) / 30.0, 1.0) * 100
+        kararlilik = len(kayitlar) / 11.0 * 100
+        birlesik_puan = ort_guven * 0.50 + ornek_kalitesi * 0.25 + kararlilik * 0.25
+        temsilci = max(kayitlar, key=lambda x: (x["guven"], x["ornek"], -x["tol"]))
+        sirali.append({
+            "label": etiket, "guven": int(round(ort_guven)),
+            "puan": round(birlesik_puan, 1), "ornek": int(round(medyan_ornek)),
+            "kararlilik": len(kayitlar),
+            "toleranslar": [f'{x["tol"]:.2f}' for x in kayitlar],
+            "temsilci": temsilci,
+        })
+
+    sirali.sort(key=lambda x: (x["puan"], x["guven"], x["ornek"], x["kararlilik"]), reverse=True)
+    if not sirali:
+        return None, pd.DataFrame()
+
+    ana, alt = sirali[0], (sirali[1] if len(sirali) > 1 else None)
+    t = dict(ana["temsilci"]["t"])
+    b = ana["temsilci"]["b"]
+    t.update({
+        "ana_label": ana["label"], "ana_p": ana["guven"],
+        "ana_odd": market_label_to_odd(m_row, ana["label"]),
+        "score": ana["puan"], "playable_score": ana["puan"],
+        "ornek": int(len(b)), "birlesik_ornek_medyan": ana["ornek"],
+        "kullanilan_tolerans": float(ana["temsilci"]["tol"]),
+        "stability_tols": ana["toleranslar"], "stability_count": ana["kararlilik"],
+        "stability_text": " · ".join(ana["toleranslar"]),
+        "birlesik_model": True, "birlesik_puan": ana["puan"],
+    })
+    t["stability_early_tols"] = [x for x in ana["toleranslar"] if float(x) <= 0.05]
+    t["stability_late_tols"] = [x for x in ana["toleranslar"] if float(x) > 0.05]
+    t["stability_early_text"] = " · ".join(t["stability_early_tols"])
+    t["stability_late_text"] = " · ".join(t["stability_late_tols"])
+    renk, badge_cls, badge_lbl = guven_renk(t["ana_p"])
+    t["guven_renk"], t["guven_badge_cls"], t["guven_badge_lbl"] = renk, badge_cls, badge_lbl
+    if alt:
+        t.update({
+            "alt_label": alt["label"], "alt_p": alt["guven"],
+            "alt_ornek": alt["ornek"], "alt_puan": alt["puan"],
+            "alt_kararlilik": alt["kararlilik"], "alt_hassasiyetler": alt["toleranslar"],
+            "alt_hassasiyet": float(alt["temsilci"]["tol"]),
+        })
+    else:
+        t.update({
+            "alt_label": "", "alt_p": 0, "alt_ornek": 0, "alt_puan": 0,
+            "alt_kararlilik": 0, "alt_hassasiyetler": [], "alt_hassasiyet": None,
+        })
+    return t, b.sort_values("Date", ascending=False)
+
+
 
 
 def kombo_tahmini_oran(label, ana_odd=None):
@@ -3241,11 +3327,17 @@ def tahmin_kaydi_mac_anahtari(kayit):
 
 
 def _tahmin_kaydi_sirasi(kayit):
-    """En yüksek güven, sonra örnek sayısı, sonra dar hassasiyet."""
+    """Birleşik puan, güven, örnek sayısı ve son olarak dar hassasiyet."""
     try:
         guven = float(kayit.get("guven", 0) or 0)
     except Exception:
         guven = 0.0
+    try:
+        puan = float(kayit.get("ana_puan", 0) or 0)
+    except Exception:
+        puan = 0.0
+    if puan <= 0:
+        puan = guven
     try:
         ornek = int(kayit.get("ornek", 0) or 0)
     except Exception:
@@ -3254,7 +3346,7 @@ def _tahmin_kaydi_sirasi(kayit):
         hassasiyet = float(kayit.get("hassasiyet", 99) if kayit.get("hassasiyet") is not None else 99)
     except Exception:
         hassasiyet = 99.0
-    return guven, ornek, -hassasiyet
+    return puan, guven, ornek, -hassasiyet
 
 
 def _en_iyi_alternatif(ana_label, kayitlar):
@@ -3361,7 +3453,15 @@ def analiz_tahminlerini_kaydet(final):
             "guven": int(t.get("ana_p", 0)),
             "alternatif_tahmin": str(t.get("alt_label", "") or ""),
             "alternatif_guven": int(t.get("alt_p", 0) or 0),
+            "alternatif_ornek": int(t.get("alt_ornek", 0) or 0),
+            "alternatif_puan": float(t.get("alt_puan", 0) or 0),
+            "alternatif_kararlilik": int(t.get("alt_kararlilik", 0) or 0),
+            "alternatif_hassasiyetler": list(t.get("alt_hassasiyetler", []) or []),
             "ornek": int(t.get("ornek", 0) or 0),
+            "ana_ornek_medyan": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
+            "ana_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
+            "ana_kararlilik": int(t.get("stability_count", 0) or 0),
+            "ana_hassasiyetler": list(t.get("stability_tols", []) or []),
             "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
             "oran": float(t.get("ana_odd")) if t.get("ana_odd") is not None else None,
             "alternatif_oran": (
@@ -3893,7 +3993,8 @@ def tahmin_tuttu_mu(label, row):
 
 
 def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
-                      sadece_ayni_lig=False, lig_kodlari=None, max_test=500):
+                      sadece_ayni_lig=False, lig_kodlari=None, max_test=500,
+                      birlesik_hassasiyet=False):
     """Her maçı yalnızca daha eski maçlarla analiz eden tarih sıralı backtest."""
     if gecmis_df is None or gecmis_df.empty:
         return pd.DataFrame()
@@ -3925,7 +4026,12 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         }
         # Aynı maç için hem güncel-formlu hem formsuz model çalıştırılır.
         # İkisi de yalnızca row["Date"] öncesindeki train verisini görür.
-        t, benzerler = hesapla(train, hedef, tolerans, form_aktif=False, kalibrasyon_aktif=False)
+        if birlesik_hassasiyet:
+            t, benzerler = hassasiyet_birlesik_hesapla(
+                train, hedef, min_ornek, sadece_ayni_lig=False
+            )
+        else:
+            t, benzerler = hesapla(train, hedef, tolerans, form_aktif=False, kalibrasyon_aktif=False)
         if t is None or len(benzerler) < int(min_ornek):
             continue
 
@@ -3957,8 +4063,16 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Maç": f"{row.get('HomeTeam', '')} - {row.get('AwayTeam', '')}",
             "Tahmin": label,
             "Güven": int(t.get("ana_p", 0)),
+            "Ana Puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
+            "Ana Medyan Örnek": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
+            "Ana Kararlılık": int(t.get("stability_count", 0) or 0),
+            "Ana Hassasiyetler": " · ".join(t.get("stability_tols", []) or []),
             "Alternatif Tahmin": alternatif_label if alternatif_guven > 60 else "",
             "Alt. Güven": alternatif_guven if alternatif_guven > 60 else None,
+            "Alt. Örnek": int(t.get("alt_ornek", 0) or 0) if alternatif_guven > 60 else None,
+            "Alt. Puan": float(t.get("alt_puan", 0) or 0) if alternatif_guven > 60 else None,
+            "Alt. Kararlılık": int(t.get("alt_kararlilik", 0) or 0) if alternatif_guven > 60 else None,
+            "Alt. Hassasiyetler": " · ".join(t.get("alt_hassasiyetler", []) or []) if alternatif_guven > 60 else "",
             "Alt. Tuttu": bool(alternatif_tuttu) if alternatif_tuttu is not None else None,
             "Örnek": int(t.get("ornek", 0)),
             "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
@@ -3993,8 +4107,6 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             lig_kodlari=lig_kodlari,
             max_test=max_test,
         )
-        if abs(float(tol) - float(secili_tolerans)) < 1e-9:
-            secili_df = bt.copy()
         if bt is None or bt.empty:
             satirlar.append({
                 "Hassasiyet": f"{tol:.2f}", "Tahmin": 0,
@@ -4012,12 +4124,14 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             "MS Tahmin": int(len(ms)),
             "MS ROI %": round(ms_roi, 1) if ms_roi is not None else None,
         })
-    if secili_df is None:
-        secili_df = backtest_calistir(
-            gecmis_df, test_sezonu, secili_tolerans, min_ornek,
-            sadece_ayni_lig=sadece_ayni_lig,
-            lig_kodlari=lig_kodlari, max_test=max_test,
-        )
+    # Ana backtest, canlı analizde kullanılan birleşik 0.00–0.10 modelidir.
+    # Üstteki 11 satır tekil hassasiyetleri yalnızca karşılaştırma için gösterir.
+    secili_df = backtest_calistir(
+        gecmis_df, test_sezonu, secili_tolerans, min_ornek,
+        sadece_ayni_lig=sadece_ayni_lig,
+        lig_kodlari=lig_kodlari, max_test=max_test,
+        birlesik_hassasiyet=True,
+    )
     return pd.DataFrame(satirlar), secili_df
 
 
@@ -5495,16 +5609,28 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 else "✅ Tuttu" if bool(x.get("alternatif_tuttu")) else "❌ Tutmadı",
                 axis=1,
             )
-            for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None)]:
+            for kolon, varsayilan in [
+                ("alternatif_tahmin", ""), ("alternatif_guven", None),
+                ("alternatif_ornek", None), ("alternatif_puan", None),
+                ("alternatif_kararlilik", None), ("alternatif_hassasiyetler", None),
+            ]:
                 if kolon not in liste.columns:
                     liste[kolon] = varsayilan
             liste["alternatif_tahmin"] = liste["alternatif_tahmin"].fillna("").replace("None", "")
+            liste["alternatif_hassasiyetler"] = liste["alternatif_hassasiyetler"].apply(
+                lambda x: " · ".join(map(str, x)) if isinstance(x, list) else ("" if pd.isna(x) else str(x))
+            )
             goster = liste[[
                 "Tarih", "lig", "Maç", "tahmin", "guven", "oran", "Sonuç", "Durum",
-                "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
+                "alternatif_tahmin", "alternatif_guven", "alternatif_ornek",
+                "alternatif_puan", "alternatif_kararlilik", "alternatif_hassasiyetler",
+                "Alternatif Durumu",
             ]].rename(columns={
                 "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %", "oran":"Oran",
                 "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
+                "alternatif_ornek":"Alt. Örnek", "alternatif_puan":"Alt. Puan",
+                "alternatif_kararlilik":"Alt. Kararlılık",
+                "alternatif_hassasiyetler":"Alt. Hassasiyetler",
             })
             st.markdown("#### Kaydedilen tahminler")
             st.dataframe(goster, use_container_width=True, hide_index=True)
@@ -5563,7 +5689,9 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
           <div class="backtest-desc-fix" style="font-size:.90rem;margin-top:7px;line-height:1.5;">
             Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
             Backtest yalnızca güveni %60'ın üstünde olan (%61+) tahminleri değerlendirir.
-            BACKTESTİ BAŞLAT 0.00–0.10 arasındaki 11 hassasiyeti test eder. Form ve Value/Edge kullanılmaz.
+            Ana sonuç 0.00–0.10 arasındaki yeterli örnekli marketleri güven %50, örnek kalitesi %25 ve
+            hassasiyet kararlılığı %25 ile birleştirir. 11 tekil hassasiyet ayrıca karşılaştırma için gösterilir.
+            Form ve Value/Edge kullanılmaz.
           </div>
           <div class="backtest-season-fix" style="font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
         </div>
@@ -5702,76 +5830,13 @@ if analiz_btn:
             st.session_state.last_bulten_df = bulten
 
         final = []
-        stability_tols = [round(i / 100, 2) for i in range(11)]
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
-                t, b_det = hesapla(gecmis, m, TOLERANS, sadece_ayni_lig=sadece_ayni_lig)
+                t, b_det = hassasiyet_birlesik_hesapla(
+                    gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
+                )
                 if t is None:
                     continue
-                if len(b_det) < min_ornek:
-                    continue
-
-                stable_hits = []
-                alternatif_havuzu = []
-                for etiket, guven in [
-                    (t.get("ana_label"), t.get("ana_p", 0)),
-                    (t.get("alt_label"), t.get("alt_p", 0)),
-                ]:
-                    if etiket and etiket not in ["Belirsiz Maç", "Tahmin Zayıf"] and int(guven or 0) > 60:
-                        alternatif_havuzu.append((int(guven), str(etiket), float(TOLERANS)))
-                for stab_tol in stability_tols:
-                    stab_t, stab_b = hesapla(gecmis, m, stab_tol, sadece_ayni_lig=sadece_ayni_lig)
-                    if stab_t is None:
-                        continue
-                    for etiket, guven in [
-                        (stab_t.get("ana_label"), stab_t.get("ana_p", 0)),
-                        (stab_t.get("alt_label"), stab_t.get("alt_p", 0)),
-                    ]:
-                        if etiket and etiket not in ["Belirsiz Maç", "Tahmin Zayıf"] and int(guven or 0) > 60:
-                            alternatif_havuzu.append((int(guven), str(etiket), float(stab_tol)))
-                    if (
-                        stab_t["ana_label"] == t["ana_label"]
-                        and stab_t["ana_label"] not in ["Belirsiz Maç", "Tahmin Zayıf"]
-                        and stab_t["ornek"] >= max(min_ornek, stab_t["onerilen_min_mac"])
-                    ):
-                        stable_hits.append(f"{stab_tol:.2f}")
-
-                # Seçili hassasiyetin ana tahmininden farklı olan en güçlü
-                # %60+ marketi, diğer hassasiyetlerde çıkmış olsa da koru.
-                farkli_adaylar = [x for x in alternatif_havuzu if x[1] != t.get("ana_label")]
-                if farkli_adaylar:
-                    alt_guven, alt_etiket, alt_tol = max(farkli_adaylar, key=lambda x: (x[0], -x[2]))
-                    t["alt_label"] = alt_etiket
-                    t["alt_p"] = alt_guven
-                    t["alt_hassasiyet"] = round(alt_tol, 2)
-                else:
-                    t["alt_label"] = ""
-                    t["alt_p"] = 0
-                    t["alt_hassasiyet"] = None
-
-                t["stability_tols"] = stable_hits
-                t["stability_count"] = len(stable_hits)
-                t["stability_text"] = " · ".join(stable_hits)
-                early_hits = [x for x in stable_hits if float(x) <= 0.05]
-                normal_hits = [x for x in stable_hits if float(x) > 0.05]
-                t["stability_early_tols"] = early_hits
-                t["stability_late_tols"] = normal_hits
-                t["stability_early_text"] = " · ".join(early_hits)
-                t["stability_late_text"] = " · ".join(normal_hits)
-
-                t["score"] = round(
-                    t["score"]
-                    + min(7, t["stability_count"] * 1.4)
-                    + min(4, len(early_hits) * 1.4)
-                    + (2 if f"{TOLERANS:.2f}" in stable_hits else 0),
-                    1
-                )
-                t["playable_score"] = round(
-                    t.get("playable_score", t.get("ana_p", 0))
-                    + min(5, t["stability_count"] * 1.0)
-                    + min(4, len(early_hits) * 1.2),
-                    1
-                )
 
                 if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
                     continue
