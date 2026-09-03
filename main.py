@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 56
+APP_SCHEMA_VERSION = 57
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1278,86 +1278,12 @@ def odds_lig_kodu_coz(key, kod):
     return None
 
 
-BULTEN_CACHE_PATH = Path(__file__).with_name("vibe_api_bulten_gecmisi.json")
-
-
-def _bulten_cache_key(kodlar, tarih):
-    return f"{tarih.isoformat()}|{'|'.join(sorted(str(x) for x in kodlar))}"
-
-
-def bulten_onbellegini_oku():
-    try:
-        if BULTEN_CACHE_PATH.exists():
-            veri = json.loads(BULTEN_CACHE_PATH.read_text(encoding="utf-8"))
-            return veri if isinstance(veri, dict) else {}
-    except Exception:
-        pass
-    return {}
-
-
-def bulten_onbellegini_yaz(veri):
-    try:
-        gecici = BULTEN_CACHE_PATH.with_suffix(".tmp")
-        gecici.write_text(json.dumps(veri, ensure_ascii=False, indent=2), encoding="utf-8")
-        gecici.replace(BULTEN_CACHE_PATH)
-        return True
-    except Exception:
-        return False
-
-
-def kayitli_bulteni_getir(kodlar, tarih):
-    tum_kayitlar = bulten_onbellegini_oku()
-    kayit = tum_kayitlar.get(_bulten_cache_key(kodlar, tarih), {})
-    satirlar = kayit.get("maclar", []) if isinstance(kayit, dict) else []
-    # Gizli pencere veya yeni oturumda lig seçimi birebir aynı olmayabilir.
-    # Tam anahtar bulunamazsa aynı tarihte daha önce çekilmiş bütün bültenleri birleştir.
-    if not satirlar:
-        tarih_on_eki = f"{tarih.isoformat()}|"
-        for anahtar, eski_kayit in tum_kayitlar.items():
-            if str(anahtar).startswith(tarih_on_eki) and isinstance(eski_kayit, dict):
-                satirlar.extend(eski_kayit.get("maclar", []) or [])
-    if not satirlar:
-        return pd.DataFrame()
-    df = pd.DataFrame(satirlar)
-    if "zaman" in df.columns:
-        df["zaman"] = pd.to_datetime(df["zaman"], errors="coerce")
-    df = df.dropna(subset=["zaman"])
-    if all(c in df.columns for c in ["ev", "dep", "zaman"]):
-        df = df.drop_duplicates(subset=["ev", "dep", "zaman"])
-    return df.sort_values("zaman").reset_index(drop=True)
-
-
-def bulten_onbellegi_var(kodlar, tarih):
-    return not kayitli_bulteni_getir(kodlar, tarih).empty
-
-
-def bulteni_kaydet(df, kodlar, tarih):
-    if df is None or df.empty:
-        return False
-    veri = bulten_onbellegini_oku()
-    saklanacak = df.copy()
-    saklanacak["zaman"] = pd.to_datetime(saklanacak["zaman"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
-    veri[_bulten_cache_key(kodlar, tarih)] = {
-        "guncellendi": datetime.now().isoformat(timespec="seconds"),
-        "maclar": saklanacak.to_dict(orient="records"),
-    }
-    # Dosyanın sınırsız büyümemesi için son 120 sorguyu tut.
-    if len(veri) > 120:
-        veri = dict(sorted(veri.items(), key=lambda x: x[1].get("guncellendi", ""), reverse=True)[:120])
-    return bulten_onbellegini_yaz(veri)
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
 def bulten_cek(key, kodlar, t):
     secret_key = get_app_api_key()
     if secret_key:
         key = secret_key
     if not key:
-        kayitli = kayitli_bulteni_getir(kodlar, t)
-        if not kayitli.empty:
-            st.info("API key girilmedi; daha önce kaydedilen bülten gösteriliyor.")
-            return kayitli
-        st.error("Bu tarih ve ligler için kayıtlı bülten yok. İlk sorgu için ODDS API key gerekli.")
+        st.error("Maç bültenini çekmek için ODDS API key gerekli.")
         return pd.DataFrame()
     res = []
 
@@ -1442,15 +1368,10 @@ def bulten_cek(key, kodlar, t):
             continue
 
     if not res:
-        kayitli = kayitli_bulteni_getir(kodlar, t)
-        if not kayitli.empty:
-            st.warning("API sorgusu sonuç vermedi; son kayıtlı bülten kullanılıyor.")
-            return kayitli
         return pd.DataFrame()
 
     df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
     df = df.sort_values("zaman").reset_index(drop=True)
-    bulteni_kaydet(df, kodlar, t)
     return df
 
 
@@ -1888,6 +1809,34 @@ def kupon_gecmisine_ekle(secimler, profil, hassasiyet):
     kayitlar.insert(0, kayit)
     kupon_gecmisini_yaz(kayitlar[:200])
     return kayit
+
+
+def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
+    """Kullanıcının seçtiği ana veya kombo tercihi Kendi Kuponum'a ekler."""
+    coupon_item = {
+        "ev": m.get("ev", ""),
+        "dep": m.get("dep", ""),
+        "lig": m.get("lig", ""),
+        "zaman_iso": m["zaman"].strftime("%Y-%m-%d %H:%M:%S") if hasattr(m.get("zaman"), "strftime") else str(m.get("zaman", "")),
+        "zaman_text": m["zaman"].strftime("%d.%m %H:%M") if hasattr(m.get("zaman"), "strftime") else "-",
+        "tahmin": str(tahmin),
+        "guven": int(guven or 0),
+        "oran": oran,
+        "oran_tahmini": bool(oran_tahmini),
+        "profil": "Kendi Kuponum",
+        "otomatik": False,
+    }
+    mevcutlar = {
+        (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
+        for x in st.session_state.kupona if isinstance(x, dict)
+    }
+    imza = (coupon_item["ev"], coupon_item["dep"], coupon_item["tahmin"])
+    if imza in mevcutlar:
+        return False
+    st.session_state.kupona.append(coupon_item)
+    st.session_state.coupon_popup_open = True
+    st.session_state.scroll_to_coupon = True
+    return True
 
 
 
@@ -4276,8 +4225,8 @@ elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
 
 
 if gecmis_btn:
-    if not secili_kodlar or (not API_KEY and not bulten_onbellegi_var(secili_kodlar, secili_tarih)):
-        st.error("⚠️ En az bir lig seçin. Kayıtlı bülten yoksa ilk sorgu için API Key de gereklidir.")
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
         with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
             gi_gecmis = futbol_veri_motoru(tuple(yillar))
@@ -4356,8 +4305,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
 
 
 if yuksek_oran_btn:
-    if not secili_kodlar or (not API_KEY and not bulten_onbellegi_var(secili_kodlar, secili_tarih)):
-        st.error("⚠️ En az bir lig seçin. Kayıtlı bülten yoksa ilk sorgu için API Key de gereklidir.")
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
     elif not (yuksek_filtre_12 or yuksek_filtre_21 or yuksek_filtre_cift_yari_kg):
         st.error("⚠️ En az bir yüksek oran marketi seçin.")
     else:
@@ -4817,8 +4766,8 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
 
 
 if analiz_btn:
-    if not secili_kodlar or (not API_KEY and not bulten_onbellegi_var(secili_kodlar, secili_tarih)):
-        st.error("⚠️ En az bir lig seçin. Kayıtlı bülten yoksa ilk sorgu için API Key de gereklidir.")
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
         with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
@@ -5526,34 +5475,32 @@ else:
                 st.session_state.detay_idx = real_i
                 st.session_state.detay_item = None
                 st.rerun()
-            if st.button("+ Kupona", key=f"k_{real_i}_{i}", use_container_width=True):
-                coupon_item = {
-                    "ev": m["ev"],
-                    "dep": m["dep"],
-                    "lig": m["lig"],
-                    "zaman_iso": m["zaman"].strftime("%Y-%m-%d %H:%M:%S"),
-                    "zaman_text": m["zaman"].strftime("%d.%m %H:%M"),
-                    "tahmin": t["ana_label"],
-                    "guven": int(t["ana_p"]),
-                }
-                mevcutlar = set()
-                for x in st.session_state.kupona:
-                    if isinstance(x, dict):
-                        mevcutlar.add((x.get("ev", ""), x.get("dep", ""), x.get("tahmin", "")))
-                    else:
-                        raw_text = str(x)
-                        ev, dep, tahmin = raw_text, "", ""
-                        if " — " in raw_text:
-                            match_text, tahmin = raw_text.split(" — ", 1)
-                            if " vs " in match_text:
-                                ev, dep = [p.strip() for p in match_text.split(" vs ", 1)]
-                            else:
-                                ev = match_text.strip()
-                        mevcutlar.add((ev, dep, tahmin.strip()))
-                if (coupon_item["ev"], coupon_item["dep"], coupon_item["tahmin"]) not in mevcutlar:
-                    st.session_state.kupona.append(coupon_item)
-                    st.session_state.coupon_popup_open = True
-                st.rerun()
+            with st.popover("+ Kupona", use_container_width=True):
+                st.caption("Kupona eklenecek tercihi seç")
+                if st.button(
+                    f"Ana tercih · {t.get('ana_label', '-')}",
+                    key=f"k_ana_{real_i}_{i}",
+                    use_container_width=True,
+                ):
+                    manuel_kupona_ekle(
+                        m, t, t.get("ana_label", "-"), t.get("ana_p", 0),
+                        oran=t.get("ana_odd"), oran_tahmini=False,
+                    )
+                    st.rerun()
+                combo_uygun = bool(t.get("combo_var") and t.get("combo_label"))
+                combo_label = str(t.get("combo_label", "Kombo bulunamadı"))
+                if st.button(
+                    f"Kombo · {combo_label}",
+                    key=f"k_kombo_{real_i}_{i}",
+                    use_container_width=True,
+                    disabled=not combo_uygun,
+                ):
+                    combo_oran = kombo_tahmini_oran(combo_label, t.get("ana_odd"))
+                    manuel_kupona_ekle(
+                        m, t, combo_label, t.get("combo_p", 0),
+                        oran=combo_oran, oran_tahmini=True,
+                    )
+                    st.rerun()
 
     kupon_mesaji = None
     with st.expander("🎫 Günün Kuponunu Oluştur", expanded=False):
@@ -5665,7 +5612,7 @@ else:
         )
 
         kupon_gecmisi = kupon_gecmisini_oku()
-        if kupon_gecmisi:
+        if kupon_gecmisi or st.session_state.kupona:
             st.markdown(
                 """
                 <div style="color:#f8fafc;-webkit-text-fill-color:#f8fafc;font-size:1.18rem;
@@ -5680,8 +5627,8 @@ else:
                 "Dengeli": ("#12345b", "#60a5fa", "🔵"),
                 "Yüksek Oran": ("#4a2b12", "#f59e0b", "🟠"),
             }
-            profil_sutunlari = st.columns(3, gap="small")
-            for profil_col, profil_adi in zip(profil_sutunlari, ["Temkinli", "Dengeli", "Yüksek Oran"]):
+            profil_sutunlari = st.columns(4, gap="small")
+            for profil_col, profil_adi in zip(profil_sutunlari[:3], ["Temkinli", "Dengeli", "Yüksek Oran"]):
                 with profil_col:
                     arka, vurgu, ikon = profil_renkleri[profil_adi]
                     st.markdown(
@@ -5748,61 +5695,56 @@ else:
                                 kupon_gecmisini_yaz(yeni_gecmis)
                                 st.rerun()
 
-        if not st.session_state.kupona and not kupon_gecmisi:
-            st.info("Henüz kupon kaydı yok. Maç kartlarından seçim ekleyebilir veya Günün Kuponunu Oluştur bölümünü kullanabilirsin.")
-
-        if st.session_state.kupona:
-            st.markdown("#### Manuel eklenen seçimler")
-
-        for del_i, item in enumerate(list(st.session_state.kupona)):
-            mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
-            durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
-            mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
-            oran_degeri = item.get("oran")
-            oran_metni = ""
-            if oran_degeri is not None:
-                oran_metni = f" | Oran {fmt_odd(oran_degeri)}"
-                if item.get("oran_tahmini"):
-                    oran_metni += " (tahmini)"
-            profil_metni = f" | {item.get('profil')}" if item.get("otomatik") and item.get("profil") else ""
-            alt_satir = (
-                f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
-                f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}{oran_metni}{profil_metni}"
-                if item.get("guven", 0)
-                else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}{oran_metni}{profil_metni}"
-            )
-            c1, c2 = st.columns([8, 1])
-            with c1:
+            with profil_sutunlari[3]:
                 st.markdown(
-                    f"""
-                    <div class="coupon-panel-dark-item">
-                      <b>{escape(mac_ad)}</b>
-                      <div class="line">{escape(alt_satir)}</div>
-                      <div class="line"><code>{escape(durum)}</code></div>
+                    """
+                    <div style="background:#312e81;border:1px solid #a78bfa;border-radius:12px;
+                                padding:10px 12px;margin-bottom:10px;text-align:center;
+                                color:#f8fafc;-webkit-text-fill-color:#f8fafc;font-size:1rem;
+                                font-weight:900;opacity:1">
+                        🟣 Kendi Kuponum
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
-            with c2:
-                if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
-                    st.session_state.kupona.pop(del_i)
-                    if not st.session_state.kupona and not kupon_gecmisini_oku():
-                        st.session_state.coupon_popup_open = False
-                    st.rerun()
-
-        if st.session_state.kupona:
-            b1, b2 = st.columns([1, 1])
-            with b1:
-                if st.button("Manuel seçimleri temizle", key="coupon_clear_inside_panel", use_container_width=True):
+                if not st.session_state.kupona:
+                    st.info("Henüz manuel seçim eklenmedi.")
+                for del_i, item in enumerate(list(st.session_state.kupona)):
+                    mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
+                    durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
+                    mac_ad = f"{item.get('ev', '')} – {item.get('dep', '')}".strip(" –")
+                    oran_txt = fmt_odd(item.get("oran")) if item.get("oran") is not None else "—"
+                    tahmini_txt = " · tahmini oran" if item.get("oran_tahmini") else ""
+                    kart_col, sil_col = st.columns([8, 2])
+                    with kart_col:
+                        st.markdown(
+                            f"""
+                            <div style="background:#1e1b4b;border:1px solid #7c3aed;border-radius:13px;
+                                        padding:11px 12px;margin-bottom:8px;color:#f8fafc">
+                              <b style="color:#c4b5fd">{escape(mac_ad)}</b>
+                              <div style="font-size:.79rem;color:#e2e8f0;margin-top:5px">
+                                {escape(str(item.get('tahmin','-')))} · Güven %{int(item.get('guven',0))}<br>
+                                Oran {escape(str(oran_txt))}{tahmini_txt} · {escape(durum)}
+                              </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    with sil_col:
+                        if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
+                            st.session_state.kupona.pop(del_i)
+                            st.rerun()
+                if st.session_state.kupona and st.button(
+                    "Kendi kuponumu temizle", key="coupon_clear_inside_panel", use_container_width=True
+                ):
                     st.session_state.kupona = []
                     st.rerun()
-            with b2:
-                if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
-                    st.session_state.coupon_popup_open = False
-                    st.rerun()
-        else:
-            if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
-                st.session_state.coupon_popup_open = False
-                st.rerun()
+
+        if not st.session_state.kupona and not kupon_gecmisi:
+            st.info("Henüz kupon kaydı yok. Maç kartlarından seçim ekleyebilir veya Günün Kuponunu Oluştur bölümünü kullanabilirsin.")
+
+        if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
+            st.session_state.coupon_popup_open = False
+            st.rerun()
 
 legal_footer()
