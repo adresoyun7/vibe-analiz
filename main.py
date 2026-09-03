@@ -2619,7 +2619,7 @@ def form_ozet_yazi(profil):
         f"({dep['gf']:.1f}/{dep['ga']:.1f} gol)"
     )
 
-def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True, kalibrasyon_aktif=True, form_profili_override=None):
+def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=True, form_profili_override=None):
     # Form, oran eşleşmesi yapılmadan önceki tarihsel takım maçlarından hesaplanır.
     form_kaynagi = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
     b_df = form_kaynagi
@@ -3960,8 +3960,8 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         }
         # Aynı maç için hem güncel-formlu hem formsuz model çalıştırılır.
         # İkisi de yalnızca row["Date"] öncesindeki train verisini görür.
-        t, benzerler = hesapla(train, hedef, tolerans, form_aktif=True, kalibrasyon_aktif=False)
-        t_formsuz, _ = hesapla(train, hedef, tolerans, form_aktif=False, kalibrasyon_aktif=False)
+        t, benzerler = hesapla(train, hedef, tolerans, form_aktif=False, kalibrasyon_aktif=False)
+        t_formsuz, _ = hesapla(train, hedef, tolerans, form_aktif=True, kalibrasyon_aktif=False)
         if t is None or len(benzerler) < int(min_ornek):
             continue
 
@@ -4164,8 +4164,8 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
         if bt.empty:
             satirlar.append({
                 "Hassasiyet": f"{tol:.2f}", "Tahmin": 0,
-                "Formlu Başarı %": None, "Formsuz Başarı %": None,
-                "Form Katkısı": None, "MS Tahmin": 0, "MS ROI %": None,
+                "Formsuz Başarı %": None, "Formlu Başarı %": None,
+                "Form Etkisi": None, "MS Tahmin": 0, "MS ROI %": None,
                 "Pozitif Edge MS": 0, "Pozitif Edge ROI %": None,
             })
             continue
@@ -4185,9 +4185,9 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
         satirlar.append({
             "Hassasiyet": f"{tol:.2f}",
             "Tahmin": int(toplam),
-            "Formlu Başarı %": round(basari, 1),
-            "Formsuz Başarı %": round(fz_basari, 1) if fz_basari is not None else None,
-            "Form Katkısı": round(katk, 1) if katk is not None else None,
+            "Formsuz Başarı %": round(basari, 1),
+            "Formlu Başarı %": round(fz_basari, 1) if fz_basari is not None else None,
+            "Form Etkisi": round(-katk, 1) if katk is not None else None,
             "MS Tahmin": int(len(ms)),
             "MS ROI %": round(ms_roi, 1) if ms_roi is not None else None,
             "Pozitif Edge MS": int(len(poz)),
@@ -5751,9 +5751,9 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Toplam tahmin", toplam)
-        c2.metric("Formlu başarı", f"%{basari:.1f}")
-        c3.metric("Formsuz başarı", f"%{formsuz_basari:.1f}")
-        c4.metric("Form katkısı", f"{basari_farki:+.1f} puan")
+        c2.metric("Formsuz başarı", f"%{basari:.1f}")
+        c3.metric("Formlu başarı", f"%{formsuz_basari:.1f}")
+        c4.metric("Form etkisi", f"{-basari_farki:+.1f} puan", help="Formlu başarı − formsuz başarı")
         c5.metric("MS ROI", f"%{roi:.1f}", delta=f"{roi - formsuz_roi:+.1f} puan vs formsuz",
                   help=f"Formlu MS ROI %{roi:.1f} · Formsuz MS ROI %{formsuz_roi:.1f}. Yalnızca B365 1/X/2 oranı bulunan seçimler.")
 
@@ -5775,6 +5775,7 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         bt11 = st.session_state.get("backtest_11_df")
         if bt11 is not None and not bt11.empty:
             st.markdown("### 11 Hassasiyet Otomatik Backtest")
+            st.info("🎯 Ana model şu an formsuz çalışır. 0.03 hassasiyet referans adayımızdır; 11'li backtest sonuçlarıyla izlenmeye devam eder.")
             st.caption(
                 "Aynı sezon ve aynı filtreler 0.00–0.10 arasında 0.01 adımlarla test edilir. "
                 "Tahmin sayısını da dikkate al; yalnızca en yüksek başarı yüzdesine bakarak hassasiyet seçme."
@@ -5785,11 +5786,11 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
             # En iyi satırları sadece bilgi amaçlı göster; otomatik seçim yapılmaz.
             gec = bt11_goster[bt11_goster["Tahmin"] > 0].copy()
             if not gec.empty:
-                en_basari = gec.loc[gec["Formlu Başarı %"].astype(float).idxmax()]
+                en_basari = gec.loc[gec["Formsuz Başarı %"].astype(float).idxmax()]
                 roi_gec = gec[gec["MS ROI %"].notna()].copy()
                 ic1, ic2, ic3 = st.columns(3)
                 ic1.metric("En yüksek başarı hass.", str(en_basari["Hassasiyet"]))
-                ic2.metric("En yüksek başarı", f"%{float(en_basari['Formlu Başarı %']):.1f}")
+                ic2.metric("En yüksek başarı", f"%{float(en_basari['Formsuz Başarı %']):.1f}")
                 if not roi_gec.empty:
                     en_roi = roi_gec.loc[roi_gec["MS ROI %"].astype(float).idxmax()]
                     ic3.metric("En yüksek MS ROI hass.", f"{en_roi['Hassasiyet']} · %{float(en_roi['MS ROI %']):.1f}")
@@ -5830,6 +5831,23 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
             neg_roi = float(neg["Kâr (100 TL)"].sum()) / (len(neg) * 100) * 100 if len(neg) else 0.0
 
             st.markdown("### Kalibre Value / Edge özeti")
+            edge_bantlari = []
+            if not value_bt.empty:
+                for esik in [0, 2, 5, 10]:
+                    g = value_bt[value_bt["Edge (puan)"] > esik].copy()
+                    if len(g):
+                        roi_g = float(g["Kâr (100 TL)"].sum()) / (len(g) * 100) * 100
+                        bas_g = float(g["Tuttu"].astype(bool).mean() * 100)
+                        edge_bantlari.append({
+                            "Minimum Edge": f">{esik} puan",
+                            "Tahmin": len(g),
+                            "Başarı %": round(bas_g, 1),
+                            "ROI %": round(roi_g, 1),
+                            "Ort. Edge": round(float(g["Edge (puan)"].mean()), 1),
+                        })
+                if edge_bantlari:
+                    st.caption("0.03 dahil seçili hassasiyette hangi minimum kalibre-edge eşiğinin gerçekten işe yaradığını burada karşılaştır.")
+                    st.dataframe(backtest_stili(pd.DataFrame(edge_bantlari)), use_container_width=True, hide_index=True)
             vc1, vc2, vc3 = st.columns(3)
             vc1.metric("Pozitif edge MS", len(poz))
             vc2.metric("Pozitif edge ROI", f"%{poz_roi:.1f}")
