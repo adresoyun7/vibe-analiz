@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 63
+APP_SCHEMA_VERSION = 67
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2698,21 +2698,9 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     alt_label = alt["label"]
     alt_p = int(round(alt_conf * 100))
 
-    def alt_destekli_mi(ana, alt_lbl):
-        if not alt_lbl:
-            return False
-        destek = {
-            "2.5 Üst": {"KG Var"},
-            "2.5 Alt": {"KG Yok"},
-            "KG Var": {"2.5 Üst"},
-            "KG Yok": {"2.5 Alt"},
-            "MS 1": {"2.5 Üst", "KG Var", "2.5 Alt", "KG Yok"},
-            "MS 2": {"2.5 Üst", "KG Var", "2.5 Alt", "KG Yok"},
-            "Beraberlik": {"KG Var", "2.5 Alt"},
-        }
-        return alt_lbl in destek.get(ana, set())
-
-    if not alt_destekli_mi(ana_label, alt_label):
+    # İkinci en güçlü market yalnızca güveni %60'ın ÜSTÜNDEYSE alternatiftir.
+    # Ana ve alternatif aynı maç kaydında tutulur; iki ayrı tahmin satırı oluşturulmaz.
+    if alt_p <= 60:
         alt_label = ""
         alt_p = 0
 
@@ -3236,11 +3224,103 @@ def mac_key(m):
 TAHMIN_LOG_PATH = Path(__file__).with_name("vibe_tahmin_sonuclari.json")
 
 
+def tahmin_kaydi_mac_anahtari(kayit):
+    """Marketten bağımsız tek maç anahtarı üretir."""
+    match_id = str(kayit.get("match_id", "") or "").strip()
+    if match_id:
+        return match_id
+    kayit_id = str(kayit.get("kayit_id", "") or "").strip()
+    if kayit_id:
+        return kayit_id
+    zaman = str(kayit.get("zaman", ""))[:16]
+    return "|".join([
+        takim_adi_norm(kayit.get("ev", "")),
+        takim_adi_norm(kayit.get("dep", "")),
+        zaman,
+    ])
+
+
+def _tahmin_kaydi_sirasi(kayit):
+    """En yüksek güven, sonra örnek sayısı, sonra dar hassasiyet."""
+    try:
+        guven = float(kayit.get("guven", 0) or 0)
+    except Exception:
+        guven = 0.0
+    try:
+        ornek = int(kayit.get("ornek", 0) or 0)
+    except Exception:
+        ornek = 0
+    try:
+        hassasiyet = float(kayit.get("hassasiyet", 99) if kayit.get("hassasiyet") is not None else 99)
+    except Exception:
+        hassasiyet = 99.0
+    return guven, ornek, -hassasiyet
+
+
+def _en_iyi_alternatif(ana_label, kayitlar):
+    """Aynı maçın tüm kayıtlarından ana marketten farklı en güçlü %60+ seçimi bulur."""
+    adaylar = []
+    for kayit in kayitlar or []:
+        for etiket_alani, guven_alani, oran_alani in [
+            ("tahmin", "guven", "oran"),
+            ("alternatif_tahmin", "alternatif_guven", "alternatif_oran"),
+        ]:
+            etiket = str(kayit.get(etiket_alani, "") or "").strip()
+            try:
+                guven = float(kayit.get(guven_alani, 0) or 0)
+            except Exception:
+                guven = 0.0
+            if not etiket or etiket == str(ana_label) or guven <= 60:
+                continue
+            adaylar.append((guven, etiket, kayit.get(oran_alani)))
+    if not adaylar:
+        return "", 0, None
+    guven, etiket, oran = max(adaylar, key=lambda x: x[0])
+    return etiket, int(round(guven)), oran
+
+
+def tahmin_kayitlarini_tekillestir(kayitlar):
+    """Eski/yeni kayıtlarda aynı maçtan yalnızca en güçlü resmî tahmini tutar."""
+    gruplar = {}
+    for kayit in kayitlar or []:
+        if not isinstance(kayit, dict):
+            continue
+        anahtar = tahmin_kaydi_mac_anahtari(kayit)
+        if not anahtar:
+            continue
+        gruplar.setdefault(anahtar, []).append(kayit)
+
+    sonuc = []
+    for anahtar, grup in gruplar.items():
+        secilen = dict(max(grup, key=_tahmin_kaydi_sirasi))
+        alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(secilen.get("tahmin"), grup)
+        secilen["alternatif_tahmin"] = alt_etiket
+        secilen["alternatif_guven"] = alt_guven
+        secilen["alternatif_oran"] = alt_oran
+        # Aynı maçın eski satırlarından biri tamamlandıysa skoru resmî tahmine taşı.
+        tamamlanan = next((x for x in grup if x.get("durum") == "Tamamlandı" and x.get("ev_gol") is not None and x.get("dep_gol") is not None), None)
+        if tamamlanan:
+            ev_gol, dep_gol = int(tamamlanan["ev_gol"]), int(tamamlanan["dep_gol"])
+            tuttu = skor_tahmini_tuttu_mu(secilen.get("tahmin"), ev_gol, dep_gol)
+            alternatif_tuttu = skor_tahmini_tuttu_mu(
+                secilen.get("alternatif_tahmin"), ev_gol, dep_gol
+            )
+            secilen.update({
+                "durum": "Tamamlandı", "ev_gol": ev_gol, "dep_gol": dep_gol,
+                "tuttu": bool(tuttu) if tuttu is not None else None,
+                "alternatif_tuttu": bool(alternatif_tuttu) if alternatif_tuttu is not None else None,
+                "sonuc_guncelleme": tamamlanan.get("sonuc_guncelleme"),
+            })
+        secilen["kayit_id"] = anahtar
+        sonuc.append(secilen)
+    return sonuc
+
+
 def tahmin_logunu_oku():
     try:
         if TAHMIN_LOG_PATH.exists():
             veri = json.loads(TAHMIN_LOG_PATH.read_text(encoding="utf-8"))
-            return veri if isinstance(veri, list) else []
+            return tahmin_kayitlarini_tekillestir(veri) if isinstance(veri, list) else []
     except Exception:
         pass
     return []
@@ -3257,9 +3337,9 @@ def tahmin_logunu_yaz(kayitlar):
 
 
 def analiz_tahminlerini_kaydet(final):
-    """Analiz anındaki ana tahmini saklar; aynı maç/tahmin ikinci kez eklenmez."""
+    """Aynı maç için maç başlamadan önceki en yüksek güvenli tek tahmini saklar."""
     kayitlar = tahmin_logunu_oku()
-    mevcut = {str(x.get("kayit_id", "")): x for x in kayitlar}
+    mevcut = {tahmin_kaydi_mac_anahtari(x): x for x in kayitlar}
     for item in final:
         m, t = item.get("m", {}), item.get("t", {})
         label = str(t.get("ana_label", ""))
@@ -3267,10 +3347,10 @@ def analiz_tahminlerini_kaydet(final):
             continue
         zaman = m.get("zaman")
         zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman)
-        kayit_id = f"{m.get('match_id') or mac_key(m)}|{label}"
-        eski = mevcut.get(kayit_id, {})
-        mevcut[kayit_id] = {
-            "kayit_id": kayit_id,
+        mac_anahtari = str(m.get("match_id") or mac_key(m))
+        eski = mevcut.get(mac_anahtari, {})
+        aday = {
+            "kayit_id": mac_anahtari,
             "match_id": str(m.get("match_id", "")),
             "sport_key": str(m.get("sport_key", "")),
             "lig": str(m.get("lig", "")),
@@ -3279,15 +3359,53 @@ def analiz_tahminlerini_kaydet(final):
             "dep": str(m.get("dep", "")),
             "tahmin": label,
             "guven": int(t.get("ana_p", 0)),
+            "alternatif_tahmin": str(t.get("alt_label", "") or ""),
+            "alternatif_guven": int(t.get("alt_p", 0) or 0),
+            "ornek": int(t.get("ornek", 0) or 0),
+            "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
             "oran": float(t.get("ana_odd")) if t.get("ana_odd") is not None else None,
+            "alternatif_oran": (
+                float(market_label_to_odd(m, t.get("alt_label")))
+                if t.get("alt_label") and market_label_to_odd(m, t.get("alt_label")) is not None
+                else None
+            ),
             "kaydedildi": eski.get("kaydedildi", datetime.now().isoformat(timespec="seconds")),
             "durum": eski.get("durum", "Bekliyor"),
             "ev_gol": eski.get("ev_gol"),
             "dep_gol": eski.get("dep_gol"),
             "tuttu": eski.get("tuttu"),
+            "alternatif_tuttu": eski.get("alternatif_tuttu"),
             "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
         }
-    return tahmin_logunu_yaz(list(mevcut.values()))
+        # Sonuçlanmış ana tahmin dondurulur; yeni tarama yalnızca eksik/daha
+        # güçlü alternatif bilgisini tamamlayabilir.
+        if eski.get("durum") == "Tamamlandı":
+            secilen = dict(eski)
+            alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
+                secilen.get("tahmin"), [eski, aday]
+            )
+            secilen["alternatif_tahmin"] = alt_etiket
+            secilen["alternatif_guven"] = alt_guven
+            secilen["alternatif_oran"] = alt_oran
+            if secilen.get("ev_gol") is not None and secilen.get("dep_gol") is not None:
+                alt_tuttu = skor_tahmini_tuttu_mu(
+                    alt_etiket, int(secilen["ev_gol"]), int(secilen["dep_gol"])
+                )
+                secilen["alternatif_tuttu"] = bool(alt_tuttu) if alt_tuttu is not None else None
+            mevcut[mac_anahtari] = secilen
+            continue
+        if not eski or _tahmin_kaydi_sirasi(aday) > _tahmin_kaydi_sirasi(eski):
+            secilen = aday
+        else:
+            secilen = dict(eski)
+        alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
+            secilen.get("tahmin"), [eski, aday]
+        )
+        secilen["alternatif_tahmin"] = alt_etiket
+        secilen["alternatif_guven"] = alt_guven
+        secilen["alternatif_oran"] = alt_oran
+        mevcut[mac_anahtari] = secilen
+    return tahmin_logunu_yaz(tahmin_kayitlarini_tekillestir(list(mevcut.values())))
 
 
 def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol):
@@ -3316,13 +3434,20 @@ def tahmin_sonuclarini_guncelle(api_key):
     hata = None
     for lig in ligler:
         try:
-            r = requests.get(
-                f"https://api.the-odds-api.com/v4/sports/{lig}/scores/",
-                params={"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"},
-                timeout=15,
-            )
+            skor_url = f"https://api.the-odds-api.com/v4/sports/{lig}/scores/"
+            skor_param = {"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}
+            r = requests.get(skor_url, params=skor_param, timeout=15)
+            # Oturumda kalmış anahtar geçersizse ve uygulamada farklı bir secret
+            # anahtar varsa sonuç takibini onunla bir kez daha dene.
+            if r.status_code == 401:
+                yedek_key = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
+                if yedek_key and yedek_key != str(api_key).strip():
+                    skor_param["apiKey"] = yedek_key
+                    r = requests.get(skor_url, params=skor_param, timeout=15)
             if r.status_code == 200 and isinstance(r.json(), list):
                 skorlar.extend(r.json())
+            elif r.status_code == 401:
+                hata = "Odds API anahtarı geçersiz, süresi dolmuş veya aktif değil. Sol menüden anahtarı yeniden gir."
             else:
                 hata = f"Skor servisi HTTP {r.status_code} yanıtı verdi."
         except Exception as exc:
@@ -3354,6 +3479,11 @@ def tahmin_sonuclarini_guncelle(api_key):
         kayit.update({
             "durum": "Tamamlandı", "ev_gol": ev_gol, "dep_gol": dep_gol,
             "tuttu": bool(tuttu), "sonuc_guncelleme": datetime.now().isoformat(timespec="seconds"),
+            "alternatif_tuttu": (
+                bool(skor_tahmini_tuttu_mu(kayit.get("alternatif_tahmin"), ev_gol, dep_gol))
+                if skor_tahmini_tuttu_mu(kayit.get("alternatif_tahmin"), ev_gol, dep_gol) is not None
+                else None
+            ),
         })
         guncellenen += 1
     tahmin_logunu_yaz(kayitlar)
@@ -3771,6 +3901,10 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
     veri = gecmis_df.copy()
     veri["Date"] = pd.to_datetime(veri["Date"], errors="coerce")
     veri = veri.dropna(subset=["Date", "FTHG", "FTAG", "FTR"])
+    # Aynı karşılaşma veri birleşiminde birden fazla kez geldiyse tek maç say.
+    veri = veri.sort_values("Date").drop_duplicates(
+        subset=["Date", "league_code", "HomeTeam", "AwayTeam"], keep="last"
+    )
     test = veri[veri["season_code"].astype(str) == str(test_sezonu)].copy()
     if lig_kodlari:
         test = test[test["league_code"].isin(set(lig_kodlari))]
@@ -3806,6 +3940,13 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             continue
 
         oran = market_label_to_odd(hedef, label)
+        alternatif_label = str(t.get("alt_label", "") or "")
+        alternatif_guven = int(t.get("alt_p", 0) or 0)
+        alternatif_tuttu = (
+            tahmin_tuttu_mu(alternatif_label, row)
+            if alternatif_label and alternatif_guven > 60
+            else None
+        )
         kar = None
         if oran is not None:
             kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
@@ -3816,6 +3957,9 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Maç": f"{row.get('HomeTeam', '')} - {row.get('AwayTeam', '')}",
             "Tahmin": label,
             "Güven": int(t.get("ana_p", 0)),
+            "Alternatif Tahmin": alternatif_label if alternatif_guven > 60 else "",
+            "Alt. Güven": alternatif_guven if alternatif_guven > 60 else None,
+            "Alt. Tuttu": bool(alternatif_tuttu) if alternatif_tuttu is not None else None,
             "Örnek": int(t.get("ornek", 0)),
             "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
             "Tuttu": bool(tuttu),
@@ -3823,7 +3967,12 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Kâr (100 TL)": kar,
         }
         sonuclar.append(sonuc_kaydi)
-    return pd.DataFrame(sonuclar)
+    sonuc_df = pd.DataFrame(sonuclar)
+    if sonuc_df.empty:
+        return sonuc_df
+    # Güven eşitse daha çok örneği olan tahmin resmî kayıt olur.
+    sonuc_df = sonuc_df.sort_values(["Güven", "Örnek"], ascending=[False, False])
+    return sonuc_df.drop_duplicates(subset=["Tarih", "Lig", "Maç"], keep="first").sort_values("Tarih")
 
 
 
@@ -4744,6 +4893,7 @@ with st.sidebar:
         else:
             st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için API key gerekir.")
 
+
     sayfa_modu = st.radio(
         "Görünüm",
         ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
@@ -5279,6 +5429,11 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         biten = gorunen[gorunen["durum"] == "Tamamlandı"].copy()
         kazanan = int(biten["tuttu"].fillna(False).astype(bool).sum()) if not biten.empty else 0
         basari = kazanan / len(biten) * 100 if len(biten) else 0.0
+        alt_biten = biten[
+            biten.get("alternatif_tuttu", pd.Series(index=biten.index, dtype=object)).notna()
+        ].copy() if not biten.empty else pd.DataFrame()
+        alt_kazanan = int(alt_biten["alternatif_tuttu"].astype(bool).sum()) if not alt_biten.empty else 0
+        alt_basari = alt_kazanan / len(alt_biten) * 100 if len(alt_biten) else None
         oranli = biten[biten["oran"].notna()].copy() if not biten.empty else pd.DataFrame()
         if not oranli.empty:
             oranli["kar"] = oranli.apply(lambda x: (float(x["oran"]) - 1) * 100 if bool(x["tuttu"]) else -100, axis=1)
@@ -5291,9 +5446,14 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         m3.metric("Başarı", f"%{basari:.1f}")
         m4.metric("Bekleyen", int((gorunen["durum"] != "Tamamlandı").sum()))
         m5.metric("ROI", f"%{roi:.1f}" if roi is not None else "—", help="Oranı bulunan tahminlere eşit tutar yatırıldığı varsayılır.")
+        st.caption(
+            f"Alternatif tahmin: {len(alt_biten)} tamamlanan · "
+            + (f"{alt_kazanan} kazanan · başarı %{alt_basari:.1f}" if alt_basari is not None else "henüz tamamlanan yok")
+            + ". Ana başarı ve ROI hesabına dahil edilmez."
+        )
 
         if not biten.empty:
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             for alan, baslik, kolon in [("tahmin", "Tahmin türü", c1), ("lig", "Lig", c2)]:
                 ozet = biten.groupby(alan, dropna=False).agg(Tahmin=("tuttu", "size"), Kazanan=("tuttu", "sum")).reset_index()
                 ozet["Başarı %"] = (ozet["Kazanan"] / ozet["Tahmin"] * 100).round(1)
@@ -5301,6 +5461,22 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 with kolon:
                     st.markdown(f"#### {baslik} performansı")
                     st.dataframe(ozet, use_container_width=True, hide_index=True)
+            with c3:
+                st.markdown("#### Alternatif performansı")
+                if alt_biten.empty:
+                    st.info("Henüz sonuçlanmış alternatif tahmin yok.")
+                else:
+                    alt_ozet = (
+                        alt_biten.groupby("alternatif_tahmin", dropna=False)
+                        .agg(Tahmin=("alternatif_tuttu", "size"), Kazanan=("alternatif_tuttu", "sum"))
+                        .reset_index()
+                        .rename(columns={"alternatif_tahmin": "Alternatif Tahmin"})
+                    )
+                    alt_ozet["Başarı %"] = (
+                        alt_ozet["Kazanan"] / alt_ozet["Tahmin"] * 100
+                    ).round(1)
+                    alt_ozet = alt_ozet.sort_values(["Başarı %", "Tahmin"], ascending=False)
+                    st.dataframe(alt_ozet, use_container_width=True, hide_index=True)
 
         if gorunen.empty:
             st.warning("Seçilen dönemde kayıt yok.")
@@ -5313,7 +5489,23 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 lambda x: "⏳ Bekliyor" if pd.isna(x.get("tuttu")) else "✅ Tuttu" if bool(x.get("tuttu")) else "❌ Tutmadı",
                 axis=1,
             )
-            goster = liste[["Tarih", "lig", "Maç", "tahmin", "guven", "oran", "Sonuç", "Durum"]].rename(columns={"lig":"Lig", "tahmin":"Tahmin", "guven":"Güven %", "oran":"Oran"})
+            liste["Alternatif Durumu"] = liste.apply(
+                lambda x: "—" if pd.isna(x.get("alternatif_tahmin")) or not str(x.get("alternatif_tahmin", "")).strip()
+                else "⏳ Bekliyor" if pd.isna(x.get("alternatif_tuttu"))
+                else "✅ Tuttu" if bool(x.get("alternatif_tuttu")) else "❌ Tutmadı",
+                axis=1,
+            )
+            for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None)]:
+                if kolon not in liste.columns:
+                    liste[kolon] = varsayilan
+            liste["alternatif_tahmin"] = liste["alternatif_tahmin"].fillna("").replace("None", "")
+            goster = liste[[
+                "Tarih", "lig", "Maç", "tahmin", "guven", "oran", "Sonuç", "Durum",
+                "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
+            ]].rename(columns={
+                "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %", "oran":"Oran",
+                "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
+            })
             st.markdown("#### Kaydedilen tahminler")
             st.dataframe(goster, use_container_width=True, hide_index=True)
             st.download_button("CSV olarak indir", goster.to_csv(index=False).encode("utf-8-sig"), "vibe_sonuc_takibi.csv", "text/csv", use_container_width=True)
@@ -5457,12 +5649,34 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                 else:
                     ic3.metric("En yüksek MS ROI hass.", "—")
 
-        st.markdown("### Market özeti")
-        st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
+        ozet_col, alt_ozet_col = st.columns(2)
+        with ozet_col:
+            st.markdown("### Ana market özeti")
+            st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
+        with alt_ozet_col:
+            st.markdown("### Alternatif market özeti")
+            if "Alternatif Tahmin" not in bt.columns:
+                st.info("Bu backtestte alternatif tahmin yok.")
+            else:
+                alt_bt = bt[
+                    bt["Alternatif Tahmin"].fillna("").astype(str).str.strip().ne("")
+                    & bt["Alt. Tuttu"].notna()
+                ].copy()
+                if alt_bt.empty:
+                    st.info("Bu backtestte sonuçlanmış alternatif tahmin yok.")
+                else:
+                    alt_ozet = (
+                        alt_bt.groupby("Alternatif Tahmin", dropna=False)
+                        .agg(Tahmin_Sayısı=("Alt. Tuttu", "size"), Kazanan=("Alt. Tuttu", "sum"), Ortalama_Güven=("Alt. Güven", "mean"))
+                        .reset_index()
+                    )
+                    alt_ozet["Başarı %"] = (alt_ozet["Kazanan"] / alt_ozet["Tahmin_Sayısı"] * 100).round(1)
+                    alt_ozet["Ortalama_Güven"] = alt_ozet["Ortalama_Güven"].round(1)
+                    st.dataframe(backtest_stili(alt_ozet), use_container_width=True, hide_index=True)
 
         st.markdown("### Test edilen maçlar")
         bt_goster = bt.sort_values("Tarih", ascending=False).copy()
-        for bool_col in ["Tuttu", "Formsuz Tuttu"]:
+        for bool_col in ["Tuttu", "Alt. Tuttu", "Formsuz Tuttu"]:
             if bool_col in bt_goster.columns:
                 bt_goster[bool_col] = bt_goster[bool_col].map({True: "✅ Evet", False: "❌ Hayır"}).fillna("—")
         st.dataframe(backtest_stili(bt_goster), use_container_width=True, hide_index=True)
@@ -5498,16 +5712,42 @@ if analiz_btn:
                     continue
 
                 stable_hits = []
+                alternatif_havuzu = []
+                for etiket, guven in [
+                    (t.get("ana_label"), t.get("ana_p", 0)),
+                    (t.get("alt_label"), t.get("alt_p", 0)),
+                ]:
+                    if etiket and etiket not in ["Belirsiz Maç", "Tahmin Zayıf"] and int(guven or 0) > 60:
+                        alternatif_havuzu.append((int(guven), str(etiket), float(TOLERANS)))
                 for stab_tol in stability_tols:
                     stab_t, stab_b = hesapla(gecmis, m, stab_tol, sadece_ayni_lig=sadece_ayni_lig)
                     if stab_t is None:
                         continue
+                    for etiket, guven in [
+                        (stab_t.get("ana_label"), stab_t.get("ana_p", 0)),
+                        (stab_t.get("alt_label"), stab_t.get("alt_p", 0)),
+                    ]:
+                        if etiket and etiket not in ["Belirsiz Maç", "Tahmin Zayıf"] and int(guven or 0) > 60:
+                            alternatif_havuzu.append((int(guven), str(etiket), float(stab_tol)))
                     if (
                         stab_t["ana_label"] == t["ana_label"]
                         and stab_t["ana_label"] not in ["Belirsiz Maç", "Tahmin Zayıf"]
                         and stab_t["ornek"] >= max(min_ornek, stab_t["onerilen_min_mac"])
                     ):
                         stable_hits.append(f"{stab_tol:.2f}")
+
+                # Seçili hassasiyetin ana tahmininden farklı olan en güçlü
+                # %60+ marketi, diğer hassasiyetlerde çıkmış olsa da koru.
+                farkli_adaylar = [x for x in alternatif_havuzu if x[1] != t.get("ana_label")]
+                if farkli_adaylar:
+                    alt_guven, alt_etiket, alt_tol = max(farkli_adaylar, key=lambda x: (x[0], -x[2]))
+                    t["alt_label"] = alt_etiket
+                    t["alt_p"] = alt_guven
+                    t["alt_hassasiyet"] = round(alt_tol, 2)
+                else:
+                    t["alt_label"] = ""
+                    t["alt_p"] = 0
+                    t["alt_hassasiyet"] = None
 
                 t["stability_tols"] = stable_hits
                 t["stability_count"] = len(stable_hits)
