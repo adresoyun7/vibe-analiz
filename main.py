@@ -3,7 +3,6 @@ import io
 import json
 import math
 import re
-import sqlite3
 import unicodedata
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
@@ -166,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 61
+APP_SCHEMA_VERSION = 63
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1263,18 +1262,6 @@ def futbol_veri_motoru(sezonlar):
                 df["REF_D"] = df["B365CD"].combine_first(df["B365D"])
                 df["REF_A"] = df["B365CA"].combine_first(df["B365A"])
 
-                # Açılış/pre-closing -> kapanış yüzde hareketi.
-                has_close = df[["B365CH", "B365CD", "B365CA"]].notna().all(axis=1)
-                has_open = df[["B365H", "B365D", "B365A"]].notna().all(axis=1)
-                valid_move = has_close & has_open & (df[["B365H", "B365D", "B365A"]] > 0).all(axis=1)
-                df["HIST_MOVE_H"] = pd.NA
-                df["HIST_MOVE_D"] = pd.NA
-                df["HIST_MOVE_A"] = pd.NA
-                df.loc[valid_move, "HIST_MOVE_H"] = df.loc[valid_move, "B365CH"] / df.loc[valid_move, "B365H"] - 1.0
-                df.loc[valid_move, "HIST_MOVE_D"] = df.loc[valid_move, "B365CD"] / df.loc[valid_move, "B365D"] - 1.0
-                df.loc[valid_move, "HIST_MOVE_A"] = df.loc[valid_move, "B365CA"] / df.loc[valid_move, "B365A"] - 1.0
-                df["HIST_HAS_CLOSE"] = has_close
-
                 temp = df.dropna(subset=["REF_H", "REF_D", "REF_A"]).copy()
                 temp["Date"] = pd.to_datetime(temp["Date"], dayfirst=True, errors="coerce")
                 temp["league_code"] = k
@@ -1308,137 +1295,6 @@ def odds_lig_kodu_coz(key, kod):
 
 
 
-
-# ==========================================================
-# GÜNCEL ORAN HAREKETİ - KALICI SNAPSHOT
-# ==========================================================
-
-def _oran_db_path():
-    """Uygulamanın ilk gördüğü oranları yerel SQLite dosyasında saklar."""
-    try:
-        base = Path(__file__).resolve().parent
-    except Exception:
-        base = Path.cwd()
-    aday = base / "yapaikupon_oran_gecmisi.db"
-    try:
-        aday.parent.mkdir(parents=True, exist_ok=True)
-        with open(aday.parent / ".yapaikupon_write_test", "a", encoding="utf-8"):
-            pass
-        try:
-            (aday.parent / ".yapaikupon_write_test").unlink()
-        except Exception:
-            pass
-        return aday
-    except Exception:
-        return Path("/tmp/yapaikupon_oran_gecmisi.db")
-
-
-def _oran_db_hazirla():
-    db = _oran_db_path()
-    with sqlite3.connect(str(db), timeout=5) as con:
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS odds_snapshots (
-                match_key TEXT PRIMARY KEY,
-                match_id TEXT,
-                sport_key TEXT,
-                home_team TEXT,
-                away_team TEXT,
-                commence_time TEXT,
-                bookmaker_key TEXT,
-                open_h REAL,
-                open_d REAL,
-                open_a REAL,
-                last_h REAL,
-                last_d REAL,
-                last_a REAL,
-                first_seen TEXT,
-                last_seen TEXT,
-                snapshot_count INTEGER DEFAULT 1
-            )
-        """)
-        con.commit()
-    return db
-
-
-def _oran_match_key(match_id, sport_key, home, away, commence_time):
-    mid = str(match_id or "").strip()
-    if mid:
-        return mid
-    return "|".join([str(sport_key or ""), str(home or ""), str(away or ""), str(commence_time or "")])
-
-
-def _oran_kaydi_getir(match_key):
-    try:
-        db = _oran_db_hazirla()
-        with sqlite3.connect(str(db), timeout=5) as con:
-            con.row_factory = sqlite3.Row
-            row = con.execute("SELECT * FROM odds_snapshots WHERE match_key = ?", (str(match_key),)).fetchone()
-            return dict(row) if row else None
-    except Exception:
-        return None
-
-
-def _oran_snapshot_kaydet(match_key, match_id, sport_key, home, away, commence_time,
-                          bookmaker_key, h, d, a):
-    """İlk görülen oranı korur; sonraki yenilemelerde son oranı ve hareketi günceller."""
-    now_iso = datetime.now().isoformat(timespec="seconds")
-    try:
-        db = _oran_db_hazirla()
-        with sqlite3.connect(str(db), timeout=5) as con:
-            con.row_factory = sqlite3.Row
-            row = con.execute("SELECT * FROM odds_snapshots WHERE match_key = ?", (str(match_key),)).fetchone()
-            if row is None:
-                con.execute("""
-                    INSERT INTO odds_snapshots (
-                        match_key, match_id, sport_key, home_team, away_team, commence_time, bookmaker_key,
-                        open_h, open_d, open_a, last_h, last_d, last_a, first_seen, last_seen, snapshot_count
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-                """, (str(match_key), str(match_id or ""), str(sport_key or ""), str(home or ""),
-                      str(away or ""), str(commence_time or ""), str(bookmaker_key or ""),
-                      float(h), float(d), float(a), float(h), float(d), float(a), now_iso, now_iso))
-            else:
-                con.execute("""
-                    UPDATE odds_snapshots
-                    SET last_h=?, last_d=?, last_a=?, last_seen=?, snapshot_count=snapshot_count+1,
-                        bookmaker_key=CASE WHEN bookmaker_key IS NULL OR bookmaker_key='' THEN ? ELSE bookmaker_key END
-                    WHERE match_key=?
-                """, (float(h), float(d), float(a), now_iso, str(bookmaker_key or ""), str(match_key)))
-            con.commit()
-            out = con.execute("SELECT * FROM odds_snapshots WHERE match_key = ?", (str(match_key),)).fetchone()
-            out = dict(out) if out else None
-    except Exception:
-        out = None
-
-    if not out:
-        return {
-            "open_h": float(h), "open_d": float(d), "open_a": float(a),
-            "last_h": float(h), "last_d": float(d), "last_a": float(a),
-            "snapshot_count": 1, "movement_age_minutes": 0.0,
-            "move_h": 0.0, "move_d": 0.0, "move_a": 0.0,
-        }
-
-    try:
-        first_dt = datetime.fromisoformat(str(out.get("first_seen")))
-        last_dt = datetime.fromisoformat(str(out.get("last_seen")))
-        age_min = max(0.0, (last_dt - first_dt).total_seconds() / 60.0)
-    except Exception:
-        age_min = 0.0
-
-    oh, od, oa = float(out.get("open_h") or h), float(out.get("open_d") or d), float(out.get("open_a") or a)
-    lh, ld, la = float(out.get("last_h") or h), float(out.get("last_d") or d), float(out.get("last_a") or a)
-    return {
-        **out,
-        "movement_age_minutes": age_min,
-        # Yüzde hareket kullanıyoruz; farklı taban oranları daha adil kıyaslanır.
-        "move_h": (lh / oh - 1.0) if oh else 0.0,
-        "move_d": (ld / od - 1.0) if od else 0.0,
-        "move_a": (la / oa - 1.0) if oa else 0.0,
-    }
-
-
-def _tercih_edilen_bookmaker(match_key):
-    row = _oran_kaydi_getir(match_key)
-    return str((row or {}).get("bookmaker_key") or "").strip()
 
 def bulten_cek(key, kodlar, t):
     secret_key = get_app_api_key()
@@ -1494,18 +1350,17 @@ def bulten_cek(key, kodlar, t):
                             away = team
                             break
 
-                match_key = _oran_match_key(m.get("id", ""), k, home, away, m.get("commence_time", ""))
-                preferred_bk = _tercih_edilen_bookmaker(match_key)
+                match_key = str(m.get("id") or "|".join([
+                    str(k), str(home), str(away), str(m.get("commence_time", ""))
+                ]))
 
-                # İlk snapshot'ta Bet365 varsa onu seç; yoksa bookmaker key'e göre deterministik seçim yap.
-                # Sonraki snapshot'larda ilk seçilen bookmaker varsa onu koru. Böylece sahte oran hareketi azalır.
+                # Her sorguda o andaki son oranı al. Karşılaştırılabilirlik için
+                # Bet365 varsa onu, yoksa anahtara göre ilk bookmaker'ı kullan.
                 def bk_priority(bk):
                     bk_key = str(bk.get("key", ""))
-                    if preferred_bk and bk_key == preferred_bk:
-                        return (0, bk_key)
                     if bk_key.lower() == "bet365":
-                        return (1, bk_key)
-                    return (2, bk_key)
+                        return (0, bk_key)
+                    return (1, bk_key)
 
                 market = None
                 secilen_bk_key = ""
@@ -1529,11 +1384,6 @@ def bulten_cek(key, kodlar, t):
                 if h is None or a is None or b is None:
                     continue
 
-                snap = _oran_snapshot_kaydet(
-                    match_key, m.get("id", ""), k, home, away, m.get("commence_time", ""),
-                    secilen_bk_key, float(h), float(b), float(a)
-                )
-
                 res.append({
                     "match_id": m.get("id", ""),
                     "match_key": match_key,
@@ -1546,14 +1396,6 @@ def bulten_cek(key, kodlar, t):
                     "b": float(b),
                     "a": float(a),
                     "bookmaker_key": secilen_bk_key,
-                    "open_h": float(snap.get("open_h", h)),
-                    "open_b": float(snap.get("open_d", b)),
-                    "open_a": float(snap.get("open_a", a)),
-                    "move_h": float(snap.get("move_h", 0.0)),
-                    "move_b": float(snap.get("move_d", 0.0)),
-                    "move_a": float(snap.get("move_a", 0.0)),
-                    "snapshot_count": int(snap.get("snapshot_count", 1) or 1),
-                    "movement_age_minutes": float(snap.get("movement_age_minutes", 0.0) or 0.0),
                 })
         except Exception:
             continue
@@ -1567,43 +1409,9 @@ def bulten_cek(key, kodlar, t):
 
 
 
-def bulten_sorgu_anahtari(kodlar, t):
-    """Aynı tarih + aynı lig seçimi için tek bir bülten snapshot'ı kullan."""
-    return (str(t), tuple(sorted(str(k) for k in (kodlar or []))))
-
-
-def bulten_cacheli_al(key, kodlar, t, force=False):
-    """
-    The Odds API bültenini aynı tarih/lig kombinasyonu için yalnızca bir kez çeker.
-
-    Hassasiyet, minimum örnek, güven filtresi, sayfa modu vb. değişikliklerinde
-    API'ye tekrar gitmez; session_state içindeki aynı oran snapshot'ını kullanır.
-    force=True yalnızca kullanıcı özellikle "Oranları Yenile" dediğinde kullanılır.
-    """
-    sorgu_key = bulten_sorgu_anahtari(kodlar, t)
-    cache = st.session_state.setdefault("bulten_cache", {})
-
-    if not force and sorgu_key in cache:
-        kayitli = cache[sorgu_key]
-        if isinstance(kayitli, pd.DataFrame):
-            return kayitli.copy()
-
-    yeni_bulten = bulten_cek(key, kodlar, t)
-    cache[sorgu_key] = yeni_bulten.copy() if isinstance(yeni_bulten, pd.DataFrame) else pd.DataFrame()
-    st.session_state["bulten_cache"] = cache
-    st.session_state["aktif_bulten_key"] = sorgu_key
-    return cache[sorgu_key].copy()
-
-
-def aktif_bulteni_sil(kodlar, t):
-    """Sadece ekranda seçili tarih + lig kombinasyonunun önbelleğini temizler."""
-    sorgu_key = bulten_sorgu_anahtari(kodlar, t)
-    cache = st.session_state.get("bulten_cache", {})
-    if isinstance(cache, dict):
-        cache.pop(sorgu_key, None)
-        st.session_state["bulten_cache"] = cache
-    st.session_state.pop("last_bulten_df", None)
-    st.session_state.pop("aktif_bulten_key", None)
+def bulten_guncel_al(key, kodlar, t):
+    """Önbellek kullanmadan API'deki o anki son bülteni getirir."""
+    return bulten_cek(key, kodlar, t)
 
 
 
@@ -1990,7 +1798,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             "otomatik": True,
             "profil": profil,
             # Kupon geçmişinden maç detayını yeniden oluşturabilmek için
-            # bülten snapshot'ındaki temel maç/oran bilgilerini de sakla.
+            # Son bültendeki temel maç/oran bilgilerini de sakla.
             "sport_key": m.get("sport_key", ""),
             "h": m.get("h"),
             "b": m.get("b"),
@@ -2773,7 +2581,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         return None, b
 
     for c in ["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A",
-              "REF_H", "REF_D", "REF_A", "HIST_MOVE_H", "HIST_MOVE_D", "HIST_MOVE_A"]:
+              "REF_H", "REF_D", "REF_A"]:
         if c in b.columns:
             b[c] = pd.to_numeric(b[c], errors="coerce")
 
@@ -2829,41 +2637,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     else:
         oran_factor = 1.0
 
-    # Ana eşleşme ve tahmin yukarıda daima m_row içindeki SON/GÜNCEL oranlarla yapılır.
-    # İlk görülen oran yalnızca hareket yönünü ölçmek içindir. Hareket sert filtre değildir,
-    # ana marketin yönünü tek başına değiştirmez ve güvene en fazla ±%2 etki eder.
-    movement_similarity = None
-    movement_sample = 0
-    movement_factor = 1.0
-    movement_status = "Yetersiz snapshot"
-    try:
-        snap_count = int(m_row.get("snapshot_count", 1) or 1)
-        move_age = float(m_row.get("movement_age_minutes", 0.0) or 0.0)
-        cur_moves = [float(m_row.get("move_h", 0.0)), float(m_row.get("move_b", 0.0)), float(m_row.get("move_a", 0.0))]
-        move_cols = ["HIST_MOVE_H", "HIST_MOVE_D", "HIST_MOVE_A"]
-        if snap_count >= 2 and move_age >= 15 and all(c in b.columns for c in move_cols):
-            mv = b[move_cols].apply(pd.to_numeric, errors="coerce").dropna()
-            movement_sample = int(len(mv))
-            if movement_sample >= 3:
-                # Üç 1-X-2 oranının yüzde hareketleri arasındaki ortalama mutlak mesafe.
-                dist = (mv.sub(cur_moves, axis=1).abs().mean(axis=1)).clip(lower=0)
-                # Yaklaşık %8 ortalama hareket farkında benzerlik belirgin biçimde düşer.
-                sims = (-dist / 0.08).apply(math.exp) * 100.0
-                movement_similarity = float(sims.mean())
-                # En fazla ±%2 etkilesin; market türünden bağımsızdır.
-                movement_factor = max(0.98, min(1.02, 0.98 + 0.04 * (movement_similarity / 100.0)))
-                movement_status = "Aktif"
-            else:
-                movement_status = "Geçmiş hareket örneği az"
-        elif snap_count >= 2 and move_age < 15:
-            movement_status = "Hareket için en az 15 dk bekleniyor"
-    except Exception:
-        movement_similarity = None
-        movement_sample = 0
-        movement_factor = 1.0
-        movement_status = "Hesaplanamadı"
-
-    guven_carpani = sample_factor * oran_factor * movement_factor
+    # Model yalnızca analiz anında API'den alınan son oranı kullanır.
+    guven_carpani = sample_factor * oran_factor
     match_type = mac_tipi(oran_ev, oran_dep)
 
     # maç tipine göre model davranışı
@@ -3148,13 +2923,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     else:
         nedenler.append(f"Takım formu: {form_profili.get('durum', 'Yetersiz veri')}.")
 
-    if movement_similarity is not None:
-        nedenler.append(
-            f"Oran hareketi benzerliği %{int(round(movement_similarity))} "
-            f"({movement_sample} geçmiş hareket örneği, çarpan {movement_factor:.3f})."
-        )
-    elif movement_status:
-        nedenler.append(f"Oran hareketi: {movement_status}.")
     if flip_p >= 0.12:
         nedenler.append(f"HT/FT sürpriz riski %{int(round(flip_p * 100))}.")
     playable_score = ana_p
@@ -3263,15 +3031,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "form_ev_puan_orani": round(float(form_profili.get("ev", {}).get("puan_orani", 0.5)) * 100, 1) if form_profili.get("ev") else None,
         "form_dep_puan_orani": round(float(form_profili.get("dep", {}).get("puan_orani", 0.5)) * 100, 1) if form_profili.get("dep") else None,
         "form_farki": round(float(form_profili.get("form_farki", 0.0)), 3),
-        "movement_similarity": None if movement_similarity is None else round(movement_similarity, 1),
-        "movement_sample": movement_sample,
-        "movement_factor": round(movement_factor, 3),
-        "movement_status": movement_status,
-        "current_move_h": round(float(m_row.get("move_h", 0.0) or 0.0) * 100, 2),
-        "current_move_d": round(float(m_row.get("move_b", 0.0) or 0.0) * 100, 2),
-        "current_move_a": round(float(m_row.get("move_a", 0.0) or 0.0) * 100, 2),
-        "snapshot_count": int(m_row.get("snapshot_count", 1) or 1),
-        "movement_age_minutes": round(float(m_row.get("movement_age_minutes", 0.0) or 0.0), 1),
         "odds_basis": "Güncel/son API oranı",
         "goal_profile": goal_profile,
         "match_type": match_type,
@@ -5075,13 +4834,6 @@ with st.sidebar:
         )
 
 
-# API tasarrufu: normal analizler kayıtlı bülteni kullanır.
-# Kullanıcı yalnızca gerçekten yeni oran istediğinde bu düğmeye basar.
-with st.sidebar:
-    if st.button('🔄 Oranları Yenile', use_container_width=True, key='oranlari_yenile_btn'):
-        aktif_bulteni_sil(secili_kodlar, secili_tarih)
-        st.success('Oran önbelleği temizlendi. Bir sonraki analiz güncel oranları API’den çekecek.')
-
 legal_sidebar_sections()
 
 # Ana analiz eylemi, sık kullanılan ayarlarla aynı üst satırda gösterilir.
@@ -5147,7 +4899,7 @@ if gecmis_btn:
     else:
         with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
             gi_gecmis = futbol_veri_motoru(tuple(yillar))
-            gi_bulten = bulten_cacheli_al(API_KEY, secili_kodlar, secili_tarih)
+            gi_bulten = bulten_guncel_al(API_KEY, secili_kodlar, secili_tarih)
             inceleme = []
             for _, gi_mac in gi_bulten.iterrows():
                 ornekler = gecmis_ornekleri_bul(
@@ -5207,9 +4959,11 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
                     "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
                     "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
-                    "1": ornekler["B365H"].round(2),
-                    "X": ornekler["B365D"].round(2),
-                    "2": ornekler["B365A"].round(2),
+                    # Filtre hangi oranı kullandıysa tabloda da yalnızca onu göster.
+                    # REF_* kapanış oranıdır; eski sezonda yoksa yükleyici B365'e düşer.
+                    "1": ornekler["REF_H"].round(2) if "REF_H" in ornekler.columns else ornekler["B365H"].round(2),
+                    "X": ornekler["REF_D"].round(2) if "REF_D" in ornekler.columns else ornekler["B365D"].round(2),
+                    "2": ornekler["REF_A"].round(2) if "REF_A" in ornekler.columns else ornekler["B365A"].round(2),
                     "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
                     "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
                     "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
@@ -5229,7 +4983,7 @@ if yuksek_oran_btn:
     else:
         with st.spinner("💎 1/2, 2/1 ve iki yarıda da KG örnekleri taranıyor..."):
             yo_gecmis = futbol_veri_motoru(tuple(yillar))
-            yo_bulten = bulten_cacheli_al(API_KEY, secili_kodlar, secili_tarih)
+            yo_bulten = bulten_guncel_al(API_KEY, secili_kodlar, secili_tarih)
             yuksek_liste = []
             for _, yo_mac in yo_bulten.iterrows():
                 tum_ornekler = gecmis_ornekleri_bul(
@@ -5353,7 +5107,13 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                     "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
                     "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
                     "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
-                    "1/X/2": ornekler["B365H"].round(2).astype(str) + " / " + ornekler["B365D"].round(2).astype(str) + " / " + ornekler["B365A"].round(2).astype(str),
+                    "Kapanış 1/X/2": (
+                        (ornekler["REF_H"] if "REF_H" in ornekler.columns else ornekler["B365H"]).round(2).astype(str)
+                        + " / "
+                        + (ornekler["REF_D"] if "REF_D" in ornekler.columns else ornekler["B365D"]).round(2).astype(str)
+                        + " / "
+                        + (ornekler["REF_A"] if "REF_A" in ornekler.columns else ornekler["B365A"]).round(2).astype(str)
+                    ),
                     "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
                     "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
                     "Yüksek oran olayı": ornekler["Olay"],
@@ -5723,7 +5483,7 @@ if analiz_btn:
     else:
         with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
-            bulten = bulten_cacheli_al(API_KEY, secili_kodlar, secili_tarih)
+            bulten = bulten_guncel_al(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
 
@@ -5818,7 +5578,7 @@ def secili_detay_itemi():
 def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
     """Otomatik/manüel kupon satırından normal Maç Detayı verisini yeniden üret.
 
-    Önce son bülten snapshot'ında aynı maçı arar. Yeni oluşturulan kuponlarda
+    Önce son güncel bültende aynı maçı arar. Yeni oluşturulan kuponlarda
     saklanan 1-X-2 oranları sayesinde bülten değişmiş olsa bile detay yeniden
     hesaplanabilir. Çok eski kayıtlarda oran bilgisi yoksa None döner.
     """
