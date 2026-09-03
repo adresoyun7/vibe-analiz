@@ -157,7 +157,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 43
+APP_SCHEMA_VERSION = 44
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1622,6 +1622,117 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
         }
         for c in picks
     ]
+
+
+def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
+    """Analiz listesinden başlamamış ve veri kalitesi yeterli kupon taslağı üretir."""
+    ayarlar = {
+        "Temkinli": {"min_guven": 65, "taban": 2, "maks": 4, "min_stabil": 2, "ek_stabil": 3, "min_oran": 1.0},
+        "Dengeli": {"min_guven": 60, "taban": 3, "maks": 6, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
+        "Yüksek Oran": {"min_guven": 58, "taban": 3, "maks": 5, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.70},
+    }
+    cfg = ayarlar.get(profil, ayarlar["Dengeli"])
+    simdi = datetime.now()
+    adaylar = []
+
+    for item in final_list or []:
+        m, t = item.get("m", {}), item.get("t", {})
+        zaman = m.get("zaman")
+        if not hasattr(zaman, "strftime") or zaman <= simdi:
+            continue
+        if t.get("belirsiz") or not t.get("oynanabilir", True):
+            continue
+        guven = int(t.get("ana_p", 0) or 0)
+        ornek = int(t.get("ornek", 0) or 0)
+        tolerans = float(t.get("kullanilan_tolerans", 0.08) or 0.08)
+        stabil = int(t.get("stability_count", 0) or 0)
+        dar_stabil = len(t.get("stability_early_tols", []) or [])
+        oran = t.get("ana_odd")
+        oran_sayi = float(oran) if oran is not None else None
+
+        secim_label = str(t.get("ana_label", "-"))
+        secim_guven = guven
+        secim_oran = oran_sayi
+        oran_tahmini = False
+        combo_label = str(t.get("combo_label", "") or "")
+        combo_p = int(t.get("combo_p", 0) or 0)
+        combo_hit = int(t.get("combo_hit", 0) or 0)
+        combo_esigi = {"Temkinli": 60, "Dengeli": 50, "Yüksek Oran": 40}.get(profil, 50)
+        combo_uygun = (
+            bool(t.get("combo_var"))
+            and combo_label
+            and not combo_label.startswith("HT/FT")
+            and combo_p >= combo_esigi
+            and combo_hit >= max(5, dinamik_min_mac(tolerans))
+        )
+        if combo_uygun:
+            secim_label = combo_label
+            secim_guven = combo_p
+            secim_oran = kombo_tahmini_oran(combo_label, oran_sayi)
+            oran_tahmini = True
+
+        if guven < cfg["min_guven"]:
+            continue
+        if ornek < max(5, dinamik_min_mac(tolerans)):
+            continue
+        if stabil < cfg["min_stabil"]:
+            continue
+        if profil == "Temkinli" and dar_stabil < 1:
+            continue
+        if profil == "Yüksek Oran" and (secim_oran is None or secim_oran < cfg["min_oran"]):
+            continue
+
+        kalite = (
+            float(t.get("playable_score", guven) or guven)
+            + min(ornek, 40) * 0.20
+            + stabil * 2.0
+            + dar_stabil * 1.5
+        )
+        if profil == "Yüksek Oran" and secim_oran is not None:
+            kalite += min(secim_oran, 5.0) * 3.0
+        if combo_uygun:
+            kalite += min(combo_hit, 20) * 0.20
+
+        ekstra_uygun = stabil >= cfg["ek_stabil"]
+        if profil == "Temkinli":
+            ekstra_uygun = ekstra_uygun and dar_stabil >= 1 and guven >= 67
+        adaylar.append({
+            "m": m, "t": t, "kalite": kalite, "oran": secim_oran,
+            "secim_label": secim_label, "secim_guven": secim_guven,
+            "oran_tahmini": oran_tahmini,
+            "ekstra_uygun": ekstra_uygun,
+        })
+
+    adaylar.sort(key=lambda x: (x["kalite"], x["t"].get("ana_p", 0)), reverse=True)
+    secilenler, maclar = [], set()
+    for aday in adaylar:
+        m, t = aday["m"], aday["t"]
+        mac_id = mac_key(m)
+        lig = str(m.get("lig", ""))
+        if mac_id in maclar:
+            continue
+        # Profilin taban sayısından sonraki seçimler daha yüksek kararlılık ister.
+        if len(secilenler) >= cfg["taban"] and not aday["ekstra_uygun"]:
+            continue
+        secilenler.append({
+            "ev": m.get("ev", ""),
+            "dep": m.get("dep", ""),
+            "lig": lig,
+            "zaman_iso": m["zaman"].strftime("%Y-%m-%d %H:%M:%S"),
+            "zaman_text": m["zaman"].strftime("%d.%m %H:%M"),
+            "tahmin": aday["secim_label"],
+            "guven": int(aday["secim_guven"]),
+            "oran": aday["oran"],
+            "oran_tahmini": aday["oran_tahmini"],
+            "otomatik": True,
+            "profil": profil,
+        })
+        maclar.add(mac_id)
+        if len(secilenler) >= cfg["maks"]:
+            break
+
+    # Kupon sayılabilmesi için en az iki bağımsız seçim gerekir.
+    return secilenler if len(secilenler) >= 2 else []
 
 
 
@@ -4788,6 +4899,47 @@ if not fl:
     </div>
     """, unsafe_allow_html=True)
 else:
+    if st.session_state.get("sayfa_modu", "Maç Analizi") == "Maç Analizi":
+        kupon_profil_col, kupon_btn_col = st.columns([2.2, 1], gap="small")
+        with kupon_profil_col:
+            gunun_kupon_profili = st.selectbox(
+                "Günün kuponu profili",
+                ["Temkinli", "Dengeli", "Yüksek Oran"],
+                index=1,
+                key="gunun_kupon_profili",
+                help="Kararlılığa göre Temkinli 2-4, Dengeli 3-6, Yüksek Oran 3-5 seçim üretir.",
+            )
+        with kupon_btn_col:
+            st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+            gunun_kupon_btn = st.button(
+                "🎫 GÜNÜN KUPONUNU OLUŞTUR",
+                use_container_width=True,
+                type="primary",
+                key="gunun_kuponunu_olustur_btn",
+            )
+
+        if gunun_kupon_btn:
+            otomatik_secimler = gunun_kuponunu_olustur(fl, gunun_kupon_profili)
+            if not otomatik_secimler:
+                st.warning("Bu profilin kurallarını karşılayan en az iki güçlü seçim bulunamadı. Bugün kupon oluşturulmadı.")
+            else:
+                mevcutlar = {
+                    (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
+                    for x in st.session_state.kupona if isinstance(x, dict)
+                }
+                eklenen = 0
+                for secim in otomatik_secimler:
+                    anahtar = (secim["ev"], secim["dep"], secim["tahmin"])
+                    if anahtar not in mevcutlar:
+                        st.session_state.kupona.append(secim)
+                        mevcutlar.add(anahtar)
+                        eklenen += 1
+                st.session_state.coupon_popup_open = True
+                if eklenen:
+                    st.success(f"{gunun_kupon_profili} profilinde {eklenen} seçim Kuponlarım'a eklendi.")
+                else:
+                    st.info("Üretilen seçimlerin tamamı zaten Kuponlarım'da bulunuyor.")
+
     indexed_fl = list(enumerate(fl))
     yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
     orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
@@ -5077,11 +5229,18 @@ else:
             mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
             durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
             mac_ad = f"{item.get('ev', '')} - {item.get('dep', '')}".strip(" -")
+            oran_degeri = item.get("oran")
+            oran_metni = ""
+            if oran_degeri is not None:
+                oran_metni = f" | Oran {fmt_odd(oran_degeri)}"
+                if item.get("oran_tahmini"):
+                    oran_metni += " (tahmini)"
+            profil_metni = f" | {item.get('profil')}" if item.get("otomatik") and item.get("profil") else ""
             alt_satir = (
                 f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | "
-                f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}"
+                f"{item.get('tahmin', '-')} | Güven %{int(item.get('guven', 0))}{oran_metni}{profil_metni}"
                 if item.get("guven", 0)
-                else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}"
+                else f"{item.get('lig', '-')} | {item.get('zaman_text', '-')} | {item.get('tahmin', '-')}{oran_metni}{profil_metni}"
             )
             c1, c2 = st.columns([8, 1])
             with c1:
