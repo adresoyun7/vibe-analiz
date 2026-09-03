@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 72
+APP_SCHEMA_VERSION = 73
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -4348,9 +4348,6 @@ for key, default in [
     ("backtest_11_df", None),
     ("gecmis_inceleme_list", None),
     ("yuksek_oran_list", None),
-    ("sonuc_detay_kaydi", None),
-    ("sonuc_detay_hatasi", ""),
-    ("sonuc_detay_tablo_surumu", 0),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -4626,7 +4623,9 @@ secili_kodlar = []
 
 
 # ÜST KONTROL BAR
-bugun = datetime.now().date()
+# Uygulama sunucusu UTC'de çalışsa bile tarih seçimi Türkiye gününe göre yapılır.
+sistem_simdi = datetime.utcnow() + timedelta(hours=3)
+bugun = sistem_simdi.date()
 API_KEY = get_app_api_key()
 
 st.markdown("""
@@ -4875,6 +4874,20 @@ if st.session_state.get('date_mode') == '3 gün sonra':
     st.session_state['special_date'] = bugun + timedelta(days=3)
 
 
+def sistem_gununu_yenile():
+    """Gece yarısından kalan oturum verilerini temizleyip gerçek bugüne döner."""
+    yeni_bugun = (datetime.utcnow() + timedelta(hours=3)).date()
+    st.session_state["date_mode"] = "Bugün"
+    st.session_state["special_date"] = yeni_bugun
+    st.session_state["final_list"] = []
+    st.session_state["top10_list"] = []
+    st.session_state["top50_list"] = []
+    st.session_state["last_bulten_df"] = None
+    st.session_state["gecmis_inceleme_list"] = None
+    st.session_state["yuksek_oran_list"] = None
+    clear_detail_on_filter_change()
+
+
 # En sık değiştirilen analiz ayarları ana ekranın üstünde normal akışta gösterilir.
 with st.container(key="sticky_analysis_controls"):
     st.markdown(
@@ -4921,6 +4934,19 @@ with st.container(key="sticky_analysis_controls"):
         """,
         unsafe_allow_html=True,
     )
+    sistem_bilgi_col, sistem_yenile_col = st.columns([5.2, 1], gap="small")
+    with sistem_bilgi_col:
+        st.markdown(
+            f"**🕒 Sistem tarihi ve saati:** {sistem_simdi.strftime('%d.%m.%Y %H:%M')} (Türkiye)"
+        )
+    with sistem_yenile_col:
+        st.button(
+            "🔄 Günü Yenile",
+            key="sistem_gununu_yenile_btn",
+            use_container_width=True,
+            on_click=sistem_gununu_yenile,
+            help="Tarihi gerçek bugüne alır ve önceki günden kalan maç listelerini temizler.",
+        )
     ayar_tol_col, ayar_ornek_col, ayar_oynanabilir_col, ayar_canli_col, ayar_buton_col = st.columns(
         [2.1, .9, 1.25, 1.05, 1.15], gap="small"
     )
@@ -4963,7 +4989,12 @@ with st.container(key="sticky_analysis_controls"):
         # Düğme, sidebar'da görünüm seçildikten sonra bu üst konuma yazdırılır.
         ust_analiz_buton_alani = st.empty()
 
-    with st.expander("📅 Tarih, Lig ve Sezon Seçimi", expanded=False):
+    secim_ozet_tarih = tarih_secimine_gore_date(
+        st.session_state.get("date_mode", "Bugün"), bugun,
+        st.session_state.get("special_date", bugun),
+    )
+    with st.container(key="tarih_lig_sezon_paneli"):
+      with st.expander("📅 Tarih, Lig ve Sezon Seçimi", expanded=False):
         tarih_col, sezon_col = st.columns([1.35, 1], gap="medium")
         with tarih_col:
             st.radio(
@@ -5025,7 +5056,38 @@ with st.container(key="sticky_analysis_controls"):
                 with lig_kolonlari[lig_no % 3]:
                     st.checkbox(lig["label"], key=f"cb_{lig['kod']}", on_change=clear_detail_on_filter_change)
 
-    secili_kodlar = selected_league_codes()
+      secili_kodlar = selected_league_codes()
+      secili_sezonlar_ozet = st.session_state.get("top_seasons", sezon_secenekleri)
+      panel_ozeti = (
+          f"🗓️ {format_tr_date(secim_ozet_tarih)}  ·  "
+          f"🏆 {len(secili_kodlar)} lig  ·  "
+          f"🗂️ {len(secili_sezonlar_ozet)} sezon"
+      ).replace('"', '\\"')
+      st.markdown(
+          f"""
+          <style>
+          .st-key-tarih_lig_sezon_paneli details > summary::after {{
+              content:"{panel_ozeti}";
+              margin-left:auto;
+              padding-left:16px;
+              color:#f8fafc;
+              -webkit-text-fill-color:#f8fafc;
+              font-size:.82rem;
+              font-weight:800;
+              white-space:nowrap;
+          }}
+          @media (max-width:760px) {{
+              .st-key-tarih_lig_sezon_paneli details > summary::after {{
+                  content:"🗓️ {format_tr_date(secim_ozet_tarih)} · 🏆 {len(secili_kodlar)}";
+                  font-size:.72rem;
+                  white-space:normal;
+                  text-align:right;
+              }}
+          }}
+          </style>
+          """,
+          unsafe_allow_html=True,
+      )
 
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
@@ -5054,9 +5116,6 @@ with st.sidebar:
             st.success("API key aktif ✅")
         else:
             st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için API key gerekir.")
-
-    if st.session_state.pop("sonuc_detay_navigasyon", False):
-        st.session_state["sayfa_modu"] = "Maç Analizi"
 
     sayfa_modu = st.radio(
         "Görünüm",
@@ -5572,7 +5631,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     else:
         df = pd.DataFrame(takip)
         df["zaman_dt"] = pd.to_datetime(df["zaman"], errors="coerce").dt.tz_localize(None)
-        baslangic = pd.Timestamp(datetime.now().date())
+        baslangic = pd.Timestamp((datetime.utcnow() + timedelta(hours=3)).date())
         # Varsayılan olarak bütün kayıtları göster. Böylece sayfa her açıldığında
         # yalnızca bugünün maçlarına daralmış gibi görünmez.
         donem = st.selectbox(
@@ -5670,22 +5729,8 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %",
                 "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
             })
-            goster.insert(0, "Detay", "🔎 Aç")
             st.markdown("#### Kaydedilen tahminler")
-            st.caption("Bir maçı yeniden analiz edip detay kartını açmak için ilgili satıra tıkla.")
-            tablo_olayi = st.dataframe(
-                goster, use_container_width=True, hide_index=True,
-                key=f"sonuc_takibi_detay_tablosu_{st.session_state.get('sonuc_detay_tablo_surumu', 0)}",
-                on_select="rerun", selection_mode="single-row",
-            )
-            secilen_satirlar = list(getattr(getattr(tablo_olayi, "selection", None), "rows", []) or [])
-            if secilen_satirlar:
-                satir_no = int(secilen_satirlar[0])
-                if 0 <= satir_no < len(liste):
-                    st.session_state["sonuc_detay_kaydi"] = liste.iloc[satir_no].to_dict()
-                    st.session_state["sonuc_detay_navigasyon"] = True
-                    st.session_state["sonuc_detay_tablo_surumu"] = int(st.session_state.get("sonuc_detay_tablo_surumu", 0)) + 1
-                    st.rerun()
+            st.dataframe(goster, use_container_width=True, hide_index=True)
             st.download_button("CSV olarak indir", goster.to_csv(index=False).encode("utf-8-sig"), "vibe_sonuc_takibi.csv", "text/csv", use_container_width=True)
     legal_footer()
     st.stop()
@@ -6086,25 +6131,6 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
         return {"m": m, "t": t, "b": b_det}
     except Exception:
         return None
-
-
-if st.session_state.get("sonuc_detay_kaydi") is not None:
-    sonuc_kaydi = st.session_state.pop("sonuc_detay_kaydi")
-    if st.session_state.get("last_gecmis_df") is None:
-        with st.spinner("Sonuç kaydı geçmiş verilerle yeniden analiz ediliyor..."):
-            st.session_state.last_gecmis_df = futbol_veri_motoru(tuple(yillar))
-    sonuc_detayi = kupon_seciminden_detay_itemi(sonuc_kaydi, sadece_ayni_lig=sadece_ayni_lig)
-    if sonuc_detayi is not None:
-        st.session_state.detay_item = sonuc_detayi
-        st.session_state.detay_idx = None
-        st.session_state.sonuc_detay_hatasi = ""
-    else:
-        st.session_state.sonuc_detay_hatasi = (
-            "Bu eski kayıt için gerekli oran/geçmiş eşleşmesi bulunamadığından detay yeniden oluşturulamadı."
-        )
-
-if st.session_state.get("sonuc_detay_hatasi"):
-    st.warning(st.session_state.pop("sonuc_detay_hatasi"))
 
 
 def ana_tahmin_gecmis_detayi(m, t, b_det):
