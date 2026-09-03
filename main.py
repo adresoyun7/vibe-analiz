@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 66
+APP_SCHEMA_VERSION = 67
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3377,9 +3377,22 @@ def analiz_tahminlerini_kaydet(final):
             "alternatif_tuttu": eski.get("alternatif_tuttu"),
             "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
         }
-        # Sonuçlanmış resmî tahmin dondurulur. Bekleyen kayıtta yalnızca daha
-        # güçlü aday eski tahminin yerini alır.
+        # Sonuçlanmış ana tahmin dondurulur; yeni tarama yalnızca eksik/daha
+        # güçlü alternatif bilgisini tamamlayabilir.
         if eski.get("durum") == "Tamamlandı":
+            secilen = dict(eski)
+            alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
+                secilen.get("tahmin"), [eski, aday]
+            )
+            secilen["alternatif_tahmin"] = alt_etiket
+            secilen["alternatif_guven"] = alt_guven
+            secilen["alternatif_oran"] = alt_oran
+            if secilen.get("ev_gol") is not None and secilen.get("dep_gol") is not None:
+                alt_tuttu = skor_tahmini_tuttu_mu(
+                    alt_etiket, int(secilen["ev_gol"]), int(secilen["dep_gol"])
+                )
+                secilen["alternatif_tuttu"] = bool(alt_tuttu) if alt_tuttu is not None else None
+            mevcut[mac_anahtari] = secilen
             continue
         if not eski or _tahmin_kaydi_sirasi(aday) > _tahmin_kaydi_sirasi(eski):
             secilen = aday
@@ -5699,16 +5712,42 @@ if analiz_btn:
                     continue
 
                 stable_hits = []
+                alternatif_havuzu = []
+                for etiket, guven in [
+                    (t.get("ana_label"), t.get("ana_p", 0)),
+                    (t.get("alt_label"), t.get("alt_p", 0)),
+                ]:
+                    if etiket and etiket not in ["Belirsiz Maç", "Tahmin Zayıf"] and int(guven or 0) > 60:
+                        alternatif_havuzu.append((int(guven), str(etiket), float(TOLERANS)))
                 for stab_tol in stability_tols:
                     stab_t, stab_b = hesapla(gecmis, m, stab_tol, sadece_ayni_lig=sadece_ayni_lig)
                     if stab_t is None:
                         continue
+                    for etiket, guven in [
+                        (stab_t.get("ana_label"), stab_t.get("ana_p", 0)),
+                        (stab_t.get("alt_label"), stab_t.get("alt_p", 0)),
+                    ]:
+                        if etiket and etiket not in ["Belirsiz Maç", "Tahmin Zayıf"] and int(guven or 0) > 60:
+                            alternatif_havuzu.append((int(guven), str(etiket), float(stab_tol)))
                     if (
                         stab_t["ana_label"] == t["ana_label"]
                         and stab_t["ana_label"] not in ["Belirsiz Maç", "Tahmin Zayıf"]
                         and stab_t["ornek"] >= max(min_ornek, stab_t["onerilen_min_mac"])
                     ):
                         stable_hits.append(f"{stab_tol:.2f}")
+
+                # Seçili hassasiyetin ana tahmininden farklı olan en güçlü
+                # %60+ marketi, diğer hassasiyetlerde çıkmış olsa da koru.
+                farkli_adaylar = [x for x in alternatif_havuzu if x[1] != t.get("ana_label")]
+                if farkli_adaylar:
+                    alt_guven, alt_etiket, alt_tol = max(farkli_adaylar, key=lambda x: (x[0], -x[2]))
+                    t["alt_label"] = alt_etiket
+                    t["alt_p"] = alt_guven
+                    t["alt_hassasiyet"] = round(alt_tol, 2)
+                else:
+                    t["alt_label"] = ""
+                    t["alt_p"] = 0
+                    t["alt_hassasiyet"] = None
 
                 t["stability_tols"] = stable_hits
                 t["stability_count"] = len(stable_hits)
