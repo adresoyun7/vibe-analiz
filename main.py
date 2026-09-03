@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 57
+APP_SCHEMA_VERSION = 58
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -5658,8 +5658,6 @@ else:
                             kayit_hassasiyet_yazi = str(kayit_hassasiyet)
                         secim_satirlari = []
                         for secim in kayit.get("secimler", []):
-                            oran_txt = fmt_odd(secim.get("oran")) if secim.get("oran") is not None else "—"
-                            tahmini_txt = " · tahmini oran" if secim.get("oran_tahmini") else ""
                             destekler = secim.get("hassasiyetler", []) or []
                             destek_yazi = ", ".join(f"{float(x):.2f}" for x in destekler)
                             hassasiyet_alt = (
@@ -5670,7 +5668,7 @@ else:
                             secim_satirlari.append(
                                 f'<div style="padding:7px 0;border-top:1px solid rgba(255,255,255,.12)">'
                                 f'<b>{escape(str(secim.get("ev", "")))} – {escape(str(secim.get("dep", "")))}</b><br>'
-                                f'<span style="color:#dbeafe">{escape(str(secim.get("tahmin", "-")))} · Güven %{int(secim.get("guven", 0))} · Oran {escape(str(oran_txt))}{tahmini_txt}</span>'
+                                f'<span style="color:#dbeafe">{escape(str(secim.get("tahmin", "-")))} · Güven %{int(secim.get("guven", 0))}</span>'
                                 f'{hassasiyet_alt}'
                                 f'</div>'
                             )
@@ -5689,6 +5687,24 @@ else:
                                 """,
                                 unsafe_allow_html=True,
                             )
+                            for secim_no, secim in enumerate(kayit.get("secimler", [])):
+                                mac_etiketi = f"{secim.get('ev', '')} – {secim.get('dep', '')}"
+                                if st.button(
+                                    f"＋ Kendi Kuponuma · {mac_etiketi}",
+                                    key=f"auto_to_manual_{kayit.get('kupon_id')}_{secim_no}",
+                                    use_container_width=True,
+                                ):
+                                    secim_m = {
+                                        "ev": secim.get("ev", ""),
+                                        "dep": secim.get("dep", ""),
+                                        "lig": secim.get("lig", ""),
+                                        "zaman": parse_mac_datetime(secim.get("zaman_iso", "")),
+                                    }
+                                    manuel_kupona_ekle(
+                                        secim_m, {}, secim.get("tahmin", "-"), secim.get("guven", 0),
+                                        oran=None, oran_tahmini=False,
+                                    )
+                                    st.rerun()
                         with sil_col:
                             if st.button("🗑️", key=f"auto_coupon_delete_{kayit.get('kupon_id')}", use_container_width=True):
                                 yeni_gecmis = [x for x in kupon_gecmisi if x.get("kupon_id") != kayit.get("kupon_id")]
@@ -5713,8 +5729,6 @@ else:
                     mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
                     durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
                     mac_ad = f"{item.get('ev', '')} – {item.get('dep', '')}".strip(" –")
-                    oran_txt = fmt_odd(item.get("oran")) if item.get("oran") is not None else "—"
-                    tahmini_txt = " · tahmini oran" if item.get("oran_tahmini") else ""
                     kart_col, sil_col = st.columns([8, 2])
                     with kart_col:
                         st.markdown(
@@ -5724,7 +5738,7 @@ else:
                               <b style="color:#c4b5fd">{escape(mac_ad)}</b>
                               <div style="font-size:.79rem;color:#e2e8f0;margin-top:5px">
                                 {escape(str(item.get('tahmin','-')))} · Güven %{int(item.get('guven',0))}<br>
-                                Oran {escape(str(oran_txt))}{tahmini_txt} · {escape(durum)}
+                                {escape(durum)}
                               </div>
                             </div>
                             """,
