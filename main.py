@@ -5511,6 +5511,15 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         kazanan = int(bt["Tuttu"].sum())
         basari = kazanan / toplam * 100 if toplam else 0
 
+        # MS ROI: yalnızca gerçek 1/X/2 oranı ve hesaplanmış kârı olan MS seçimleri.
+        ms_bt = bt[bt["Kâr (100 TL)"].notna()].copy() if "Kâr (100 TL)" in bt.columns else pd.DataFrame()
+        if not ms_bt.empty:
+            net_kar = float(ms_bt["Kâr (100 TL)"].sum())
+            yatirilan = len(ms_bt) * 100.0
+            roi = (net_kar / yatirilan * 100.0) if yatirilan else 0.0
+        else:
+            roi = 0.0
+
         c1, c2, c3 = st.columns(3)
         c1.metric("Toplam tahmin", toplam)
         c2.metric("Başarı", f"%{basari:.1f}")
