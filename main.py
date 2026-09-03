@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 65
+APP_SCHEMA_VERSION = 66
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3257,6 +3257,28 @@ def _tahmin_kaydi_sirasi(kayit):
     return guven, ornek, -hassasiyet
 
 
+def _en_iyi_alternatif(ana_label, kayitlar):
+    """Aynı maçın tüm kayıtlarından ana marketten farklı en güçlü %60+ seçimi bulur."""
+    adaylar = []
+    for kayit in kayitlar or []:
+        for etiket_alani, guven_alani, oran_alani in [
+            ("tahmin", "guven", "oran"),
+            ("alternatif_tahmin", "alternatif_guven", "alternatif_oran"),
+        ]:
+            etiket = str(kayit.get(etiket_alani, "") or "").strip()
+            try:
+                guven = float(kayit.get(guven_alani, 0) or 0)
+            except Exception:
+                guven = 0.0
+            if not etiket or etiket == str(ana_label) or guven <= 60:
+                continue
+            adaylar.append((guven, etiket, kayit.get(oran_alani)))
+    if not adaylar:
+        return "", 0, None
+    guven, etiket, oran = max(adaylar, key=lambda x: x[0])
+    return etiket, int(round(guven)), oran
+
+
 def tahmin_kayitlarini_tekillestir(kayitlar):
     """Eski/yeni kayıtlarda aynı maçtan yalnızca en güçlü resmî tahmini tutar."""
     gruplar = {}
@@ -3271,6 +3293,10 @@ def tahmin_kayitlarini_tekillestir(kayitlar):
     sonuc = []
     for anahtar, grup in gruplar.items():
         secilen = dict(max(grup, key=_tahmin_kaydi_sirasi))
+        alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(secilen.get("tahmin"), grup)
+        secilen["alternatif_tahmin"] = alt_etiket
+        secilen["alternatif_guven"] = alt_guven
+        secilen["alternatif_oran"] = alt_oran
         # Aynı maçın eski satırlarından biri tamamlandıysa skoru resmî tahmine taşı.
         tamamlanan = next((x for x in grup if x.get("durum") == "Tamamlandı" and x.get("ev_gol") is not None and x.get("dep_gol") is not None), None)
         if tamamlanan:
@@ -3356,7 +3382,16 @@ def analiz_tahminlerini_kaydet(final):
         if eski.get("durum") == "Tamamlandı":
             continue
         if not eski or _tahmin_kaydi_sirasi(aday) > _tahmin_kaydi_sirasi(eski):
-            mevcut[mac_anahtari] = aday
+            secilen = aday
+        else:
+            secilen = dict(eski)
+        alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
+            secilen.get("tahmin"), [eski, aday]
+        )
+        secilen["alternatif_tahmin"] = alt_etiket
+        secilen["alternatif_guven"] = alt_guven
+        secilen["alternatif_oran"] = alt_oran
+        mevcut[mac_anahtari] = secilen
     return tahmin_logunu_yaz(tahmin_kayitlarini_tekillestir(list(mevcut.values())))
 
 
@@ -3386,13 +3421,20 @@ def tahmin_sonuclarini_guncelle(api_key):
     hata = None
     for lig in ligler:
         try:
-            r = requests.get(
-                f"https://api.the-odds-api.com/v4/sports/{lig}/scores/",
-                params={"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"},
-                timeout=15,
-            )
+            skor_url = f"https://api.the-odds-api.com/v4/sports/{lig}/scores/"
+            skor_param = {"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}
+            r = requests.get(skor_url, params=skor_param, timeout=15)
+            # Oturumda kalmış anahtar geçersizse ve uygulamada farklı bir secret
+            # anahtar varsa sonuç takibini onunla bir kez daha dene.
+            if r.status_code == 401:
+                yedek_key = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
+                if yedek_key and yedek_key != str(api_key).strip():
+                    skor_param["apiKey"] = yedek_key
+                    r = requests.get(skor_url, params=skor_param, timeout=15)
             if r.status_code == 200 and isinstance(r.json(), list):
                 skorlar.extend(r.json())
+            elif r.status_code == 401:
+                hata = "Odds API anahtarı geçersiz, süresi dolmuş veya aktif değil. Sol menüden anahtarı yeniden gir."
             else:
                 hata = f"Skor servisi HTTP {r.status_code} yanıtı verdi."
         except Exception as exc:
@@ -5398,7 +5440,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         )
 
         if not biten.empty:
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             for alan, baslik, kolon in [("tahmin", "Tahmin türü", c1), ("lig", "Lig", c2)]:
                 ozet = biten.groupby(alan, dropna=False).agg(Tahmin=("tuttu", "size"), Kazanan=("tuttu", "sum")).reset_index()
                 ozet["Başarı %"] = (ozet["Kazanan"] / ozet["Tahmin"] * 100).round(1)
@@ -5406,6 +5448,22 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 with kolon:
                     st.markdown(f"#### {baslik} performansı")
                     st.dataframe(ozet, use_container_width=True, hide_index=True)
+            with c3:
+                st.markdown("#### Alternatif performansı")
+                if alt_biten.empty:
+                    st.info("Henüz sonuçlanmış alternatif tahmin yok.")
+                else:
+                    alt_ozet = (
+                        alt_biten.groupby("alternatif_tahmin", dropna=False)
+                        .agg(Tahmin=("alternatif_tuttu", "size"), Kazanan=("alternatif_tuttu", "sum"))
+                        .reset_index()
+                        .rename(columns={"alternatif_tahmin": "Alternatif Tahmin"})
+                    )
+                    alt_ozet["Başarı %"] = (
+                        alt_ozet["Kazanan"] / alt_ozet["Tahmin"] * 100
+                    ).round(1)
+                    alt_ozet = alt_ozet.sort_values(["Başarı %", "Tahmin"], ascending=False)
+                    st.dataframe(alt_ozet, use_container_width=True, hide_index=True)
 
         if gorunen.empty:
             st.warning("Seçilen dönemde kayıt yok.")
@@ -5419,7 +5477,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 axis=1,
             )
             liste["Alternatif Durumu"] = liste.apply(
-                lambda x: "—" if not str(x.get("alternatif_tahmin", "")).strip()
+                lambda x: "—" if pd.isna(x.get("alternatif_tahmin")) or not str(x.get("alternatif_tahmin", "")).strip()
                 else "⏳ Bekliyor" if pd.isna(x.get("alternatif_tuttu"))
                 else "✅ Tuttu" if bool(x.get("alternatif_tuttu")) else "❌ Tutmadı",
                 axis=1,
@@ -5427,6 +5485,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None)]:
                 if kolon not in liste.columns:
                     liste[kolon] = varsayilan
+            liste["alternatif_tahmin"] = liste["alternatif_tahmin"].fillna("").replace("None", "")
             goster = liste[[
                 "Tarih", "lig", "Maç", "tahmin", "guven", "oran", "Sonuç", "Durum",
                 "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
@@ -5577,8 +5636,30 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                 else:
                     ic3.metric("En yüksek MS ROI hass.", "—")
 
-        st.markdown("### Market özeti")
-        st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
+        ozet_col, alt_ozet_col = st.columns(2)
+        with ozet_col:
+            st.markdown("### Ana market özeti")
+            st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
+        with alt_ozet_col:
+            st.markdown("### Alternatif market özeti")
+            if "Alternatif Tahmin" not in bt.columns:
+                st.info("Bu backtestte alternatif tahmin yok.")
+            else:
+                alt_bt = bt[
+                    bt["Alternatif Tahmin"].fillna("").astype(str).str.strip().ne("")
+                    & bt["Alt. Tuttu"].notna()
+                ].copy()
+                if alt_bt.empty:
+                    st.info("Bu backtestte sonuçlanmış alternatif tahmin yok.")
+                else:
+                    alt_ozet = (
+                        alt_bt.groupby("Alternatif Tahmin", dropna=False)
+                        .agg(Tahmin_Sayısı=("Alt. Tuttu", "size"), Kazanan=("Alt. Tuttu", "sum"), Ortalama_Güven=("Alt. Güven", "mean"))
+                        .reset_index()
+                    )
+                    alt_ozet["Başarı %"] = (alt_ozet["Kazanan"] / alt_ozet["Tahmin_Sayısı"] * 100).round(1)
+                    alt_ozet["Ortalama_Güven"] = alt_ozet["Ortalama_Güven"].round(1)
+                    st.dataframe(backtest_stili(alt_ozet), use_container_width=True, hide_index=True)
 
         st.markdown("### Test edilen maçlar")
         bt_goster = bt.sort_values("Tarih", ascending=False).copy()
