@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 74
+APP_SCHEMA_VERSION = 75
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -5919,6 +5919,46 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                 else:
                     ic3.metric("En yüksek MS ROI hass.", "—")
 
+        # Birleşik oynanabilirlik puanı gerçekten ayırt edici mi?
+        # Puan yükseldikçe başarının da yükselmesi beklenir.
+        if "Ana Puan" in bt.columns:
+            puan_analizi = bt.copy()
+            puan_analizi["Ana Puan"] = pd.to_numeric(puan_analizi["Ana Puan"], errors="coerce")
+            puan_analizi["Güven"] = pd.to_numeric(puan_analizi["Güven"], errors="coerce")
+            puan_analizi = puan_analizi.dropna(subset=["Ana Puan", "Tuttu"])
+            if not puan_analizi.empty:
+                puan_analizi["Puan Aralığı"] = pd.cut(
+                    puan_analizi["Ana Puan"],
+                    bins=[-float("inf"), 60, 70, 80, float("inf")],
+                    labels=["60 altı", "60–69", "70–79", "80+"],
+                    right=False,
+                )
+                puan_ozeti = (
+                    puan_analizi.groupby("Puan Aralığı", observed=False)
+                    .agg(
+                        Tahmin=("Tuttu", "size"),
+                        Kazanan=("Tuttu", "sum"),
+                        Ortalama_Güven=("Güven", "mean"),
+                    )
+                    .reset_index()
+                )
+                puan_ozeti = puan_ozeti[puan_ozeti["Tahmin"] > 0].copy()
+                puan_ozeti["Başarı %"] = (
+                    puan_ozeti["Kazanan"] / puan_ozeti["Tahmin"] * 100
+                ).round(1)
+                puan_ozeti["Ortalama Güven %"] = puan_ozeti["Ortalama_Güven"].round(1)
+                puan_ozeti = puan_ozeti.drop(columns=["Ortalama_Güven"])
+                puan_ozeti["Puan Aralığı"] = puan_ozeti["Puan Aralığı"].astype(str)
+                sira = {"80+": 0, "70–79": 1, "60–69": 2, "60 altı": 3}
+                puan_ozeti["_sira"] = puan_ozeti["Puan Aralığı"].map(sira)
+                puan_ozeti = puan_ozeti.sort_values("_sira").drop(columns=["_sira"])
+                st.markdown("### Puan aralığı performansı")
+                st.caption(
+                    "Birleşik puanın ayırt etme gücünü gösterir. "
+                    "Sistem sağlıklıysa yüksek puan grupları daha yüksek başarı üretmelidir."
+                )
+                st.dataframe(backtest_stili(puan_ozeti), use_container_width=True, hide_index=True)
+
         ozet_col, alt_ozet_col = st.columns(2)
         with ozet_col:
             st.markdown("### Ana market özeti")
@@ -5953,10 +5993,26 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         for bool_col in ["Tuttu", "Alt. Tuttu", "Formsuz Tuttu"]:
             if bool_col in bt_goster.columns:
                 bt_goster[bool_col] = bt_goster[bool_col].map({True: "✅ Evet", False: "❌ Hayır"}).fillna("—")
+        bt_goster = bt_goster.drop(columns=["Oran", "Kâr (100 TL)", "Formsuz Tuttu"], errors="ignore")
+        bt_goster = bt_goster.rename(columns={
+            "Sonuç": "Skor",
+            "Tahmin": "Ana Tahmin",
+            "Güven": "Ana Güven %",
+            "Örnek": "Ana Örnek",
+            "Tuttu": "Ana Durum",
+            "Alt. Güven": "Alt. Güven %",
+            "Alt. Tuttu": "Alt. Durum",
+        })
+        tablo_sirasi = [
+            "Tarih", "Lig", "Maç", "Skor",
+            "Ana Tahmin", "Ana Güven %", "Ana Örnek", "Ana Durum",
+            "Alternatif Tahmin", "Alt. Güven %", "Alt. Durum",
+        ]
+        bt_goster = bt_goster[[kolon for kolon in tablo_sirasi if kolon in bt_goster.columns]]
         st.dataframe(backtest_stili(bt_goster), use_container_width=True, hide_index=True)
         st.download_button(
             "CSV olarak indir",
-            data=bt.to_csv(index=False).encode("utf-8-sig"),
+            data=bt_goster.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"vibe_backtest_{backtest_sezonu}.csv",
             mime="text/csv",
             use_container_width=True,
