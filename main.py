@@ -5291,7 +5291,12 @@ st.markdown(
 # ==========================================================
 st.markdown("<br>", unsafe_allow_html=True)
 
-if not fl:
+# Top 50 Market, ana analiz slider sonucundan bağımsızdır.
+# Örneğin slider 0.00 iken ana analiz hiç eşleşme bulamasa bile
+# Top 50 kendi 0.00–0.10 taramasını kullanarak gösterilmeye devam eder.
+aktif_sayfa_modu = st.session_state.get("sayfa_modu", "Maç Analizi")
+
+if not fl and aktif_sayfa_modu != "Top 50 Market":
     st.markdown("""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
       <div style="font-size:2rem;margin-bottom:12px">⚡</div>
@@ -5309,7 +5314,6 @@ else:
     # GUNUN EN IYI 10 MACI - HASSASIYETTEN BAGIMSIZ
     # API kullanmaz; analizde cekilen maclar uzerinden 0.00 - 0.10 arasi en iyi toleransi secer.
     # ==========================================================
-    aktif_sayfa_modu = st.session_state.get("sayfa_modu", "Maç Analizi")
     gunun_top_liste = st.session_state.get("top50_list", [])
     top_baslik = "🔥 TOP 50 MARKET"
 
