@@ -2619,7 +2619,7 @@ def form_ozet_yazi(profil):
         f"({dep['gf']:.1f}/{dep['ga']:.1f} gol)"
     )
 
-def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=True, form_profili_override=None):
+def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=False, form_profili_override=None):
     # Form, oran eşleşmesi yapılmadan önceki tarihsel takım maçlarından hesaplanır.
     form_kaynagi = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
     b_df = form_kaynagi
@@ -3006,19 +3006,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         nedenler.append(f"Güçlü kombo bulundu: {combo_label} (%{combo_raw_p}, {combo_hit} maç).")
     if fake_drop:
         nedenler.append("Düşük örnek + yüksek güven görüldüğü için fake confidence freni uygulandı.")
-    kalibre_ana_p, kalibrasyon_kaynagi = (
-        canli_kalibre_guven(ana_label, ana_p)
-        if kalibrasyon_aktif and ana_label in ("MS 1", "Beraberlik", "MS 2")
-        else (float(ana_p), "Kalibrasyon kapalı")
-    )
-    ana_value_preview = value_edge_hesapla(m_row, ana_label, kalibre_ana_p)
-    if ana_value_preview.get("edge") is not None:
-        nedenler.append(
-            f"Kalibre Value/Edge: ham model %{ana_p} · kalibre %{kalibre_ana_p:.1f} · "
-            f"marjsız piyasa %{ana_value_preview['fair_prob']:.1f} · "
-            f"edge {ana_value_preview['edge']:+.1f} puan · EV {ana_value_preview['ev']:+.1f}% "
-            f"({kalibrasyon_kaynagi})."
-        )
+    kalibre_ana_p = float(ana_p)
+    kalibrasyon_kaynagi = "Kaldırıldı"
 
     if form_profili.get("aktif"):
         nedenler.append(
@@ -3074,7 +3063,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         score += 6
     score = round(score, 1)
 
-    ana_value = value_edge_hesapla(m_row, ana_label, kalibre_ana_p)
 
     return {
         "ana_label": ana_label,
@@ -3085,13 +3073,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "odds_h": round(oran_ev, 3),
         "odds_d": round(oran_ber, 3),
         "odds_a": round(oran_dep, 3),
-        "kalibre_ana_p": round(float(kalibre_ana_p), 1),
-        "kalibrasyon_kaynagi": kalibrasyon_kaynagi,
-        "value_edge": ana_value.get("edge"),
-        "value_ev": ana_value.get("ev"),
-        "value_fair_prob": ana_value.get("fair_prob"),
-        "value_raw_implied": ana_value.get("raw_implied"),
-        "value_label": ana_value.get("value_label", "N/A"),
         "alt_label": alt_label,
         "alt_p": alt_p,
         "kg_label": kg_label,
@@ -3279,37 +3260,7 @@ def top10_market_adaylari(t):
             if a["label"] == label and a["tip"] == tip:
                 if guven + bonus > a["guven"] + a["bonus"]:
                     a.update({"guven": guven, "oran": oran, "bonus": bonus})
-                    if tip == "MS" and oran is not None:
-                        kal_p, kal_src = canli_kalibre_guven(label, guven)
-                        vm = value_edge_hesapla(
-                            {"h": t.get("odds_h"), "b": t.get("odds_d"), "a": t.get("odds_a")},
-                            label,
-                            kal_p,
-                        )
-                        vm["kalibre_p"] = round(float(kal_p), 1)
-                        vm["kalibrasyon_kaynagi"] = kal_src
-                        a.update({
-                            "value_edge": vm.get("edge"),
-                            "value_ev": vm.get("ev"),
-                            "value_fair_prob": vm.get("fair_prob"),
-                            "value_label": vm.get("value_label", "N/A"),
-                        })
                 return
-
-        # Value sadece gerçek 1-X-2 bookmaker oranı bulunan MS marketlerinde hesaplanır.
-        value_m = {
-            "edge": None, "ev": None, "fair_prob": None,
-            "raw_implied": None, "value_label": "N/A"
-        }
-        if tip == "MS" and oran is not None:
-            kal_p, kal_src = canli_kalibre_guven(label, guven)
-            value_m = value_edge_hesapla(
-                {"h": t.get("odds_h"), "b": t.get("odds_d"), "a": t.get("odds_a")},
-                label,
-                kal_p,
-            )
-            value_m["kalibre_p"] = round(float(kal_p), 1)
-            value_m["kalibrasyon_kaynagi"] = kal_src
 
         adaylar.append({
             "label": label,
@@ -3317,10 +3268,6 @@ def top10_market_adaylari(t):
             "tip": tip,
             "oran": oran,
             "bonus": bonus,
-            "value_edge": value_m.get("edge"),
-            "value_ev": value_m.get("ev"),
-            "value_fair_prob": value_m.get("fair_prob"),
-            "value_label": value_m.get("value_label", "N/A"),
         })
 
     # Ana tahmin hangi market olursa olsun havuza girsin.
@@ -3714,13 +3661,11 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
 
                 # Tek toleranstaki ham skor.
                 # Kalibre Value/Edge bu aşamada yalnızca ölçülür; Top 50 skorunu etkilemez.
-                value_bonus = value_skor_bonusu(mk.get("value_edge"))
                 tekil_skor = (
                     guven * 1.00
                     + playable * 0.22
                     + sample_bonus
                     + float(mk.get("bonus", 0) or 0)
-                    + value_bonus
                     + dusuk_tol_bonus
                     - tol_ceza
                     - risk_ceza
@@ -3741,10 +3686,6 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                 t_secili["top10_market_guven"] = guven
                 t_secili["top10_market_oran"] = mk.get("oran")
                 t_secili["top10_market_oran_tahmini"] = bool("+" in label and mk.get("oran") is not None)
-                t_secili["top10_value_edge"] = mk.get("value_edge")
-                t_secili["top10_value_ev"] = mk.get("value_ev")
-                t_secili["top10_value_fair_prob"] = mk.get("value_fair_prob")
-                t_secili["top10_value_label"] = mk.get("value_label", "N/A")
 
                 # Detay ekranı ve kartlar seçilen marketi ana tahmin gibi gösterebilsin.
                 t_secili["ana_label"] = label
@@ -3945,7 +3886,6 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
     test = test.sort_values("Date").tail(int(max_test))
 
     sonuclar = []
-    kalibrasyon_gecmisi = []
     for _, row in test.iterrows():
         train = veri[veri["Date"] < row["Date"]]
         if sadece_ayni_lig:
@@ -3961,7 +3901,6 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         # Aynı maç için hem güncel-formlu hem formsuz model çalıştırılır.
         # İkisi de yalnızca row["Date"] öncesindeki train verisini görür.
         t, benzerler = hesapla(train, hedef, tolerans, form_aktif=False, kalibrasyon_aktif=False)
-        t_formsuz, _ = hesapla(train, hedef, tolerans, form_aktif=True, kalibrasyon_aktif=False)
         if t is None or len(benzerler) < int(min_ornek):
             continue
 
@@ -3976,24 +3915,9 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             continue
 
         oran = market_label_to_odd(hedef, label)
-
-        # Kalibre Edge: sadece bu maçtan ÖNCEKİ backtest tahminleri kullanılır.
-        kalibre_p, kal_kaynak, kal_n = rolling_kalibre_olasilik(
-            kalibrasyon_gecmisi, label, t.get("ana_p", 0)
-        )
-        value_m = value_edge_hesapla(hedef, label, kalibre_p)
         kar = None
         if oran is not None:
             kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
-
-        formsuz_guven = int(t_formsuz.get("ana_p", 0) or 0) if t_formsuz else 0
-        formsuz_gecerli = bool(t_formsuz and formsuz_guven > 60)
-        formsuz_label = t_formsuz.get("ana_label", "") if formsuz_gecerli else ""
-        formsuz_tuttu = tahmin_tuttu_mu(formsuz_label, row) if formsuz_label else None
-        formsuz_oran = market_label_to_odd(hedef, formsuz_label) if formsuz_label else None
-        formsuz_kar = None
-        if formsuz_oran is not None and formsuz_tuttu is not None:
-            formsuz_kar = round((float(formsuz_oran) - 1) * 100 if formsuz_tuttu else -100, 2)
 
         sonuc_kaydi = {
             "Tarih": row["Date"].date(),
@@ -4006,196 +3930,56 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Tuttu": bool(tuttu),
             "Oran": round(float(oran), 2) if oran is not None else None,
             "Kâr (100 TL)": kar,
-            "Piyasa Fair %": value_m.get("fair_prob"),
-            "Kalibre Model %": round(float(kalibre_p), 1) if kalibre_p is not None else None,
-            "Kalibrasyon Kaynağı": kal_kaynak,
-            "Kalibrasyon N": int(kal_n),
-            "Edge (puan)": value_m.get("edge"),
-            "Model EV %": value_m.get("ev"),
-            "Value Durumu": value_m.get("value_label", "N/A"),
-            "Form": t.get("form_text", "—"),
-            "Form Çarpanı": t.get("form_factor", 1.0),
-            "Formsuz Tahmin": formsuz_label or "—",
-            "Formsuz Güven": formsuz_guven if formsuz_gecerli else None,
-            "Formsuz Tuttu": bool(formsuz_tuttu) if formsuz_tuttu is not None else None,
-            "Formsuz Oran": round(float(formsuz_oran), 2) if formsuz_oran is not None else None,
-            "Formsuz Kâr (100 TL)": formsuz_kar,
         }
         sonuclar.append(sonuc_kaydi)
-        kalibrasyon_gecmisi.append({
-            "Tahmin": label,
-            "Güven": int(t.get("ana_p", 0)),
-            "Güven Bandı": guven_bandi(t.get("ana_p", 0)),
-            "Tuttu": bool(tuttu),
-        })
     return pd.DataFrame(sonuclar)
 
 
 
 def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min_ornek,
                                     sadece_ayni_lig=False, lig_kodlari=None, max_test=500):
-    """0.00–0.10 arasındaki 11 toleransı TEK kronolojik geçişte test eder.
-
-    Eski sürüm her tolerans için bütün sezon backtestini baştan çalıştırıyordu.
-    Bu sürüm test maçını ve train kümesini bir kez hazırlar; takım formunu da maç
-    başına bir kez hesaplar ve aynı tarih noktasında 11 toleransı birlikte değerlendirir.
+    """0.00–0.10 arasındaki 11 toleransı tek kronolojik geçişte test eder.
+    Form ve Value/Edge kullanılmaz.
     """
-    if gecmis_df is None or gecmis_df.empty:
-        return pd.DataFrame(), pd.DataFrame()
-
     toleranslar = [round(i / 100.0, 2) for i in range(11)]
-    secili_tol = round(float(secili_tolerans), 2)
-
-    veri = gecmis_df.copy()
-    veri["Date"] = pd.to_datetime(veri["Date"], errors="coerce")
-    veri = veri.dropna(subset=["Date", "FTHG", "FTAG", "FTR"]).sort_values("Date")
-
-    test = veri[veri["season_code"].astype(str) == str(test_sezonu)].copy()
-    if lig_kodlari:
-        test = test[test["league_code"].isin(set(lig_kodlari))]
-    test = test.sort_values("Date").tail(int(max_test))
-
-    # Her tolerans kendi tahmin geçmişine ve rolling kalibrasyonuna sahip olmalı.
-    sonuclar = {tol: [] for tol in toleranslar}
-    kalibrasyon = {tol: [] for tol in toleranslar}
-
-    # Pandas boolean filtreyi 11 kez tekrarlamamak için tarih dizisini bir kez hazırla.
-    veri_tarih = veri["Date"].to_numpy()
-
-    for _, row in test.iterrows():
-        tarih = row["Date"]
-        # Veri zaten tarih sıralı: searchsorted ile geçmiş sınırını bul.
-        idx = veri["Date"].searchsorted(tarih, side="left")
-        train = veri.iloc[:idx]
-        if sadece_ayni_lig:
-            train = train[train["league_code"] == row["league_code"]]
-        if train.empty:
-            continue
-
-        hedef = {
-            "h": row["B365H"], "b": row["B365D"], "a": row["B365A"],
-            "ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
-            "zaman": tarih,
-        }
-
-        # Form toleranstan bağımsız: bu maç için yalnızca BİR KEZ hesaplanır.
-        ortak_form = mac_form_profili(train, hedef, limit=5)
-
-        for tol in toleranslar:
-            t, benzerler = hesapla(
-                train, hedef, tol,
-                form_aktif=True,
-                kalibrasyon_aktif=False,
-                form_profili_override=ortak_form,
-            )
-            if t is None or len(benzerler) < int(min_ornek):
-                continue
-            if int(t.get("ana_p", 0) or 0) <= 60:
-                continue
-
-            # Formsuz model aynı toleransta hesaplanır; form taraması tekrar yapılmaz.
-            t_formsuz, _ = hesapla(
-                train, hedef, tol,
-                form_aktif=False,
-                kalibrasyon_aktif=False,
-            )
-
-            label = t.get("ana_label", "")
-            tuttu = tahmin_tuttu_mu(label, row)
-            if tuttu is None:
-                continue
-
-            oran = market_label_to_odd(hedef, label)
-            kalibre_p, kal_kaynak, kal_n = rolling_kalibre_olasilik(
-                kalibrasyon[tol], label, t.get("ana_p", 0)
-            )
-            value_m = value_edge_hesapla(hedef, label, kalibre_p)
-
-            kar = None
-            if oran is not None:
-                kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
-
-            formsuz_guven = int(t_formsuz.get("ana_p", 0) or 0) if t_formsuz else 0
-            formsuz_gecerli = bool(t_formsuz and formsuz_guven > 60)
-            formsuz_label = t_formsuz.get("ana_label", "") if formsuz_gecerli else ""
-            formsuz_tuttu = tahmin_tuttu_mu(formsuz_label, row) if formsuz_label else None
-            formsuz_oran = market_label_to_odd(hedef, formsuz_label) if formsuz_label else None
-            formsuz_kar = None
-            if formsuz_oran is not None and formsuz_tuttu is not None:
-                formsuz_kar = round((float(formsuz_oran) - 1) * 100 if formsuz_tuttu else -100, 2)
-
-            kayit = {
-                "Tarih": tarih.date(),
-                "Lig": row.get("league_code", "-"),
-                "Maç": f"{row.get('HomeTeam', '')} - {row.get('AwayTeam', '')}",
-                "Tahmin": label,
-                "Güven": int(t.get("ana_p", 0)),
-                "Örnek": int(t.get("ornek", 0)),
-                "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
-                "Tuttu": bool(tuttu),
-                "Oran": round(float(oran), 2) if oran is not None else None,
-                "Kâr (100 TL)": kar,
-                "Piyasa Fair %": value_m.get("fair_prob"),
-                "Kalibre Model %": round(float(kalibre_p), 1) if kalibre_p is not None else None,
-                "Kalibrasyon Kaynağı": kal_kaynak,
-                "Kalibrasyon N": int(kal_n),
-                "Edge (puan)": value_m.get("edge"),
-                "Model EV %": value_m.get("ev"),
-                "Value Durumu": value_m.get("value_label", "N/A"),
-                "Form": t.get("form_text", "—"),
-                "Form Çarpanı": t.get("form_factor", 1.0),
-                "Formsuz Tahmin": formsuz_label or "—",
-                "Formsuz Güven": formsuz_guven if formsuz_gecerli else None,
-                "Formsuz Tuttu": bool(formsuz_tuttu) if formsuz_tuttu is not None else None,
-                "Formsuz Oran": round(float(formsuz_oran), 2) if formsuz_oran is not None else None,
-                "Formsuz Kâr (100 TL)": formsuz_kar,
-            }
-            sonuclar[tol].append(kayit)
-            kalibrasyon[tol].append({
-                "Tahmin": label,
-                "Güven": int(t.get("ana_p", 0)),
-                "Güven Bandı": guven_bandi(t.get("ana_p", 0)),
-                "Tuttu": bool(tuttu),
-            })
-
+    # Her toleransı aynı tarih sıralı backtest mantığıyla çalıştır.
+    # Özet sade tutulur; hiçbir hassasiyet otomatik sabitlenmez.
     satirlar = []
+    secili_df = None
     for tol in toleranslar:
-        bt = pd.DataFrame(sonuclar[tol])
-        if bt.empty:
+        bt = backtest_calistir(
+            gecmis_df, test_sezonu, tol, min_ornek,
+            sadece_ayni_lig=sadece_ayni_lig,
+            lig_kodlari=lig_kodlari,
+            max_test=max_test,
+        )
+        if abs(float(tol) - float(secili_tolerans)) < 1e-9:
+            secili_df = bt.copy()
+        if bt is None or bt.empty:
             satirlar.append({
                 "Hassasiyet": f"{tol:.2f}", "Tahmin": 0,
-                "Formsuz Başarı %": None, "Formlu Başarı %": None,
-                "Form Etkisi": None, "MS Tahmin": 0, "MS ROI %": None,
-                "Pozitif Edge MS": 0, "Pozitif Edge ROI %": None,
+                "Başarı %": None, "MS Tahmin": 0, "MS ROI %": None,
             })
             continue
-
         toplam = len(bt)
         basari = float(bt["Tuttu"].astype(bool).mean() * 100.0)
-        fz = bt["Formsuz Tuttu"].dropna() if "Formsuz Tuttu" in bt.columns else pd.Series(dtype=bool)
-        fz_basari = float(fz.astype(bool).mean() * 100.0) if len(fz) else None
-        katk = basari - fz_basari if fz_basari is not None else None
-
         ms = bt[bt["Kâr (100 TL)"].notna()].copy()
         ms_roi = float(ms["Kâr (100 TL)"].sum()) / (len(ms) * 100.0) * 100.0 if len(ms) else None
-        edge_ms = ms[ms["Edge (puan)"].notna()].copy() if "Edge (puan)" in ms.columns else pd.DataFrame()
-        poz = edge_ms[edge_ms["Edge (puan)"] > 0].copy() if not edge_ms.empty else pd.DataFrame()
-        poz_roi = float(poz["Kâr (100 TL)"].sum()) / (len(poz) * 100.0) * 100.0 if len(poz) else None
-
         satirlar.append({
             "Hassasiyet": f"{tol:.2f}",
             "Tahmin": int(toplam),
-            "Formsuz Başarı %": round(basari, 1),
-            "Formlu Başarı %": round(fz_basari, 1) if fz_basari is not None else None,
-            "Form Etkisi": round(-katk, 1) if katk is not None else None,
+            "Başarı %": round(basari, 1),
             "MS Tahmin": int(len(ms)),
             "MS ROI %": round(ms_roi, 1) if ms_roi is not None else None,
-            "Pozitif Edge MS": int(len(poz)),
-            "Pozitif Edge ROI %": round(poz_roi, 1) if poz_roi is not None else None,
         })
-
-    secili_df = pd.DataFrame(sonuclar.get(secili_tol, []))
+    if secili_df is None:
+        secili_df = backtest_calistir(
+            gecmis_df, test_sezonu, secili_tolerans, min_ornek,
+            sadece_ayni_lig=sadece_ayni_lig,
+            lig_kodlari=lig_kodlari, max_test=max_test,
+        )
     return pd.DataFrame(satirlar), secili_df
+
 
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
@@ -4363,7 +4147,6 @@ for key, default in [
     ("last_bulten_df", None),
     ("backtest_df", None),
     ("backtest_11_df", None),
-    ("value_calibration_map", {}),
     ("gecmis_inceleme_list", None),
     ("yuksek_oran_list", None),
 ]:
@@ -5647,7 +5430,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
 
 
 if backtest_btn:
-    with st.spinner("⚡ 11 hassasiyet tek geçişte test ediliyor (0.00–0.10)..."):
+    with st.spinner("🧪 11 hassasiyet test ediliyor (0.00–0.10)..."):
         bt_sezonlar = list(dict.fromkeys(list(yillar) + [backtest_sezonu]))
         bt_gecmis = futbol_veri_motoru(tuple(bt_sezonlar))
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
@@ -5662,9 +5445,6 @@ if backtest_btn:
         )
         st.session_state.backtest_11_df = bt11
         st.session_state.backtest_df = bt_secili
-        # Gelecek maçlarda kullanılacak kalibrasyon seçili hassasiyetin
-        # tamamlanmış backtestinden öğrenilir.
-        st.session_state.value_calibration_map = kalibrasyon_haritasi_uret(bt_secili)
         st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Backtest':
@@ -5699,9 +5479,7 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
           <div class="backtest-desc-fix" style="font-size:.90rem;margin-top:7px;line-height:1.5;">
             Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
             Backtest yalnızca güveni %60'ın üstünde olan (%61+) tahminleri değerlendirir.
-            Aynı maç ayrıca formsuz modelle de test edilerek form katkısı doğrudan karşılaştırılır; formsuz kıyas da %61+ eşiğini kullanır.
-            MS 1/X/2 Value/Edge hesabında ham güven değil, yalnızca önceki test sonuçlarından öğrenilen kalibre olasılık kullanılır.
-            BACKTESTİ BAŞLAT 0.00–0.10 arasındaki 11 hassasiyeti tek kronolojik geçişte test eder; takım formu maç başına bir kez hesaplanır.
+            BACKTESTİ BAŞLAT 0.00–0.10 arasındaki 11 hassasiyeti test eder. Form ve Value/Edge kullanılmaz.
           </div>
           <div class="backtest-season-fix" style="font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
         </div>
@@ -5733,29 +5511,11 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         kazanan = int(bt["Tuttu"].sum())
         basari = kazanan / toplam * 100 if toplam else 0
 
-        formsuz_gecerli = bt["Formsuz Tuttu"].dropna() if "Formsuz Tuttu" in bt.columns else pd.Series(dtype=bool)
-        formsuz_toplam = len(formsuz_gecerli)
-        formsuz_kazanan = int(formsuz_gecerli.astype(bool).sum()) if formsuz_toplam else 0
-        formsuz_basari = formsuz_kazanan / formsuz_toplam * 100 if formsuz_toplam else 0.0
-        basari_farki = basari - formsuz_basari if formsuz_toplam else 0.0
-
-        ms_bt = bt[bt["Kâr (100 TL)"].notna()].copy()
-        net_kar = float(ms_bt["Kâr (100 TL)"].sum()) if not ms_bt.empty else 0.0
-        yatirilan = len(ms_bt) * 100
-        roi = net_kar / yatirilan * 100 if yatirilan else 0.0
-
-        formsuz_ms = bt[bt["Formsuz Kâr (100 TL)"].notna()].copy() if "Formsuz Kâr (100 TL)" in bt.columns else pd.DataFrame()
-        formsuz_net = float(formsuz_ms["Formsuz Kâr (100 TL)"].sum()) if not formsuz_ms.empty else 0.0
-        formsuz_yatirilan = len(formsuz_ms) * 100
-        formsuz_roi = formsuz_net / formsuz_yatirilan * 100 if formsuz_yatirilan else 0.0
-
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Toplam tahmin", toplam)
-        c2.metric("Formsuz başarı", f"%{basari:.1f}")
-        c3.metric("Formlu başarı", f"%{formsuz_basari:.1f}")
-        c4.metric("Form etkisi", f"{-basari_farki:+.1f} puan", help="Formlu başarı − formsuz başarı")
-        c5.metric("MS ROI", f"%{roi:.1f}", delta=f"{roi - formsuz_roi:+.1f} puan vs formsuz",
-                  help=f"Formlu MS ROI %{roi:.1f} · Formsuz MS ROI %{formsuz_roi:.1f}. Yalnızca B365 1/X/2 oranı bulunan seçimler.")
+        c2.metric("Başarı", f"%{basari:.1f}")
+        c3.metric("MS ROI", f"%{roi:.1f}",
+                  help="Yalnızca B365 1/X/2 oranı bulunan seçimler.")
 
         ozet = (
             bt.groupby("Tahmin", dropna=False)
@@ -5775,7 +5535,6 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         bt11 = st.session_state.get("backtest_11_df")
         if bt11 is not None and not bt11.empty:
             st.markdown("### 11 Hassasiyet Otomatik Backtest")
-            st.info("🎯 Ana model şu an formsuz çalışır. 0.03 hassasiyet referans adayımızdır; 11'li backtest sonuçlarıyla izlenmeye devam eder.")
             st.caption(
                 "Aynı sezon ve aynı filtreler 0.00–0.10 arasında 0.01 adımlarla test edilir. "
                 "Tahmin sayısını da dikkate al; yalnızca en yüksek başarı yüzdesine bakarak hassasiyet seçme."
@@ -5786,11 +5545,11 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
             # En iyi satırları sadece bilgi amaçlı göster; otomatik seçim yapılmaz.
             gec = bt11_goster[bt11_goster["Tahmin"] > 0].copy()
             if not gec.empty:
-                en_basari = gec.loc[gec["Formsuz Başarı %"].astype(float).idxmax()]
+                en_basari = gec.loc[gec["Başarı %"].astype(float).idxmax()]
                 roi_gec = gec[gec["MS ROI %"].notna()].copy()
                 ic1, ic2, ic3 = st.columns(3)
                 ic1.metric("En yüksek başarı hass.", str(en_basari["Hassasiyet"]))
-                ic2.metric("En yüksek başarı", f"%{float(en_basari['Formsuz Başarı %']):.1f}")
+                ic2.metric("En yüksek başarı", f"%{float(en_basari['Başarı %']):.1f}")
                 if not roi_gec.empty:
                     en_roi = roi_gec.loc[roi_gec["MS ROI %"].astype(float).idxmax()]
                     ic3.metric("En yüksek MS ROI hass.", f"{en_roi['Hassasiyet']} · %{float(en_roi['MS ROI %']):.1f}")
@@ -5799,61 +5558,6 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
 
         st.markdown("### Market özeti")
         st.dataframe(backtest_stili(ozet), use_container_width=True, hide_index=True)
-
-        # Value/Edge testi yalnızca gerçek 1-X-2 oranı bulunan MS seçimlerinde yapılır.
-        value_bt = bt[bt["Edge (puan)"].notna()].copy() if "Edge (puan)" in bt.columns else pd.DataFrame()
-        if not value_bt.empty:
-            value_bt["Edge Grubu"] = value_bt["Edge (puan)"].apply(
-                lambda x: "✅ Pozitif edge" if float(x) > 0 else "❌ Sıfır / negatif edge"
-            )
-            value_ozet = (
-                value_bt.groupby("Edge Grubu", dropna=False)
-                .agg(
-                    Tahmin=("Tuttu", "size"),
-                    Kazanan=("Tuttu", "sum"),
-                    Ortalama_Güven=("Güven", "mean"),
-                    Ortalama_Edge=("Edge (puan)", "mean"),
-                    Net_Kar=("Kâr (100 TL)", "sum"),
-                )
-                .reset_index()
-            )
-            value_ozet["Başarı %"] = (value_ozet["Kazanan"] / value_ozet["Tahmin"] * 100).round(1)
-            value_ozet["ROI %"] = (value_ozet["Net_Kar"] / (value_ozet["Tahmin"] * 100) * 100).round(1)
-            value_ozet["Ortalama_Güven"] = value_ozet["Ortalama_Güven"].round(1)
-            value_ozet["Ortalama_Edge"] = value_ozet["Ortalama_Edge"].round(1)
-            value_ozet = value_ozet[
-                ["Edge Grubu", "Tahmin", "Kazanan", "Başarı %", "Ortalama_Güven", "Ortalama_Edge", "ROI %"]
-            ]
-
-            poz = value_bt[value_bt["Edge (puan)"] > 0]
-            neg = value_bt[value_bt["Edge (puan)"] <= 0]
-            poz_roi = float(poz["Kâr (100 TL)"].sum()) / (len(poz) * 100) * 100 if len(poz) else 0.0
-            neg_roi = float(neg["Kâr (100 TL)"].sum()) / (len(neg) * 100) * 100 if len(neg) else 0.0
-
-            st.markdown("### Kalibre Value / Edge özeti")
-            edge_bantlari = []
-            if not value_bt.empty:
-                for esik in [0, 2, 5, 10]:
-                    g = value_bt[value_bt["Edge (puan)"] > esik].copy()
-                    if len(g):
-                        roi_g = float(g["Kâr (100 TL)"].sum()) / (len(g) * 100) * 100
-                        bas_g = float(g["Tuttu"].astype(bool).mean() * 100)
-                        edge_bantlari.append({
-                            "Minimum Edge": f">{esik} puan",
-                            "Tahmin": len(g),
-                            "Başarı %": round(bas_g, 1),
-                            "ROI %": round(roi_g, 1),
-                            "Ort. Edge": round(float(g["Edge (puan)"].mean()), 1),
-                        })
-                if edge_bantlari:
-                    st.caption("0.03 dahil seçili hassasiyette hangi minimum kalibre-edge eşiğinin gerçekten işe yaradığını burada karşılaştır.")
-                    st.dataframe(backtest_stili(pd.DataFrame(edge_bantlari)), use_container_width=True, hide_index=True)
-            vc1, vc2, vc3 = st.columns(3)
-            vc1.metric("Pozitif edge MS", len(poz))
-            vc2.metric("Pozitif edge ROI", f"%{poz_roi:.1f}")
-            vc3.metric("Edge ROI farkı", f"{poz_roi - neg_roi:+.1f} puan", help=f"Pozitif edge ROI %{poz_roi:.1f} · sıfır/negatif edge ROI %{neg_roi:.1f}")
-            st.dataframe(backtest_stili(value_ozet), use_container_width=True, hide_index=True)
-            st.caption("Kalibre Edge = geçmişte yalnızca daha önce oluşmuş tahminlerle kalibre edilen model olasılığı − bookmaker marjı temizlenmiş 1-X-2 piyasa olasılığı. Tahminleri elemez ve şu aşamada Top 50 sıralamasını etkilemez.")
 
         st.markdown("### Test edilen maçlar")
         bt_goster = bt.sort_values("Tarih", ascending=False).copy()
@@ -6383,7 +6087,7 @@ def detay_gecmis_sidebar():
 
 def detay_popup_icerigi():
     panel_acik = bool(st.session_state.get("detay_gecmis_acik", False))
-    dugme_metni = "✕ Form & Geçmişi Kapat" if panel_acik else "📈 Form & Geçmişi Aç"
+    dugme_metni = "✕ Geçmişi Kapat" if panel_acik else "📈 Geçmişi Aç"
 
     _, dugme_col = st.columns([3.2, 1.3], gap="small")
     with dugme_col:
@@ -6497,16 +6201,7 @@ else:
                     hassasiyet_text = f"{en_iyi_tol:.2f}"
                 hassasiyet_sayisi = int(item.get("top10_hassasiyet_sayisi", t.get("top10_hassasiyet_sayisi", len(hassasiyetler))) or 0)
                 stabilite_skoru = item.get("top10_stabilite_skoru", t.get("top10_stabilite_skoru", top10_skor))
-                edge_val = t.get("top10_value_edge")
-                edge_ev = t.get("top10_value_ev")
-                edge_lbl = t.get("top10_value_label", "N/A")
-                if edge_val is not None:
-                    edge_html = (
-                        f' · Value: <b>{escape(str(edge_lbl))}</b> '
-                        f'(<b>{float(edge_val):+.1f}</b> puan edge, EV <b>{float(edge_ev):+.1f}%</b>)'
-                    )
-                else:
-                    edge_html = ""
+                edge_html = ""
 
                 kart_col, btn_col = st.columns([7, 1])
                 with kart_col:
@@ -6532,7 +6227,7 @@ else:
                             <div style="margin-top:7px;font-size:0.78rem;color:#9db2d1;">
                                 Çıktığı hassasiyetler: <b style="color:#facc15;">{escape(str(hassasiyet_text))}</b> ·
                                 Güven hassasiyet skoru: <b>{stabilite_skoru}</b> ·
-                                Stabilite: <b>{hassasiyet_sayisi}/11</b>{edge_html}
+                                Stabilite: <b>{hassasiyet_sayisi}/11</b>
                             </div>
                         </div>
                         """,
@@ -6616,17 +6311,7 @@ else:
             stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
-        if t.get("value_edge") is not None:
-            value_html = (
-                f'<div style="margin-top:6px;font-size:0.72rem;color:#2563eb">'
-                f'💎 {escape(str(t.get("value_label", "Value")))} · '
-                f'Kalibre <b>%{float(t.get("kalibre_ana_p", t.get("ana_p", 0))):.1f}</b> · '
-                f'Edge <b>{float(t.get("value_edge")):+.1f}</b> puan · '
-                f'EV <b>{float(t.get("value_ev")):+.1f}%</b> · '
-                f'Piyasa <b>%{float(t.get("value_fair_prob")):.1f}</b></div>'
-            )
-        else:
-            value_html = ''
+        value_html = ''
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
@@ -6674,7 +6359,6 @@ else:
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
-                {value_html}
                 {stability_html}
               </div>
             </div>
