@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 51
+APP_SCHEMA_VERSION = 54
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1704,12 +1704,12 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
     ]
 
 
-def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
+def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=None):
     """Hassasiyet uzlaşması bulunan analizlerden kupon taslağı üretir."""
     ayarlar = {
-        "Temkinli": {"min_guven": 62, "taban": 2, "maks": 4, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
-        "Dengeli": {"min_guven": 60, "taban": 3, "maks": 6, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
-        "Yüksek Oran": {"min_guven": 58, "taban": 3, "maks": 5, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.70},
+        "Temkinli": {"min_guven": 66, "taban": 2, "maks": 3, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
+        "Dengeli": {"min_guven": 58, "taban": 3, "maks": 6, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
+        "Yüksek Oran": {"min_guven": 55, "taban": 2, "maks": 5, "min_stabil": 1, "ek_stabil": 2, "min_oran": 0.0},
     }
     cfg = ayarlar.get(profil, ayarlar["Dengeli"])
     simdi = datetime.now()
@@ -1733,7 +1733,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
         secim_label = str(t.get("ana_label", "-"))
         secim_guven = guven
         secim_oran = oran_sayi
-        oran_tahmini = False
+        oran_tahmini = bool(t.get("top10_market_oran_tahmini", False))
         combo_label = str(t.get("combo_label", "") or "")
         combo_p = int(t.get("combo_p", 0) or 0)
         combo_hit = int(t.get("combo_hit", 0) or 0)
@@ -1758,13 +1758,15 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
             secim_oran = kombo_tahmini_oran(combo_label, oran_sayi)
             oran_tahmini = True
 
+        kombinasyon_secimi = "+" in secim_label
+
         if guven < cfg["min_guven"]:
             continue
         if ornek < max(5, dinamik_min_mac(tolerans)):
             continue
         if stabil < cfg["min_stabil"]:
             continue
-        if profil == "Yüksek Oran" and (secim_oran is None or secim_oran < cfg["min_oran"]):
+        if profil == "Yüksek Oran" and not kombinasyon_secimi:
             continue
 
         kalite = (
@@ -1785,7 +1787,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
             "m": m, "t": t, "kalite": kalite, "oran": secim_oran,
             "secim_label": secim_label, "secim_guven": secim_guven,
             "oran_tahmini": oran_tahmini,
-            "combo_secim": combo_secildi,
+            "combo_secim": kombinasyon_secimi,
             "ekstra_uygun": ekstra_uygun,
         })
 
@@ -1801,6 +1803,16 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
         )
     else:
         adaylar.sort(key=lambda x: (x["kalite"], x["secim_guven"]), reverse=True)
+
+    # Önceki profil ile birebir aynı kuponun oluşmasını azalt: farklı maç/market
+    # adaylarını öne al, ancak aday sayısı azsa kuponu tamamen boş bırakma.
+    onceliksiz_secimler = set(onceliksiz_secimler or [])
+    if onceliksiz_secimler:
+        adaylar.sort(
+            key=lambda x: (
+                (mac_key(x["m"]), x["secim_label"]) in onceliksiz_secimler,
+            )
+        )
     secilenler, maclar = [], set()
     for aday in adaylar:
         m, t = aday["m"], aday["t"]
@@ -1832,7 +1844,8 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
             break
 
     # Kupon sayılabilmesi için en az iki bağımsız seçim gerekir.
-    return secilenler if len(secilenler) >= 2 else []
+    minimum_secim = 1 if profil == "Yüksek Oran" else 2
+    return secilenler if len(secilenler) >= minimum_secim else []
 
 
 KUPON_GECMISI_PATH = Path(__file__).with_name("vibe_kupon_gecmisi.json")
@@ -2799,7 +2812,8 @@ def kupon_marketi_uygun(label):
 
 
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
-                         sadece_ayni_lig=False, kupon_modu=False):
+                         sadece_ayni_lig=False, kupon_modu=False,
+                         kupon_profili=None):
     """
     Top10 / Top50 özel liste üretici.
 
@@ -2885,12 +2899,14 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                 t_secili["top10_market_tip"] = tip
                 t_secili["top10_market_guven"] = guven
                 t_secili["top10_market_oran"] = mk.get("oran")
+                t_secili["top10_market_oran_tahmini"] = bool("+" in label and mk.get("oran") is not None)
 
                 # Detay ekranı ve kartlar seçilen marketi ana tahmin gibi gösterebilsin.
                 t_secili["ana_label"] = label
                 t_secili["ana_p"] = guven
-                if mk.get("oran") is not None:
-                    t_secili["ana_odd"] = mk.get("oran")
+                # Seçilen marketin gerçek oranı yoksa önceki ana marketin
+                # 1/X/2 oranını yanlışlıkla kombinasyon oranı gibi taşıma.
+                t_secili["ana_odd"] = mk.get("oran")
 
                 market_gruplari[grup_key]["kayitlar"].append({
                     "tol": round(float(tol), 2),
@@ -2943,6 +2959,29 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
             tekil_yuksek_guven = kupon_modu and max_guven >= 70
             if tekil_yuksek_guven:
                 stabilite_skoru += 30 + (max_guven - 70) * 3
+
+            # Her profil aynı kuponu üretmesin: Temkinli güven/kararlılığı,
+            # Dengeli market çeşitliliğini, Yüksek Oran ise kombinasyonları
+            # ve oran potansiyelini farklı ağırlıklarla değerlendirir.
+            if kupon_modu:
+                etiket = str(grup.get("label", ""))
+                kombinasyon = "+" in etiket
+                if kupon_profili == "Temkinli":
+                    stabilite_skoru += max_guven * 0.18 + stabilite_sayisi * 2.5
+                    if kombinasyon:
+                        stabilite_skoru -= 9
+                    elif etiket in {"MS 1", "MS1", "Beraberlik", "MS X", "MSX", "MS 2", "MS2"}:
+                        stabilite_skoru += 12
+                elif kupon_profili == "Dengeli":
+                    if "KG" in etiket or "2.5" in etiket:
+                        stabilite_skoru += 10
+                    if kombinasyon:
+                        stabilite_skoru += 7
+                elif kupon_profili == "Yüksek Oran":
+                    if kombinasyon:
+                        stabilite_skoru += 42
+                    elif "KG" in etiket or "2.5" in etiket:
+                        stabilite_skoru += 14
 
             # Tek hassasiyette çıkan ama skoru çok yüksek olanları biraz törpüle.
             if stabilite_sayisi == 1 and not tekil_yuksek_guven:
@@ -5327,19 +5366,31 @@ else:
         if gunun_kupon_btn:
             olusan_profiller = []
             bulunamayan_profiller = []
-            kupon_kaynagi = gunun_en_iyi_10_uret(
-                st.session_state.get("last_gecmis_df"),
-                st.session_state.get("last_bulten_df"),
-                min_ornek=min_ornek,
-                limit=50,
-                sadece_ayni_lig=sadece_ayni_lig,
-                kupon_modu=True,
-            )
+            onceki_profil_secimleri = set()
             for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
-                otomatik_secimler = gunun_kuponunu_olustur(kupon_kaynagi, profil_adi)
+                kupon_kaynagi = gunun_en_iyi_10_uret(
+                    st.session_state.get("last_gecmis_df"),
+                    st.session_state.get("last_bulten_df"),
+                    min_ornek=min_ornek,
+                    limit=50,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    kupon_modu=True,
+                    kupon_profili=profil_adi,
+                )
+                otomatik_secimler = gunun_kuponunu_olustur(
+                    kupon_kaynagi,
+                    profil_adi,
+                    onceliksiz_secimler=onceki_profil_secimleri,
+                )
                 if otomatik_secimler:
                     kupon_gecmisine_ekle(otomatik_secimler, profil_adi, "0.00–0.10 tarama")
                     olusan_profiller.append(f"{profil_adi} ({len(otomatik_secimler)} maç)")
+                    for secim in otomatik_secimler:
+                        onceki_profil_secimleri.add((
+                            f"{secim.get('ev', '')}|{secim.get('dep', '')}|"
+                            f"{str(secim.get('zaman_iso', ''))[:16]}",
+                            secim.get("tahmin", ""),
+                        ))
                 else:
                     bulunamayan_profiller.append(profil_adi)
             if olusan_profiller:
