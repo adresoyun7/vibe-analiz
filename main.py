@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 69
+APP_SCHEMA_VERSION = 70
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -6029,7 +6029,7 @@ def detay_ana_icerik():
         unsafe_allow_html=True,
     )
 
-    with st.expander("📊 Ana tahminin benzer geçmiş maçları", expanded=False):
+    with st.expander("📊 Ana tahminin benzer geçmiş maçları", expanded=True):
         ana_tahmin_gecmis_detayi(m, t, b_det)
 
     ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
@@ -6040,7 +6040,7 @@ def detay_ana_icerik():
         <div class="hb-label">ANA TAHMİN</div>
         <div class="hb-val">{t['ana_label']}</div>
         <div class="hb-sub">Maç Sonucu: {ms_label_long}</div>
-        {"<div style='margin-top:8px;font-size:0.76rem;color:#ff8b8b'>⚠️ Model bu maçı net ayıramadı</div>" if t.get("belirsiz") else ""}
+        {"<div style='margin-top:8px;font-size:0.76rem;color:#ff8b8b'>⚠️ Maç sonucu tarafı net değil</div>" if t.get("belirsiz") and t.get("ana_label") in ["MS 1", "Beraberlik", "MS 2"] else ""}
       </div>
       <div class="hbox blue">
         <div class="hb-label">GÜVEN SKORU</div>
@@ -6500,7 +6500,7 @@ else:
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
         ai_comment_html = ""
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
-        belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Belirsiz maç</div>' if t.get("belirsiz") else ''
+        belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Maç sonucu tarafı net değil</div>' if t.get("belirsiz") and t.get("ana_label") in ["MS 1", "Beraberlik", "MS 2"] else ''
         combo_html = ''
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
         if combo_text:
