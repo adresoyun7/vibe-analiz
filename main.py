@@ -2604,33 +2604,33 @@ def top10_market_adaylari(t):
     # Ana tahmin hangi market olursa olsun havuza girsin.
     ana_label = t.get("ana_label")
     ana_tip = infer_tip(ana_label)
-    ana_bonus = {"MS": -4, "Alt/Üst": 16, "KG": 14, "İlk Yarı": 7, "Kombo": 10, "HT/FT": 8}.get(ana_tip, 0)
+    ana_bonus = 0  # Tüm marketler eşit: market türüne göre bonus/ceza yok.
     add(ana_label, t.get("ana_p", 0), ana_tip, t.get("ana_odd"), bonus=ana_bonus, min_guven=50)
 
     # Alternatif/uyumlu tahmin havuza girsin.
     alt_label = t.get("alt_label")
     alt_tip = infer_tip(alt_label)
-    alt_bonus = {"Alt/Üst": 15, "KG": 13, "MS": -2}.get(alt_tip, 5)
+    alt_bonus = 0  # Tüm marketler eşit: alternatif market bonusu yok.
     add(alt_label, t.get("alt_p", 0), alt_tip, None, bonus=alt_bonus, min_guven=50)
 
-    # MS marketleri: tek başına çok basmasın diye bonus düşük/negatif.
-    add("MS 1", t.get("ms1_p", 0), "MS", None, bonus=-6, min_guven=52)
-    add("Beraberlik", t.get("msx_p", 0), "MS", None, bonus=-4, min_guven=52)
-    add("MS 2", t.get("ms2_p", 0), "MS", None, bonus=-6, min_guven=52)
+    # MS marketleri: diğer marketlerle aynı skor kuralları uygulanır.
+    add("MS 1", t.get("ms1_p", 0), "MS", None, bonus=0, min_guven=52)
+    add("Beraberlik", t.get("msx_p", 0), "MS", None, bonus=0, min_guven=52)
+    add("MS 2", t.get("ms2_p", 0), "MS", None, bonus=0, min_guven=52)
 
-    # Alt / Üst marketleri.
-    add("2.5 Üst", t.get("ms25_p", 0), "Alt/Üst", None, bonus=18, min_guven=50)
-    add("2.5 Alt", t.get("ms25a_p", 0), "Alt/Üst", None, bonus=18, min_guven=50)
-    add("3.5 Üst", t.get("ms35_p", 0), "Alt/Üst", None, bonus=9, min_guven=54)
+    # Alt / Üst marketleri: market türüne özel bonus yok.
+    add("2.5 Üst", t.get("ms25_p", 0), "Alt/Üst", None, bonus=0, min_guven=50)
+    add("2.5 Alt", t.get("ms25a_p", 0), "Alt/Üst", None, bonus=0, min_guven=50)
+    add("3.5 Üst", t.get("ms35_p", 0), "Alt/Üst", None, bonus=0, min_guven=54)
 
-    # KG marketleri.
-    add("KG Var", t.get("kg_var_p", t.get("kg_p", 0)), "KG", None, bonus=16, min_guven=50)
-    add("KG Yok", t.get("kg_yok_p", 0), "KG", None, bonus=16, min_guven=50)
+    # KG marketleri: market türüne özel bonus yok.
+    add("KG Var", t.get("kg_var_p", t.get("kg_p", 0)), "KG", None, bonus=0, min_guven=50)
+    add("KG Yok", t.get("kg_yok_p", 0), "KG", None, bonus=0, min_guven=50)
 
-    # İlk yarı marketleri.
-    # İY 0.5 Üst: erken gol sinyali. İY 1.5 Üst: daha yüksek tempo / ilk yarı çok gol sinyali.
-    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=10, min_guven=70)
-    add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=13, min_guven=55)
+    # İlk yarı marketleri: market türüne özel skor bonusu yok.
+    # Mevcut minimum güven/örnek kalite kontrolleri korunur.
+    add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=0, min_guven=70)
+    add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=0, min_guven=55)
 
     # Kombo.
     if t.get("combo_var") and t.get("combo_label"):
@@ -2643,7 +2643,7 @@ def top10_market_adaylari(t):
                 t.get("combo_p", 0),
                 "Kombo",
                 kombo_tahmini_oran(t.get("combo_label"), t.get("ana_odd")),
-                bonus=8,
+                bonus=0,
                 min_guven=48,
             )
 
