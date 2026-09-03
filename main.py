@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 75
+APP_SCHEMA_VERSION = 76
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3037,13 +3037,79 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     }, b.sort_values("Date", ascending=False)
 
 
-def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False):
-    """0.00–0.10 sonuçlarını güven, örnek kalitesi ve kararlılıkla sıralar."""
+
+def market_gecmis_guven_duzeltmesi(etiket, ham_guven, kayitlar=None):
+    """
+    Marketin geçmiş backtest başarısını küçük bir güven düzeltmesi olarak kullanır.
+
+    - Backtest içinde `kayitlar`, yalnızca o tarihten ÖNCE sonuçlanmış test kayıtlarıdır.
+    - Canlı analizde `kayitlar=None` ise son çalıştırılmış backtest_df kullanılır.
+    - Veri azsa düzeltme nötre yaklaştırılır; hiçbir zaman ana güvenin önüne geçmez.
+    """
+    try:
+        ham = float(ham_guven)
+    except Exception:
+        ham = 0.0
+
+    if kayitlar is None:
+        bt = st.session_state.get("backtest_df")
+        if isinstance(bt, pd.DataFrame) and not bt.empty:
+            try:
+                kayitlar = bt[["Tahmin", "Tuttu"]].to_dict("records")
+            except Exception:
+                kayitlar = []
+        else:
+            kayitlar = []
+
+    ilgili = []
+    for x in (kayitlar or []):
+        if str(x.get("Tahmin", "")) != str(etiket):
+            continue
+        tuttu = x.get("Tuttu")
+        if tuttu is None or (isinstance(tuttu, float) and pd.isna(tuttu)):
+            continue
+        ilgili.append(bool(tuttu))
+
+    n = len(ilgili)
+    if n == 0:
+        return ham, None, 0, 0.0
+
+    # Küçük örneğin aşırı etkisini azalt:
+    # prior %60 ve 20 sanal gözlem. Sistem zaten %61+ tahminleri değerlendiriyor.
+    prior_n = 20.0
+    prior_success = 0.60
+    wins = sum(ilgili)
+    shrunk_success = (wins + prior_success * prior_n) / (n + prior_n) * 100.0
+
+    # Market geçmişi yalnızca yardımcı sinyal:
+    # 20 kayıtta etkisinin yarısı, 40+ kayıtta tamamı.
+    veri_agirligi = min(n / 40.0, 1.0)
+    # Ham güven %90, geçmiş market başarısı en fazla %10 etki eder.
+    duzeltilmis = ham * (1.0 - 0.10 * veri_agirligi) + shrunk_success * (0.10 * veri_agirligi)
+    delta = duzeltilmis - ham
+
+    return duzeltilmis, shrunk_success, n, delta
+
+
+def hassasiyet_birlesik_hesapla(
+    b_df, m_row, min_ornek, sadece_ayni_lig=False, market_gecmis_kayitlari=None
+):
+    """
+    0.00–0.10 sonuçlarını yeni sıralama mantığıyla birleştirir.
+
+    Ana puan:
+      - Güven: %80
+      - Kararlılık: %20
+      - Örnek sayısı: puan vermez; yalnızca yeterlilik şartıdır.
+      - Çok az medyan örnekte ayrıca ceza uygulanır.
+      - Marketin geçmiş backtest başarısı güvene küçük bir düzeltme yapar.
+    """
     market_alanlari = {
         "MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
         "2.5 Üst": "ms25_p", "2.5 Alt": "ms25a_p",
         "KG Var": "kg_var_p", "KG Yok": "kg_yok_p",
     }
+
     marketler = {}
     for tol in [round(i / 100, 2) for i in range(11)]:
         tol_t, tol_b = hesapla(
@@ -3052,78 +3118,167 @@ def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False):
         )
         if tol_t is None:
             continue
+
         ornek = int(tol_t.get("ornek", len(tol_b)) or 0)
-        gerekli = max(int(min_ornek), int(tol_t.get("onerilen_min_mac", dinamik_min_mac(tol)) or 0))
+        gerekli = max(
+            int(min_ornek),
+            int(tol_t.get("onerilen_min_mac", dinamik_min_mac(tol)) or 0),
+        )
+
+        # Örnek artık puan üretmiyor; yalnızca yeterlilik kapısı.
         if ornek < gerekli:
             continue
+
         for etiket, alan in market_alanlari.items():
             guven = int(tol_t.get(alan, 0) or 0)
             if guven > 60:
                 marketler.setdefault(etiket, []).append({
-                    "guven": guven, "ornek": ornek, "tol": tol,
-                    "t": tol_t, "b": tol_b,
+                    "guven": guven,
+                    "ornek": ornek,
+                    "gerekli": gerekli,
+                    "tol": tol,
+                    "t": tol_t,
+                    "b": tol_b,
                 })
 
     sirali = []
     for etiket, kayitlar in marketler.items():
+        # En az 3 hassasiyette destek görmeyen market birleşik aday olmasın.
         if len(kayitlar) < 3:
             continue
-        agirlik_toplami = sum(math.sqrt(max(1, x["ornek"])) for x in kayitlar)
-        ort_guven = sum(x["guven"] * math.sqrt(max(1, x["ornek"])) for x in kayitlar) / agirlik_toplami
+
+        # Güven ortalaması artık örnek sayısıyla ağırlıklandırılmıyor.
+        # Böylece yüksek örnek sayısı dolaylı olarak da puan kazandırmıyor.
+        ort_guven = sum(x["guven"] for x in kayitlar) / len(kayitlar)
+
         ornekler = sorted(x["ornek"] for x in kayitlar)
         orta = len(ornekler) // 2
-        medyan_ornek = ornekler[orta] if len(ornekler) % 2 else (ornekler[orta - 1] + ornekler[orta]) / 2
-        ornek_kalitesi = min(float(medyan_ornek) / 30.0, 1.0) * 100
-        kararlilik = len(kayitlar) / 11.0 * 100
-        birlesik_puan = ort_guven * 0.50 + ornek_kalitesi * 0.25 + kararlilik * 0.25
-        temsilci = max(kayitlar, key=lambda x: (x["guven"], x["ornek"], -x["tol"]))
+        medyan_ornek = (
+            ornekler[orta]
+            if len(ornekler) % 2
+            else (ornekler[orta - 1] + ornekler[orta]) / 2
+        )
+
+        kararlilik = len(kayitlar) / 11.0 * 100.0
+
+        # Marketin geçmiş başarısı yalnızca küçük bir güven düzeltmesidir.
+        duzeltilmis_guven, market_basari, market_adet, market_delta = (
+            market_gecmis_guven_duzeltmesi(
+                etiket, ort_guven, market_gecmis_kayitlari
+            )
+        )
+
+        # Çok az örnekte ek ceza. Örnek sayısı pozitif bonus vermez.
+        if medyan_ornek < 5:
+            az_ornek_cezasi = 8.0
+        elif medyan_ornek < 8:
+            az_ornek_cezasi = 5.0
+        elif medyan_ornek < 12:
+            az_ornek_cezasi = 2.0
+        else:
+            az_ornek_cezasi = 0.0
+
+        birlesik_puan = (
+            duzeltilmis_guven * 0.80
+            + kararlilik * 0.20
+            - az_ornek_cezasi
+        )
+
+        temsilci = max(
+            kayitlar,
+            key=lambda x: (x["guven"], -x["tol"]),
+        )
+
         sirali.append({
-            "label": etiket, "guven": int(round(ort_guven)),
-            "puan": round(birlesik_puan, 1), "ornek": int(round(medyan_ornek)),
+            "label": etiket,
+            "guven": int(round(duzeltilmis_guven)),
+            "ham_guven": round(ort_guven, 1),
+            "puan": round(birlesik_puan, 1),
+            "ornek": int(round(medyan_ornek)),
             "kararlilik": len(kayitlar),
+            "kararlilik_pct": round(kararlilik, 1),
+            "az_ornek_cezasi": az_ornek_cezasi,
+            "market_gecmis_basari": round(market_basari, 1) if market_basari is not None else None,
+            "market_gecmis_adet": int(market_adet),
+            "market_guven_delta": round(market_delta, 2),
             "toleranslar": [f'{x["tol"]:.2f}' for x in kayitlar],
             "temsilci": temsilci,
         })
 
-    sirali.sort(key=lambda x: (x["puan"], x["guven"], x["ornek"], x["kararlilik"]), reverse=True)
+    sirali.sort(
+        key=lambda x: (x["puan"], x["guven"], x["kararlilik"]),
+        reverse=True,
+    )
     if not sirali:
         return None, pd.DataFrame()
 
     ana, alt = sirali[0], (sirali[1] if len(sirali) > 1 else None)
     t = dict(ana["temsilci"]["t"])
     b = ana["temsilci"]["b"]
+
     t.update({
-        "ana_label": ana["label"], "ana_p": ana["guven"],
+        "ana_label": ana["label"],
+        "ana_p": ana["guven"],
+        "ana_ham_guven": ana["ham_guven"],
         "ana_odd": market_label_to_odd(m_row, ana["label"]),
-        "score": ana["puan"], "playable_score": ana["puan"],
-        "ornek": int(len(b)), "birlesik_ornek_medyan": ana["ornek"],
+        "score": ana["puan"],
+        "playable_score": ana["puan"],
+        "ornek": int(len(b)),
+        "birlesik_ornek_medyan": ana["ornek"],
         "kullanilan_tolerans": float(ana["temsilci"]["tol"]),
-        "stability_tols": ana["toleranslar"], "stability_count": ana["kararlilik"],
+        "stability_tols": ana["toleranslar"],
+        "stability_count": ana["kararlilik"],
+        "stability_pct": ana["kararlilik_pct"],
         "stability_text": " · ".join(ana["toleranslar"]),
-        "birlesik_model": True, "birlesik_puan": ana["puan"],
+        "birlesik_model": True,
+        "birlesik_puan": ana["puan"],
+        "az_ornek_cezasi": ana["az_ornek_cezasi"],
+        "market_gecmis_basari": ana["market_gecmis_basari"],
+        "market_gecmis_adet": ana["market_gecmis_adet"],
+        "market_guven_delta": ana["market_guven_delta"],
+        "puan_formulu": "Güven %80 + Kararlılık %20",
     })
-    t["stability_early_tols"] = [x for x in ana["toleranslar"] if float(x) <= 0.05]
-    t["stability_late_tols"] = [x for x in ana["toleranslar"] if float(x) > 0.05]
+
+    t["stability_early_tols"] = [
+        x for x in ana["toleranslar"] if float(x) <= 0.05
+    ]
+    t["stability_late_tols"] = [
+        x for x in ana["toleranslar"] if float(x) > 0.05
+    ]
     t["stability_early_text"] = " · ".join(t["stability_early_tols"])
     t["stability_late_text"] = " · ".join(t["stability_late_tols"])
+
     renk, badge_cls, badge_lbl = guven_renk(t["ana_p"])
-    t["guven_renk"], t["guven_badge_cls"], t["guven_badge_lbl"] = renk, badge_cls, badge_lbl
+    t["guven_renk"], t["guven_badge_cls"], t["guven_badge_lbl"] = (
+        renk, badge_cls, badge_lbl
+    )
+
     if alt:
         t.update({
-            "alt_label": alt["label"], "alt_p": alt["guven"],
-            "alt_ornek": alt["ornek"], "alt_puan": alt["puan"],
-            "alt_kararlilik": alt["kararlilik"], "alt_hassasiyetler": alt["toleranslar"],
+            "alt_label": alt["label"],
+            "alt_p": alt["guven"],
+            "alt_ornek": alt["ornek"],
+            "alt_puan": alt["puan"],
+            "alt_kararlilik": alt["kararlilik"],
+            "alt_hassasiyetler": alt["toleranslar"],
             "alt_hassasiyet": float(alt["temsilci"]["tol"]),
+            "alt_market_gecmis_basari": alt["market_gecmis_basari"],
+            "alt_market_gecmis_adet": alt["market_gecmis_adet"],
         })
     else:
         t.update({
-            "alt_label": "", "alt_p": 0, "alt_ornek": 0, "alt_puan": 0,
-            "alt_kararlilik": 0, "alt_hassasiyetler": [], "alt_hassasiyet": None,
+            "alt_label": "",
+            "alt_p": 0,
+            "alt_ornek": 0,
+            "alt_puan": 0,
+            "alt_kararlilik": 0,
+            "alt_hassasiyetler": [],
+            "alt_hassasiyet": None,
+            "alt_market_gecmis_basari": None,
+            "alt_market_gecmis_adet": 0,
         })
+
     return t, b.sort_values("Date", ascending=False)
-
-
-
 
 def kombo_tahmini_oran(label, ana_odd=None):
     """Top 10 Market içinde kombo marketler için yaklaşık oran üretir.
@@ -4073,7 +4228,8 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         # İkisi de yalnızca row["Date"] öncesindeki train verisini görür.
         if birlesik_hassasiyet:
             t, benzerler = hassasiyet_birlesik_hesapla(
-                train, hedef, min_ornek, sadece_ayni_lig=False
+                train, hedef, min_ornek, sadece_ayni_lig=False,
+                market_gecmis_kayitlari=sonuclar,
             )
         else:
             t, benzerler = hesapla(train, hedef, tolerans, form_aktif=False, kalibrasyon_aktif=False)
@@ -5831,8 +5987,10 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
           <div class="backtest-desc-fix" style="font-size:.90rem;margin-top:7px;line-height:1.5;">
             Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
             Backtest yalnızca güveni %60'ın üstünde olan (%61+) tahminleri değerlendirir.
-            Ana sonuç 0.00–0.10 arasındaki yeterli örnekli marketleri güven %50, örnek kalitesi %25 ve
-            hassasiyet kararlılığı %25 ile birleştirir. 11 tekil hassasiyet ayrıca karşılaştırma için gösterilir.
+            Ana sonuç 0.00–0.10 arasındaki yeterli örnekli marketleri güven %80 ve
+            hassasiyet kararlılığı %20 ile sıralar. Örnek sayısı puan kazandırmaz; yalnızca minimum yeterlilik
+            koşuludur ve çok az örnekte ayrıca ceza uygulanır. Marketin geçmiş backtest başarısı güvene küçük,
+            veri miktarına göre azaltılmış bir düzeltme yapar. 11 tekil hassasiyet ayrıca karşılaştırma için gösterilir.
             Form ve Value/Edge kullanılmaz.
           </div>
           <div class="backtest-season-fix" style="font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
@@ -6046,14 +6204,22 @@ if analiz_btn:
                 m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
                 final.append({"m": m_dict, "t": t, "b": b_det})
 
-        final = sorted(final, key=lambda x: (x["t"].get("score", 0), x["t"].get("ana_p", 0), x["t"].get("ornek", 0)), reverse=True)
+        final = sorted(
+            final,
+            key=lambda x: (
+                x["t"].get("score", 0),
+                x["t"].get("ana_p", 0),
+                x["t"].get("stability_count", 0),
+            ),
+            reverse=True,
+        )
         final = sorted(
             final,
             key=lambda x: (
                 x["t"].get("playable_score", 0),
                 x["t"].get("ana_p", 0),
                 x["t"].get("score", 0),
-                x["t"].get("ornek", 0),
+                x["t"].get("stability_count", 0),
             ),
             reverse=True,
         )
