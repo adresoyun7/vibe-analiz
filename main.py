@@ -166,7 +166,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 59
+APP_SCHEMA_VERSION = 60
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2336,19 +2336,96 @@ def ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig=False):
     return gecmis_df[gecmis_df["league_code"] == history_code].copy()
 
 
-def takim_adi_norm(value):
-    """Takım adını veri eşleştirmesi için kanonik hale getirir.
-    FC Basel == Basel, FC Sion == Sion gibi kulüp öneklerini yok sayar.
-    """
-    s = unicodedata.normalize("NFKD", str(value).casefold())
+TAKIM_ADI_ALIASLARI = {
+    # Türkiye
+    "istanbulbasaksehir": "basaksehir",
+    "istanbulbuyuksehirbelediyesi": "basaksehir",
+    "istanbulbb": "basaksehir",
+    "buyuksehyr": "basaksehir",       # football-data'nın eski kısa adı
+    "gencbirligi": "genclerbirligi",
+    "genclerbirligi": "genclerbirligi",
+    "kasimpasa": "kasimpasa",
+    # İngiltere / İskoçya
+    "manunited": "manchesterunited",
+    "manutd": "manchesterunited",
+    "manchesterutd": "manchesterunited",
+    "mancity": "manchestercity",
+    "tottenhamhotspur": "tottenham",
+    "wolverhamptonwanderers": "wolves",
+    "wolverhampton": "wolves",
+    "newcastleutd": "newcastleunited",
+    "westhamutd": "westhamunited",
+    "nottmforest": "nottinghamforest",
+    "nottingham": "nottinghamforest",
+    "qpr": "queensparkrangers",
+    # İspanya
+    "athmadrid": "atleticomadrid",
+    "atleticodemadrid": "atleticomadrid",
+    "athbilbao": "athleticbilbao",
+    "athleticclub": "athleticbilbao",
+    "sociedad": "realsociedad",
+    "betis": "realbetis",
+    # İtalya
+    "internazionale": "inter",
+    "intermilan": "inter",
+    "acmilan": "milan",
+    "hellasverona": "verona",
+    # Almanya
+    "bayernmunich": "bayernmunchen",
+    "borussiamonchengladbach": "monchengladbach",
+    "bmonchengladbach": "monchengladbach",
+    "koln": "cologne",
+    # Fransa / Hollanda / Portekiz
+    "parissaintgermain": "parissg",
+    "psg": "parissg",
+    "marseilleolympique": "marseille",
+    "lyonolympique": "lyon",
+    "sportinglisbon": "sportingcp",
+    "sportingclubdeportugal": "sportingcp",
+    "psveindhoven": "psv",
+    # Avrupa'da sık görülen alternatifler
+    "fckobenhavn": "copenhagen",
+    "kobenhavn": "copenhagen",
+    "fc copenhagen": "copenhagen",
+    "redbullsalzburg": "salzburg",
+    "rbsalzburg": "salzburg",
+}
+
+
+def _takim_adi_ham_tokenlari(value):
+    """Farklı kaynaklardaki kulüp adlarını karşılaştırılabilir tokenlara çevirir."""
+    s = str(value or "").strip().casefold()
+    # NFKD'nin tek başına ASCII'ye çeviremediği harfleri önce açıkça dönüştür.
+    s = s.translate(str.maketrans({
+        "ı": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c",
+        "đ": "d", "ð": "d", "þ": "th", "ł": "l", "ø": "o", "æ": "ae",
+    }))
+    s = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     s = re.sub(r"[^a-z0-9]+", " ", s).strip()
-    tokens = [t for t in s.split() if t]
 
-    kulup_ekleri = {"fc", "cf", "afc", "sc", "ac", "fk"}
-    tokens = [t for t in tokens if t not in kulup_ekleri]
+    token_esdegerleri = {
+        "utd": "united", "st": "saint", "munich": "munchen",
+        "kobenhavn": "copenhagen",
+    }
+    anlamsiz = {
+        "fc", "cf", "afc", "sc", "ac", "fk", "sk", "bk", "sv", "as",
+        "club", "football", "futbol", "calcio", "de", "the",
+    }
+    tokens = []
+    for token in s.split():
+        token = token_esdegerleri.get(token, token)
+        if token in anlamsiz or re.fullmatch(r"(?:18|19|20)\d{2}", token):
+            continue
+        tokens.append(token)
+    return tokens
 
-    return "".join(tokens)
+
+def takim_adi_norm(value):
+    """Takım adını bütün veri kaynakları için kanonik hale getirir."""
+    tokens = _takim_adi_ham_tokenlari(value)
+    birlesik = "".join(tokens)
+    return TAKIM_ADI_ALIASLARI.get(birlesik, birlesik)
 
 
 def takim_adi_eslestir(takim, adaylar):
@@ -2367,16 +2444,26 @@ def takim_adi_eslestir(takim, adaylar):
     if hedef in norm_map:
         return norm_map[hedef]
 
+    skorlar = []
     for norm, orijinal in norm_map.items():
-        if min(len(hedef), len(norm)) >= 5 and (hedef in norm or norm in hedef):
-            return orijinal
+        oran = SequenceMatcher(None, hedef, norm).ratio()
+        kisa, uzun = sorted((hedef, norm), key=len)
+        kapsama = (len(kisa) / len(uzun)) if kisa and kisa in uzun else 0.0
+        skorlar.append((max(oran, kapsama), orijinal))
 
-    en_iyi, en_skor = None, 0.0
-    for norm, orijinal in norm_map.items():
-        skor = SequenceMatcher(None, hedef, norm).ratio()
-        if skor > en_skor:
-            en_iyi, en_skor = orijinal, skor
-    return en_iyi if en_skor >= 0.78 else None
+    if not skorlar:
+        return None
+    skorlar.sort(key=lambda x: x[0], reverse=True)
+    en_skor, en_iyi = skorlar[0]
+    ikinci_skor = skorlar[1][0] if len(skorlar) > 1 else 0.0
+
+    # Çok net bir benzerliği doğrudan kabul et. Daha zayıf eşleşmelerde yakın
+    # ikinci aday varsa yanlış kulübe bağlamak yerine sonuç üretme.
+    if en_skor >= 0.92:
+        return en_iyi
+    if en_skor >= 0.80 and (en_skor - ikinci_skor) >= 0.05:
+        return en_iyi
+    return None
 
 
 def _takim_maskesi(series, takim):
