@@ -3670,6 +3670,12 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         t_formsuz, _ = hesapla(train, hedef, tolerans, form_aktif=False)
         if t is None or len(benzerler) < int(min_ornek):
             continue
+
+        # Backtest yalnızca %60'ın ÜSTÜNDE güvene sahip tahminleri değerlendirir.
+        # %60 tam değer dahil değildir; %61 ve üzeri kabul edilir.
+        if int(t.get("ana_p", 0) or 0) <= 60:
+            continue
+
         label = t.get("ana_label", "")
         tuttu = tahmin_tuttu_mu(label, row)
         if tuttu is None:
@@ -3680,7 +3686,9 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         if oran is not None:
             kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
 
-        formsuz_label = t_formsuz.get("ana_label", "") if t_formsuz else ""
+        formsuz_guven = int(t_formsuz.get("ana_p", 0) or 0) if t_formsuz else 0
+        formsuz_gecerli = bool(t_formsuz and formsuz_guven > 60)
+        formsuz_label = t_formsuz.get("ana_label", "") if formsuz_gecerli else ""
         formsuz_tuttu = tahmin_tuttu_mu(formsuz_label, row) if formsuz_label else None
         formsuz_oran = market_label_to_odd(hedef, formsuz_label) if formsuz_label else None
         formsuz_kar = None
@@ -3701,7 +3709,7 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Form": t.get("form_text", "—"),
             "Form Çarpanı": t.get("form_factor", 1.0),
             "Formsuz Tahmin": formsuz_label or "—",
-            "Formsuz Güven": int(t_formsuz.get("ana_p", 0)) if t_formsuz else None,
+            "Formsuz Güven": formsuz_guven if formsuz_gecerli else None,
             "Formsuz Tuttu": bool(formsuz_tuttu) if formsuz_tuttu is not None else None,
             "Formsuz Oran": round(float(formsuz_oran), 2) if formsuz_oran is not None else None,
             "Formsuz Kâr (100 TL)": formsuz_kar,
@@ -5202,7 +5210,8 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
           <div class="backtest-title-fix" style="font-size:1.55rem;font-weight:900;line-height:1.2;">🧪 Tarih Sıralı Backtest</div>
           <div class="backtest-desc-fix" style="font-size:.90rem;margin-top:7px;line-height:1.5;">
             Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
-            Aynı maç ayrıca formsuz modelle de test edilerek form katkısı doğrudan karşılaştırılır.
+            Backtest yalnızca güveni %60'ın üstünde olan (%61+) tahminleri değerlendirir.
+            Aynı maç ayrıca formsuz modelle de test edilerek form katkısı doğrudan karşılaştırılır; formsuz kıyas da %61+ eşiğini kullanır.
           </div>
           <div class="backtest-season-fix" style="font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
         </div>
