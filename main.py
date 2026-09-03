@@ -2935,12 +2935,12 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
 
     ÖNEMLİ:
     Bu fonksiyon sidebar'daki hassasiyet slider'ına bağlı çalışmaz.
-    Her maç için 0.00 - 0.10 aralığını tarar ve aynı maç + aynı market
+    Her maç için 0.00 - 0.10 aralığını 0.01 adımlarla tarar ve aynı maç + aynı market
     kaç farklı hassasiyette çıkıyorsa bunu stabilite skoru olarak kullanır.
 
     Böylece slider 0.05 / 0.08 / 0.10 değişince Top10/Top50 listesi zıplamaz.
     """
-    top_toleranslar = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
+    top_toleranslar = [round(i / 100, 2) for i in range(11)]
     adaylar = []
 
     if gecmis_df is None or bulten_df is None:
@@ -2953,7 +2953,7 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
     for _, m in bulten_df.iterrows():
         # Aynı maç içinde market bazlı gruplama:
         # Örnek: Arsenal - Chelsea / 2.5 Üst
-        # 0.02, 0.04, 0.06, 0.08'de çıkıyorsa stabil sayılır.
+        # 0.01, 0.02, 0.03 ... 0.10 noktalarında çıkıyorsa stabil sayılır.
         market_gruplari = {}
 
         for tol in top_toleranslar:
@@ -3048,9 +3048,9 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
             stabilite_sayisi = len(hassasiyetler)
 
             # Aynı market birden fazla hassasiyette çıkıyorsa ciddi bonus.
-            # 6/6 çıkan market Top10'da en stabil kabul edilir.
+            # 11/11 çıkan market Top10/Top50'de en stabil kabul edilir.
             stabilite_orani = stabilite_sayisi / max(len(top_toleranslar), 1)
-            stabilite_bonus = stabilite_sayisi * 7.5
+            stabilite_bonus = stabilite_sayisi * (45.0 / 11.0)
 
             max_skor = max(float(k["skor"]) for k in kayitlar)
             ort_skor = sum(float(k["skor"]) for k in kayitlar) / len(kayitlar)
@@ -3083,7 +3083,7 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                 etiket = str(grup.get("label", ""))
                 kombinasyon = "+" in etiket
                 if kupon_profili == "Temkinli":
-                    stabilite_skoru += max_guven * 0.18 + stabilite_sayisi * 2.5
+                    stabilite_skoru += max_guven * 0.18 + stabilite_sayisi * (15.0 / 11.0)
                     if kombinasyon:
                         stabilite_skoru -= 9
                     elif etiket in {"MS 1", "MS1", "Beraberlik", "MS X", "MSX", "MS 2", "MS2"}:
@@ -3100,9 +3100,9 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                         stabilite_skoru += 14
 
             # Tek hassasiyette çıkan ama skoru çok yüksek olanları biraz törpüle.
-            if stabilite_sayisi == 1 and not tekil_yuksek_guven:
+            if stabilite_sayisi <= 2 and not tekil_yuksek_guven:
                 stabilite_skoru -= 14
-            elif stabilite_sayisi == 2:
+            elif stabilite_sayisi <= 4:
                 stabilite_skoru -= 5
 
             # Temsilci kayıt: finalde detay ekranı için en iyi tekil skorun datasını kullan.
@@ -5473,7 +5473,7 @@ else:
                             <div style="margin-top:7px;font-size:0.78rem;color:#9db2d1;">
                                 Çıktığı hassasiyetler: <b style="color:#facc15;">{escape(str(hassasiyet_text))}</b> ·
                                 Güven hassasiyet skoru: <b>{stabilite_skoru}</b> ·
-                                Sayı: <b>{hassasiyet_sayisi}/6</b>
+                                Stabilite: <b>{hassasiyet_sayisi}/11</b>
                             </div>
                         </div>
                         """,
@@ -5647,8 +5647,8 @@ else:
         bilgi_col, olustur_col = st.columns([3.2, 1.15], gap="small")
         with bilgi_col:
             st.caption(
-                "Her maç 0.00, 0.02, 0.04, 0.06, 0.08 ve 0.10 hassasiyetlerinde taranır. "
-                "Farklı tahmin varsa en iyi puanlanan market seçilir; 3/6 desteği zorunlu değildir. "
+                "Her maç 0.00 ile 0.10 arasında 0.01'er hassasiyet adımıyla toplam 11 noktada taranır. "
+                "Farklı tahmin varsa en iyi puanlanan market seçilir; belirli bir minimum destek sayısı zorunlu değildir. "
                 "Tek hassasiyetteki yüksek güven de aday olabilir. Yalnızca MS, 2.5 Alt/Üst, KG ve "
                 "bunların kombinasyonları kullanılır."
             )
@@ -5819,7 +5819,7 @@ else:
                             hassasiyet_alt = (
                                 f'<div style="font-size:.70rem;color:#a7f3d0;margin-top:3px">'
                                 f'Seçilen: {float(secim.get("hassasiyet", 0)):.2f} · Kararlı: '
-                                f'{escape(destek_yazi)} ({len(destekler)}/6)</div>'
+                                f'{escape(destek_yazi)} ({len(destekler)}/11)</div>'
                                 if destekler else ""
                             )
                             # Maç bilgileri ve aksiyonlar aynı görsel kartın içinde.
