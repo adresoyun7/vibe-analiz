@@ -166,7 +166,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 60
+APP_SCHEMA_VERSION = 61
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2829,8 +2829,9 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     else:
         oran_factor = 1.0
 
-    # Güncel maçın ilk görülen -> son oran hareketini, geçmiş maçların pre-closing -> closing
-    # hareketleriyle karşılaştır. Bu sert filtre değildir; bütün marketlere aynı hafif çarpan uygulanır.
+    # Ana eşleşme ve tahmin yukarıda daima m_row içindeki SON/GÜNCEL oranlarla yapılır.
+    # İlk görülen oran yalnızca hareket yönünü ölçmek içindir. Hareket sert filtre değildir,
+    # ana marketin yönünü tek başına değiştirmez ve güvene en fazla ±%2 etki eder.
     movement_similarity = None
     movement_sample = 0
     movement_factor = 1.0
@@ -2849,8 +2850,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
                 # Yaklaşık %8 ortalama hareket farkında benzerlik belirgin biçimde düşer.
                 sims = (-dist / 0.08).apply(math.exp) * 100.0
                 movement_similarity = float(sims.mean())
-                # En fazla ±%4 etkilesin; market türünden bağımsızdır.
-                movement_factor = max(0.96, min(1.04, 0.96 + 0.08 * (movement_similarity / 100.0)))
+                # En fazla ±%2 etkilesin; market türünden bağımsızdır.
+                movement_factor = max(0.98, min(1.02, 0.98 + 0.04 * (movement_similarity / 100.0)))
                 movement_status = "Aktif"
             else:
                 movement_status = "Geçmiş hareket örneği az"
@@ -3271,6 +3272,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "current_move_a": round(float(m_row.get("move_a", 0.0) or 0.0) * 100, 2),
         "snapshot_count": int(m_row.get("snapshot_count", 1) or 1),
         "movement_age_minutes": round(float(m_row.get("movement_age_minutes", 0.0) or 0.0), 1),
+        "odds_basis": "Güncel/son API oranı",
         "goal_profile": goal_profile,
         "match_type": match_type,
         "nedenler": nedenler,
