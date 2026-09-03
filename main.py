@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 47
+APP_SCHEMA_VERSION = 49
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1278,13 +1278,75 @@ def odds_lig_kodu_coz(key, kod):
     return None
 
 
+BULTEN_CACHE_PATH = Path(__file__).with_name("vibe_api_bulten_gecmisi.json")
+
+
+def _bulten_cache_key(kodlar, tarih):
+    return f"{tarih.isoformat()}|{'|'.join(sorted(str(x) for x in kodlar))}"
+
+
+def bulten_onbellegini_oku():
+    try:
+        if BULTEN_CACHE_PATH.exists():
+            veri = json.loads(BULTEN_CACHE_PATH.read_text(encoding="utf-8"))
+            return veri if isinstance(veri, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def bulten_onbellegini_yaz(veri):
+    try:
+        gecici = BULTEN_CACHE_PATH.with_suffix(".tmp")
+        gecici.write_text(json.dumps(veri, ensure_ascii=False, indent=2), encoding="utf-8")
+        gecici.replace(BULTEN_CACHE_PATH)
+        return True
+    except Exception:
+        return False
+
+
+def kayitli_bulteni_getir(kodlar, tarih):
+    kayit = bulten_onbellegini_oku().get(_bulten_cache_key(kodlar, tarih), {})
+    satirlar = kayit.get("maclar", []) if isinstance(kayit, dict) else []
+    if not satirlar:
+        return pd.DataFrame()
+    df = pd.DataFrame(satirlar)
+    if "zaman" in df.columns:
+        df["zaman"] = pd.to_datetime(df["zaman"], errors="coerce")
+    return df.dropna(subset=["zaman"]).sort_values("zaman").reset_index(drop=True)
+
+
+def bulten_onbellegi_var(kodlar, tarih):
+    return not kayitli_bulteni_getir(kodlar, tarih).empty
+
+
+def bulteni_kaydet(df, kodlar, tarih):
+    if df is None or df.empty:
+        return False
+    veri = bulten_onbellegini_oku()
+    saklanacak = df.copy()
+    saklanacak["zaman"] = pd.to_datetime(saklanacak["zaman"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
+    veri[_bulten_cache_key(kodlar, tarih)] = {
+        "guncellendi": datetime.now().isoformat(timespec="seconds"),
+        "maclar": saklanacak.to_dict(orient="records"),
+    }
+    # Dosyanın sınırsız büyümemesi için son 120 sorguyu tut.
+    if len(veri) > 120:
+        veri = dict(sorted(veri.items(), key=lambda x: x[1].get("guncellendi", ""), reverse=True)[:120])
+    return bulten_onbellegini_yaz(veri)
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def bulten_cek(key, kodlar, t):
     secret_key = get_app_api_key()
     if secret_key:
         key = secret_key
     if not key:
-        st.error("ODDS_API_KEY bulunamadı. Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY eklemelisin.")
+        kayitli = kayitli_bulteni_getir(kodlar, t)
+        if not kayitli.empty:
+            st.info("API key girilmedi; daha önce kaydedilen bülten gösteriliyor.")
+            return kayitli
+        st.error("Bu tarih ve ligler için kayıtlı bülten yok. İlk sorgu için ODDS API key gerekli.")
         return pd.DataFrame()
     res = []
 
@@ -1369,10 +1431,16 @@ def bulten_cek(key, kodlar, t):
             continue
 
     if not res:
+        kayitli = kayitli_bulteni_getir(kodlar, t)
+        if not kayitli.empty:
+            st.warning("API sorgusu sonuç vermedi; son kayıtlı bülten kullanılıyor.")
+            return kayitli
         return pd.DataFrame()
 
     df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
-    return df.sort_values("zaman").reset_index(drop=True)
+    df = df.sort_values("zaman").reset_index(drop=True)
+    bulteni_kaydet(df, kodlar, t)
+    return df
 
 
 
@@ -1626,11 +1694,11 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
 
 
 def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
-    """Analiz listesinden başlamamış ve veri kalitesi yeterli kupon taslağı üretir."""
+    """Hassasiyet uzlaşması bulunan analizlerden kupon taslağı üretir."""
     ayarlar = {
-        "Temkinli": {"min_guven": 62, "taban": 2, "maks": 4, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
-        "Dengeli": {"min_guven": 60, "taban": 3, "maks": 6, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
-        "Yüksek Oran": {"min_guven": 58, "taban": 3, "maks": 5, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.70},
+        "Temkinli": {"min_guven": 62, "taban": 2, "maks": 4, "min_stabil": 4, "ek_stabil": 5, "min_oran": 1.0},
+        "Dengeli": {"min_guven": 60, "taban": 3, "maks": 6, "min_stabil": 3, "ek_stabil": 4, "min_oran": 1.0},
+        "Yüksek Oran": {"min_guven": 58, "taban": 3, "maks": 5, "min_stabil": 2, "ek_stabil": 3, "min_oran": 1.70},
     }
     cfg = ayarlar.get(profil, ayarlar["Dengeli"])
     simdi = datetime.now()
@@ -1670,7 +1738,10 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
             combo_uygun = combo_uygun and combo_p >= max(65, guven - 3)
         elif profil == "Dengeli":
             combo_uygun = combo_uygun and combo_p >= max(52, guven - 8)
-        if combo_uygun:
+        # Hassasiyet taramasında market zaten 0.00–0.10 uzlaşmasına göre
+        # seçilmiştir; tek bir toleranstaki kombo bunun üzerine yazamaz.
+        combo_secildi = combo_uygun and not t.get("hassasiyet_taramali")
+        if combo_secildi:
             secim_label = combo_label
             secim_guven = combo_p
             secim_oran = kombo_tahmini_oran(combo_label, oran_sayi)
@@ -1693,7 +1764,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
         )
         if profil == "Yüksek Oran" and secim_oran is not None:
             kalite += min(secim_oran, 5.0) * 3.0
-        if combo_uygun:
+        if combo_secildi:
             kalite += min(combo_hit, 20) * 0.20
 
         ekstra_uygun = stabil >= cfg["ek_stabil"]
@@ -1703,7 +1774,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
             "m": m, "t": t, "kalite": kalite, "oran": secim_oran,
             "secim_label": secim_label, "secim_guven": secim_guven,
             "oran_tahmini": oran_tahmini,
-            "combo_secim": combo_uygun,
+            "combo_secim": combo_secildi,
             "ekstra_uygun": ekstra_uygun,
         })
 
@@ -1740,6 +1811,8 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
             "oran": aday["oran"],
             "oran_tahmini": aday["oran_tahmini"],
             "hassasiyet": float(t.get("kullanilan_tolerans", 0.08) or 0.08),
+            "hassasiyetler": list(t.get("top10_hassasiyetler", t.get("stability_tols", [])) or []),
+            "hassasiyet_sayisi": int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0),
             "otomatik": True,
             "profil": profil,
         })
@@ -1780,7 +1853,11 @@ def kupon_gecmisine_ekle(secimler, profil, hassasiyet):
     kayit = {
         "kupon_id": simdi.strftime("%Y%m%d%H%M%S%f"),
         "profil": str(profil),
-        "hassasiyet": round(float(hassasiyet), 2),
+        "hassasiyet": (
+            round(float(hassasiyet), 2)
+            if isinstance(hassasiyet, (int, float))
+            else str(hassasiyet)
+        ),
         "olusturma_zamani": simdi.isoformat(timespec="seconds"),
         "secimler": secimler,
     }
@@ -2858,6 +2935,11 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10, sadece_ayn
             t_final["top10_hassasiyet_sayisi"] = stabilite_sayisi
             t_final["top10_stabilite_skoru"] = round(stabilite_skoru, 1)
             t_final["top10_stabilite_orani"] = round(stabilite_orani * 100, 0)
+            t_final["stability_tols"] = [f"{x:.2f}" for x in hassasiyetler]
+            t_final["stability_count"] = stabilite_sayisi
+            t_final["stability_early_tols"] = [f"{x:.2f}" for x in hassasiyetler if x <= 0.05]
+            t_final["stability_late_tols"] = [f"{x:.2f}" for x in hassasiyetler if x > 0.05]
+            t_final["hassasiyet_taramali"] = True
 
             aday = {
                 "m": m.to_dict(),
@@ -3993,8 +4075,8 @@ elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
 
 
 if gecmis_btn:
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ API Key ve en az bir lig seçin.")
+    if not secili_kodlar or (not API_KEY and not bulten_onbellegi_var(secili_kodlar, secili_tarih)):
+        st.error("⚠️ En az bir lig seçin. Kayıtlı bülten yoksa ilk sorgu için API Key de gereklidir.")
     else:
         with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
             gi_gecmis = futbol_veri_motoru(tuple(yillar))
@@ -4073,8 +4155,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
 
 
 if yuksek_oran_btn:
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ API Key ve en az bir lig seçin.")
+    if not secili_kodlar or (not API_KEY and not bulten_onbellegi_var(secili_kodlar, secili_tarih)):
+        st.error("⚠️ En az bir lig seçin. Kayıtlı bülten yoksa ilk sorgu için API Key de gereklidir.")
     elif not (yuksek_filtre_12 or yuksek_filtre_21 or yuksek_filtre_cift_yari_kg):
         st.error("⚠️ En az bir yüksek oran marketi seçin.")
     else:
@@ -4457,8 +4539,8 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
 
 
 if analiz_btn:
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ API Key ve en az bir lig seçin.")
+    if not secili_kodlar or (not API_KEY and not bulten_onbellegi_var(secili_kodlar, secili_tarih)):
+        st.error("⚠️ En az bir lig seçin. Kayıtlı bülten yoksa ilk sorgu için API Key de gereklidir.")
     else:
         with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
@@ -5200,8 +5282,8 @@ else:
         bilgi_col, olustur_col = st.columns([3.2, 1.15], gap="small")
         with bilgi_col:
             st.caption(
-                f"Temkinli, Dengeli ve Yüksek Oran kuponları birlikte hazırlanır "
-                f"ve üç sütunda gösterilir. Hassasiyet: {TOLERANS:.2f}"
+                "Her maç 0.00, 0.02, 0.04, 0.06, 0.08 ve 0.10 hassasiyetlerinde taranır. "
+                "Farklı tahmin varsa en çok hassasiyette desteklenen, en kararlı market seçilir."
             )
         with olustur_col:
             gunun_kupon_btn = st.button(
@@ -5212,10 +5294,17 @@ else:
         if gunun_kupon_btn:
             olusan_profiller = []
             bulunamayan_profiller = []
+            kupon_kaynagi = gunun_en_iyi_10_uret(
+                st.session_state.get("last_gecmis_df"),
+                st.session_state.get("last_bulten_df"),
+                min_ornek=min_ornek,
+                limit=50,
+                sadece_ayni_lig=sadece_ayni_lig,
+            )
             for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
-                otomatik_secimler = gunun_kuponunu_olustur(fl, profil_adi)
+                otomatik_secimler = gunun_kuponunu_olustur(kupon_kaynagi, profil_adi)
                 if otomatik_secimler:
-                    kupon_gecmisine_ekle(otomatik_secimler, profil_adi, TOLERANS)
+                    kupon_gecmisine_ekle(otomatik_secimler, profil_adi, "0.00–0.10 tarama")
                     olusan_profiller.append(f"{profil_adi} ({len(otomatik_secimler)} maç)")
                 else:
                     bulunamayan_profiller.append(profil_adi)
@@ -5228,7 +5317,7 @@ else:
                 )
                 kupon_mesaji = (
                     "success",
-                    f"{', '.join(olusan_profiller)} kaydedildi. Hassasiyet: {TOLERANS:.2f}.{ek_mesaj}",
+                    f"{', '.join(olusan_profiller)} kaydedildi. Hassasiyet taraması: 0.00–0.10.{ek_mesaj}",
                 )
             else:
                 kupon_mesaji = ("warning", "Üç profil için de en az iki uygun seçim bulunamadı; kupon oluşturulmadı.")
@@ -5322,14 +5411,27 @@ else:
                             zaman_yazi = datetime.fromisoformat(kayit.get("olusturma_zamani", "")).strftime("%d.%m.%Y %H:%M")
                         except Exception:
                             zaman_yazi = kayit.get("olusturma_zamani", "-")
+                        kayit_hassasiyet = kayit.get("hassasiyet", "-")
+                        if isinstance(kayit_hassasiyet, (int, float)):
+                            kayit_hassasiyet_yazi = f"{float(kayit_hassasiyet):.2f}"
+                        else:
+                            kayit_hassasiyet_yazi = str(kayit_hassasiyet)
                         secim_satirlari = []
                         for secim in kayit.get("secimler", []):
                             oran_txt = fmt_odd(secim.get("oran")) if secim.get("oran") is not None else "—"
                             tahmini_txt = " · tahmini oran" if secim.get("oran_tahmini") else ""
+                            destekler = secim.get("hassasiyetler", []) or []
+                            destek_yazi = ", ".join(f"{float(x):.2f}" for x in destekler)
+                            hassasiyet_alt = (
+                                f'<br><span style="color:#a7f3d0">Seçilen: {float(secim.get("hassasiyet", 0)):.2f} · Kararlı hassasiyetler: '
+                                f'{escape(destek_yazi)} ({len(destekler)}/6)</span>'
+                                if destekler else ""
+                            )
                             secim_satirlari.append(
                                 f'<div style="padding:7px 0;border-top:1px solid rgba(255,255,255,.12)">'
                                 f'<b>{escape(str(secim.get("ev", "")))} – {escape(str(secim.get("dep", "")))}</b><br>'
                                 f'<span style="color:#dbeafe">{escape(str(secim.get("tahmin", "-")))} · Güven %{int(secim.get("guven", 0))} · Oran {escape(str(oran_txt))}{tahmini_txt}</span>'
+                                f'{hassasiyet_alt}'
                                 f'</div>'
                             )
                         kart_col, sil_col = st.columns([8, 2])
@@ -5341,7 +5443,7 @@ else:
                                     <b style="color:{vurgu};font-size:1rem">{ikon} {escape(profil_adi)}</b>
                                     <span style="font-size:.76rem;color:#dbeafe">{escape(zaman_yazi)}</span>
                                   </div>
-                                  <div style="font-size:.78rem;color:#e2e8f0;margin:4px 0 7px">Hassasiyet: <b>{float(kayit.get('hassasiyet', 0)):.2f}</b> · {len(kayit.get('secimler', []))} maç</div>
+                                  <div style="font-size:.78rem;color:#e2e8f0;margin:4px 0 7px">Hassasiyet: <b>{escape(kayit_hassasiyet_yazi)}</b> · {len(kayit.get('secimler', []))} maç</div>
                                   {''.join(secim_satirlari)}
                                 </div>
                                 """,
