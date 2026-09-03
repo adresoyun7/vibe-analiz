@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 68
+APP_SCHEMA_VERSION = 69
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -5609,28 +5609,16 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 else "✅ Tuttu" if bool(x.get("alternatif_tuttu")) else "❌ Tutmadı",
                 axis=1,
             )
-            for kolon, varsayilan in [
-                ("alternatif_tahmin", ""), ("alternatif_guven", None),
-                ("alternatif_ornek", None), ("alternatif_puan", None),
-                ("alternatif_kararlilik", None), ("alternatif_hassasiyetler", None),
-            ]:
+            for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None)]:
                 if kolon not in liste.columns:
                     liste[kolon] = varsayilan
             liste["alternatif_tahmin"] = liste["alternatif_tahmin"].fillna("").replace("None", "")
-            liste["alternatif_hassasiyetler"] = liste["alternatif_hassasiyetler"].apply(
-                lambda x: " · ".join(map(str, x)) if isinstance(x, list) else ("" if pd.isna(x) else str(x))
-            )
             goster = liste[[
                 "Tarih", "lig", "Maç", "tahmin", "guven", "oran", "Sonuç", "Durum",
-                "alternatif_tahmin", "alternatif_guven", "alternatif_ornek",
-                "alternatif_puan", "alternatif_kararlilik", "alternatif_hassasiyetler",
-                "Alternatif Durumu",
+                "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
             ]].rename(columns={
                 "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %", "oran":"Oran",
                 "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
-                "alternatif_ornek":"Alt. Örnek", "alternatif_puan":"Alt. Puan",
-                "alternatif_kararlilik":"Alt. Kararlılık",
-                "alternatif_hassasiyetler":"Alt. Hassasiyetler",
             })
             st.markdown("#### Kaydedilen tahminler")
             st.dataframe(goster, use_container_width=True, hide_index=True)
@@ -5804,6 +5792,10 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
 
         st.markdown("### Test edilen maçlar")
         bt_goster = bt.sort_values("Tarih", ascending=False).copy()
+        bt_goster = bt_goster.drop(columns=[
+            "Ana Puan", "Ana Medyan Örnek", "Ana Kararlılık", "Ana Hassasiyetler",
+            "Alt. Örnek", "Alt. Puan", "Alt. Kararlılık", "Alt. Hassasiyetler",
+        ], errors="ignore")
         for bool_col in ["Tuttu", "Alt. Tuttu", "Formsuz Tuttu"]:
             if bool_col in bt_goster.columns:
                 bt_goster[bool_col] = bt_goster[bool_col].map({True: "✅ Evet", False: "❌ Hayır"}).fillna("—")
@@ -5958,6 +5950,52 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
         return None
 
 
+def ana_tahmin_gecmis_detayi(m, t, b_det):
+    toplam_gecmis_ornek = len(b_det)
+    gosterim_secimi = st.selectbox(
+        "Gösterilecek geçmiş örnek",
+        options=[10, 25, 50, "Tümü"],
+        index=0,
+        key=f"history_limit_{abs(hash(mac_key(m)))}",
+    )
+    gosterim_adedi = toplam_gecmis_ornek if gosterim_secimi == "Tümü" else min(int(gosterim_secimi), toplam_gecmis_ornek)
+
+    st.markdown(f"""
+    <div class="history-card">
+      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar (Gösterilen {gosterim_adedi} / Toplam {toplam_gecmis_ornek})</div>
+      <div class="history-sub" style="color:#f8fbff !important">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    bd = b_det.head(gosterim_adedi).copy()
+    dt = pd.DataFrame()
+    dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
+    dt["Ev Sahibi"] = bd["HomeTeam"]
+    dt["Deplasman"] = bd["AwayTeam"]
+    dt["İY Sonuç"] = bd["HTHG"].astype(int).astype(str) + "-" + bd["HTAG"].astype(int).astype(str)
+    dt["MS Sonuç"] = bd["FTHG"].astype(int).astype(str) + "-" + bd["FTAG"].astype(int).astype(str)
+    dt["2.5 GOL"] = (bd["FTHG"] + bd["FTAG"] >= 3).map({True: "Üst", False: "Alt"})
+    dt["KG"] = ((bd["FTHG"] > 0) & (bd["FTAG"] > 0)).map({True: "Var", False: "Yok"})
+    dt["HT/FT"] = bd["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + bd["FTR"].replace({"H": "1", "A": "2", "D": "X"})
+
+    def color_cell(val):
+        v = str(val)
+        if v in ["Üst", "Var", "1/1", "2/2"]:
+            return "background-color:#183925;color:#3ddb7c;font-weight:700"
+        if v in ["Alt", "Yok"]:
+            return "background-color:#391212;color:#ff6b6b;font-weight:700"
+        if "1/2" in v or "2/1" in v or "X/1" in v or "1/X" in v or "X/2" in v or "2/X" in v:
+            return "background-color:#37290f;color:#f1c40f;font-weight:700"
+        return ""
+
+    st.dataframe(
+        dt.style.map(color_cell, subset=["2.5 GOL", "KG", "HT/FT"]),
+        use_container_width=True,
+        hide_index=True,
+        height=min(700, 38 + len(dt) * 35),
+    )
+
+
 def detay_ana_icerik():
     item = secili_detay_itemi()
     m, t, b_det = item["m"], item["t"], item["b"]
@@ -5990,6 +6028,9 @@ def detay_ana_icerik():
         """,
         unsafe_allow_html=True,
     )
+
+    with st.expander("📊 Ana tahminin benzer geçmiş maçları", expanded=False):
+        ana_tahmin_gecmis_detayi(m, t, b_det)
 
     ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
 
@@ -6177,49 +6218,7 @@ def detay_ana_icerik():
     </div>
     """, unsafe_allow_html=True)
 
-    toplam_gecmis_ornek = len(b_det)
-    gosterim_secimi = st.selectbox(
-        "Gösterilecek geçmiş örnek",
-        options=[10, 25, 50, "Tümü"],
-        index=0,
-        key=f"history_limit_{abs(hash(mac_key(m)))}",
-    )
-    gosterim_adedi = toplam_gecmis_ornek if gosterim_secimi == "Tümü" else min(int(gosterim_secimi), toplam_gecmis_ornek)
 
-    st.markdown(f"""
-    <div class="history-card">
-      <div class="history-title" style="color:#f8fbff !important">Benzer Oranlı Geçmiş Maçlar (Gösterilen {gosterim_adedi} / Toplam {toplam_gecmis_ornek})</div>
-      <div class="history-sub" style="color:#f8fbff !important">ℹ️ Tablodaki maçlar seçili oran aralığına (±{t['kullanilan_tolerans']:.2f}) en yakın bulunan benzer maçlardır.</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    bd = b_det.head(gosterim_adedi).copy()
-    dt = pd.DataFrame()
-    dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
-    dt["Ev Sahibi"] = bd["HomeTeam"]
-    dt["Deplasman"] = bd["AwayTeam"]
-    dt["İY Sonuç"] = bd["HTHG"].astype(int).astype(str) + "-" + bd["HTAG"].astype(int).astype(str)
-    dt["MS Sonuç"] = bd["FTHG"].astype(int).astype(str) + "-" + bd["FTAG"].astype(int).astype(str)
-    dt["2.5 GOL"] = (bd["FTHG"] + bd["FTAG"] >= 3).map({True: "Üst", False: "Alt"})
-    dt["KG"] = ((bd["FTHG"] > 0) & (bd["FTAG"] > 0)).map({True: "Var", False: "Yok"})
-    dt["HT/FT"] = bd["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + bd["FTR"].replace({"H": "1", "A": "2", "D": "X"})
-
-    def color_cell(val):
-        v = str(val)
-        if v in ["Üst", "Var", "1/1", "2/2"]:
-            return "background-color:#183925;color:#3ddb7c;font-weight:700"
-        if v in ["Alt", "Yok"]:
-            return "background-color:#391212;color:#ff6b6b;font-weight:700"
-        if "1/2" in v or "2/1" in v or "X/1" in v or "1/X" in v or "X/2" in v or "2/X" in v:
-            return "background-color:#37290f;color:#f1c40f;font-weight:700"
-        return ""
-
-    st.dataframe(
-        dt.style.map(color_cell, subset=["2.5 GOL", "KG", "HT/FT"]),
-        use_container_width=True,
-        hide_index=True,
-        height=min(700, 38 + len(dt) * 35),
-    )
 
 
 def detay_gecmis_sidebar():
