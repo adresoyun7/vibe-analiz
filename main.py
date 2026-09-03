@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 46
+APP_SCHEMA_VERSION = 47
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -4273,7 +4273,14 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         df = pd.DataFrame(takip)
         df["zaman_dt"] = pd.to_datetime(df["zaman"], errors="coerce").dt.tz_localize(None)
         baslangic = pd.Timestamp(datetime.now().date())
-        donem = st.selectbox("Dönem", ["Bugün", "Son 7 Gün", "Son 30 Gün", "Tümü"], index=2)
+        # Varsayılan olarak bütün kayıtları göster. Böylece sayfa her açıldığında
+        # yalnızca bugünün maçlarına daralmış gibi görünmez.
+        donem = st.selectbox(
+            "Dönem",
+            ["Tümü", "Bugün", "Son 7 Gün", "Son 30 Gün"],
+            index=0,
+            key="sonuc_takibi_donem_v2",
+        )
         if donem == "Bugün":
             gorunen = df[df["zaman_dt"].dt.date == baslangic.date()].copy()
         elif donem == "Son 7 Gün":
@@ -5190,39 +5197,41 @@ else:
 
     kupon_mesaji = None
     with st.expander("🎫 Günün Kuponunu Oluştur", expanded=False):
-        profil_col, bilgi_col, olustur_col = st.columns([1.15, 2.2, 1.15], gap="small")
-        with profil_col:
-            secili_kupon_profili = st.selectbox(
-                "Kupon profili", ["Temkinli", "Dengeli", "Yüksek Oran"],
-                index=1, key="gunun_kupon_profili_secimi",
-            )
-        profil_bilgileri = {
-            "Temkinli": "2–4 maç · Ana tahmin ve yüksek güven öncelikli",
-            "Dengeli": "3–6 maç · Güven, örnek ve kararlılık dengeli",
-            "Yüksek Oran": "3–5 maç · Kombinasyon ve yüksek oran öncelikli",
-        }
+        bilgi_col, olustur_col = st.columns([3.2, 1.15], gap="small")
         with bilgi_col:
-            st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
-            st.caption(f"{profil_bilgileri[secili_kupon_profili]} · Hassasiyet: {TOLERANS:.2f}")
+            st.caption(
+                f"Temkinli, Dengeli ve Yüksek Oran kuponları birlikte hazırlanır "
+                f"ve üç sütunda gösterilir. Hassasiyet: {TOLERANS:.2f}"
+            )
         with olustur_col:
-            st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
             gunun_kupon_btn = st.button(
-                "Kuponu oluştur", key="gunun_kuponu_tek_buton",
+                "3 kuponu oluştur", key="gunun_kuponu_tek_buton",
                 use_container_width=True, type="primary",
             )
 
         if gunun_kupon_btn:
-            otomatik_secimler = gunun_kuponunu_olustur(fl, secili_kupon_profili)
-            if not otomatik_secimler:
-                kupon_mesaji = ("warning", f"{secili_kupon_profili} profili için en az iki uygun seçim bulunamadı; kupon oluşturulmadı.")
-            else:
-                kupon_gecmisine_ekle(otomatik_secimler, secili_kupon_profili, TOLERANS)
+            olusan_profiller = []
+            bulunamayan_profiller = []
+            for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
+                otomatik_secimler = gunun_kuponunu_olustur(fl, profil_adi)
+                if otomatik_secimler:
+                    kupon_gecmisine_ekle(otomatik_secimler, profil_adi, TOLERANS)
+                    olusan_profiller.append(f"{profil_adi} ({len(otomatik_secimler)} maç)")
+                else:
+                    bulunamayan_profiller.append(profil_adi)
+            if olusan_profiller:
                 st.session_state.coupon_popup_open = True
                 st.session_state.scroll_to_coupon = True
+                ek_mesaj = (
+                    f" Uygun seçim bulunamayan: {', '.join(bulunamayan_profiller)}."
+                    if bulunamayan_profiller else ""
+                )
                 kupon_mesaji = (
                     "success",
-                    f"{secili_kupon_profili} kuponu ({len(otomatik_secimler)} maç, hassasiyet {TOLERANS:.2f}) kaydedildi.",
+                    f"{', '.join(olusan_profiller)} kaydedildi. Hassasiyet: {TOLERANS:.2f}.{ek_mesaj}",
                 )
+            else:
+                kupon_mesaji = ("warning", "Üç profil için de en az iki uygun seçim bulunamadı; kupon oluşturulmadı.")
 
     if kupon_mesaji:
         getattr(st, kupon_mesaji[0])(kupon_mesaji[1])
@@ -5275,20 +5284,39 @@ else:
 
         kupon_gecmisi = kupon_gecmisini_oku()
         if kupon_gecmisi:
-            st.markdown("#### Otomatik kupon geçmişi")
+            st.markdown(
+                """
+                <div style="color:#f8fafc;-webkit-text-fill-color:#f8fafc;font-size:1.18rem;
+                            font-weight:900;margin:10px 0 12px;opacity:1">
+                    📚 Otomatik kupon geçmişi
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
             profil_renkleri = {
                 "Temkinli": ("#123d2d", "#36d98b", "🟢"),
                 "Dengeli": ("#12345b", "#60a5fa", "🔵"),
                 "Yüksek Oran": ("#4a2b12", "#f59e0b", "🟠"),
             }
-            profil_sekmeleri = st.tabs(["🟢 Temkinli", "🔵 Dengeli", "🟠 Yüksek Oran"])
-            for profil_tab, profil_adi in zip(profil_sekmeleri, ["Temkinli", "Dengeli", "Yüksek Oran"]):
-                with profil_tab:
+            profil_sutunlari = st.columns(3, gap="small")
+            for profil_col, profil_adi in zip(profil_sutunlari, ["Temkinli", "Dengeli", "Yüksek Oran"]):
+                with profil_col:
+                    arka, vurgu, ikon = profil_renkleri[profil_adi]
+                    st.markdown(
+                        f"""
+                        <div style="background:{arka};border:1px solid {vurgu};border-radius:12px;
+                                    padding:10px 12px;margin-bottom:10px;text-align:center;
+                                    color:#f8fafc;-webkit-text-fill-color:#f8fafc;font-size:1rem;
+                                    font-weight:900;opacity:1">
+                            {ikon} {escape(profil_adi)}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
                     profil_kayitlari = [x for x in kupon_gecmisi if x.get("profil") == profil_adi]
                     if not profil_kayitlari:
                         st.info(f"Henüz {profil_adi} kupon kaydı yok.")
                         continue
-                    arka, vurgu, ikon = profil_renkleri[profil_adi]
                     for kayit in profil_kayitlari:
                         try:
                             zaman_yazi = datetime.fromisoformat(kayit.get("olusturma_zamani", "")).strftime("%d.%m.%Y %H:%M")
@@ -5304,7 +5332,7 @@ else:
                                 f'<span style="color:#dbeafe">{escape(str(secim.get("tahmin", "-")))} · Güven %{int(secim.get("guven", 0))} · Oran {escape(str(oran_txt))}{tahmini_txt}</span>'
                                 f'</div>'
                             )
-                        kart_col, sil_col = st.columns([9, 1])
+                        kart_col, sil_col = st.columns([8, 2])
                         with kart_col:
                             st.markdown(
                                 f"""
