@@ -1799,6 +1799,12 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             "hassasiyet_sayisi": int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0),
             "otomatik": True,
             "profil": profil,
+            # Kupon geçmişinden maç detayını yeniden oluşturabilmek için
+            # bülten snapshot'ındaki temel maç/oran bilgilerini de sakla.
+            "sport_key": m.get("sport_key", ""),
+            "h": m.get("h"),
+            "b": m.get("b"),
+            "a": m.get("a"),
         })
         maclar.add(mac_id)
         if len(secilenler) >= cfg["maks"]:
@@ -1865,6 +1871,10 @@ def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
         "oran_tahmini": bool(oran_tahmini),
         "profil": "Kendi Kuponum",
         "otomatik": False,
+        "sport_key": m.get("sport_key", ""),
+        "h": m.get("h"),
+        "b": m.get("b"),
+        "a": m.get("a"),
     }
     mevcutlar = {
         (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
@@ -4911,6 +4921,84 @@ def secili_detay_itemi():
     return st.session_state.final_list[idx]
 
 
+def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
+    """Otomatik/manüel kupon satırından normal Maç Detayı verisini yeniden üret.
+
+    Önce son bülten snapshot'ında aynı maçı arar. Yeni oluşturulan kuponlarda
+    saklanan 1-X-2 oranları sayesinde bülten değişmiş olsa bile detay yeniden
+    hesaplanabilir. Çok eski kayıtlarda oran bilgisi yoksa None döner.
+    """
+    if not isinstance(secim, dict):
+        return None
+
+    ev = str(secim.get("ev", ""))
+    dep = str(secim.get("dep", ""))
+    zaman_iso = str(secim.get("zaman_iso", ""))
+    hedef_zaman = parse_mac_datetime(zaman_iso)
+
+    m = None
+    bulten = st.session_state.get("last_bulten_df")
+    if bulten is not None and not getattr(bulten, "empty", True):
+        try:
+            aday = bulten[
+                (bulten["ev"].astype(str) == ev) &
+                (bulten["dep"].astype(str) == dep)
+            ]
+            if not aday.empty:
+                if hedef_zaman is not None and "zaman" in aday.columns:
+                    farklar = aday["zaman"].apply(
+                        lambda z: abs((z - hedef_zaman).total_seconds())
+                        if hasattr(z, "year") else float("inf")
+                    )
+                    row = aday.loc[farklar.idxmin()]
+                else:
+                    row = aday.iloc[0]
+                m = row.to_dict()
+        except Exception:
+            m = None
+
+    # Bülten artık bellekte değilse yeni kuponlarda sakladığımız oranları kullan.
+    if m is None:
+        try:
+            h, b, a = secim.get("h"), secim.get("b"), secim.get("a")
+            if h is None or b is None or a is None:
+                return None
+            m = {
+                "match_id": secim.get("match_id", ""),
+                "sport_key": secim.get("sport_key", ""),
+                "lig": secim.get("lig", ""),
+                "zaman": hedef_zaman,
+                "ev": ev,
+                "dep": dep,
+                "h": float(h),
+                "b": float(b),
+                "a": float(a),
+            }
+        except Exception:
+            return None
+
+    gecmis = st.session_state.get("last_gecmis_df")
+    if gecmis is None or getattr(gecmis, "empty", True):
+        return None
+
+    try:
+        tolerans = float(secim.get("hassasiyet", 0.08) or 0.08)
+    except Exception:
+        tolerans = 0.08
+
+    try:
+        t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=sadece_ayni_lig)
+        if t is None:
+            # Aynı lig filtresi eski kuponlarda eşleşmeyi engelliyorsa detayın
+            # tamamen kaybolmaması için genel geçmişte bir kez daha dene.
+            t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=False)
+        if t is None:
+            return None
+        return {"m": m, "t": t, "b": b_det}
+    except Exception:
+        return None
+
+
 def detay_ana_icerik():
     item = secili_detay_itemi()
     m, t, b_det = item["m"], item["t"], item["b"]
@@ -5708,55 +5796,89 @@ else:
                             kayit_hassasiyet_yazi = f"{float(kayit_hassasiyet):.2f}"
                         else:
                             kayit_hassasiyet_yazi = str(kayit_hassasiyet)
-                        secim_satirlari = []
-                        for secim in kayit.get("secimler", []):
+                        # Kupon başlığı ayrı; her maç kendi satırında Detay ve + ile gösterilir.
+                        st.markdown(
+                            f"""
+                            <div style="background:{arka};border:1px solid {vurgu};border-radius:13px 13px 8px 8px;
+                                        padding:10px 12px;margin-bottom:6px;color:#f8fafc">
+                              <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                                <b style="color:{vurgu};font-size:1rem">{ikon} {escape(profil_adi)}</b>
+                                <span style="font-size:.76rem;color:#dbeafe">{escape(zaman_yazi)}</span>
+                              </div>
+                              <div style="font-size:.78rem;color:#e2e8f0;margin-top:4px">
+                                Hassasiyet: <b>{escape(kayit_hassasiyet_yazi)}</b> · {len(kayit.get('secimler', []))} maç
+                              </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                        for secim_no, secim in enumerate(kayit.get("secimler", [])):
                             destekler = secim.get("hassasiyetler", []) or []
                             destek_yazi = ", ".join(f"{float(x):.2f}" for x in destekler)
                             hassasiyet_alt = (
-                                f'<br><span style="color:#a7f3d0">Seçilen: {float(secim.get("hassasiyet", 0)):.2f} · Kararlı hassasiyetler: '
-                                f'{escape(destek_yazi)} ({len(destekler)}/6)</span>'
+                                f'<div style="font-size:.70rem;color:#a7f3d0;margin-top:3px">'
+                                f'Seçilen: {float(secim.get("hassasiyet", 0)):.2f} · Kararlı: '
+                                f'{escape(destek_yazi)} ({len(destekler)}/6)</div>'
                                 if destekler else ""
                             )
-                            secim_satirlari.append(
-                                f'<div style="padding:7px 0;border-top:1px solid rgba(255,255,255,.12)">'
-                                f'<b>{escape(str(secim.get("ev", "")))} – {escape(str(secim.get("dep", "")))}</b><br>'
-                                f'<span style="color:#dbeafe">{escape(str(secim.get("tahmin", "-")))} · Güven %{int(secim.get("guven", 0))}</span>'
-                                f'{hassasiyet_alt}'
-                                f'</div>'
-                            )
-                        kart_col, sil_col = st.columns([8, 2])
-                        with kart_col:
-                            st.markdown(
-                                f"""
-                                <div style="background:{arka};border:1px solid {vurgu};border-radius:13px;padding:12px 14px;margin-bottom:8px;color:#f8fafc">
-                                  <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
-                                    <b style="color:{vurgu};font-size:1rem">{ikon} {escape(profil_adi)}</b>
-                                    <span style="font-size:.76rem;color:#dbeafe">{escape(zaman_yazi)}</span>
-                                  </div>
-                                  <div style="font-size:.78rem;color:#e2e8f0;margin:4px 0 7px">Hassasiyet: <b>{escape(kayit_hassasiyet_yazi)}</b> · {len(kayit.get('secimler', []))} maç</div>
-                                  {''.join(secim_satirlari)}
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                            for secim_no, secim in enumerate(kayit.get("secimler", [])):
-                                mac_etiketi = f"{secim.get('ev', '')} – {secim.get('dep', '')}"
+                            satir_col, detay_col, ekle_col = st.columns([7.2, 1.8, 0.8], gap="small")
+                            with satir_col:
+                                st.markdown(
+                                    f"""
+                                    <div style="background:{arka};border:1px solid rgba(255,255,255,.14);
+                                                border-radius:9px;padding:8px 10px;min-height:58px;color:#f8fafc">
+                                      <b>{escape(str(secim.get('ev', '')))} – {escape(str(secim.get('dep', '')))}</b>
+                                      <div style="font-size:.77rem;color:#dbeafe;margin-top:3px">
+                                        {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
+                                      </div>
+                                      {hassasiyet_alt}
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
+                            with detay_col:
                                 if st.button(
-                                    f"＋ Kendi Kuponuma · {mac_etiketi}",
+                                    "Detay",
+                                    key=f"auto_coupon_detail_{kayit.get('kupon_id')}_{secim_no}",
+                                    use_container_width=True,
+                                ):
+                                    detay_item = kupon_seciminden_detay_itemi(
+                                        secim, sadece_ayni_lig=sadece_ayni_lig
+                                    )
+                                    if detay_item is None:
+                                        st.warning("Bu kupon kaydı için detay verisi yeniden oluşturulamadı.")
+                                    else:
+                                        st.session_state.detay_item = detay_item
+                                        st.session_state.detay_idx = None
+                                        st.rerun()
+                            with ekle_col:
+                                if st.button(
+                                    "＋",
                                     key=f"auto_to_manual_{kayit.get('kupon_id')}_{secim_no}",
                                     use_container_width=True,
+                                    help="Kendi Kuponuma ekle",
                                 ):
                                     secim_m = {
                                         "ev": secim.get("ev", ""),
                                         "dep": secim.get("dep", ""),
                                         "lig": secim.get("lig", ""),
+                                        "sport_key": secim.get("sport_key", ""),
+                                        "h": secim.get("h"),
+                                        "b": secim.get("b"),
+                                        "a": secim.get("a"),
                                         "zaman": parse_mac_datetime(secim.get("zaman_iso", "")),
                                     }
                                     manuel_kupona_ekle(
                                         secim_m, {}, secim.get("tahmin", "-"), secim.get("guven", 0),
-                                        oran=None, oran_tahmini=False,
+                                        oran=secim.get("oran"),
+                                        oran_tahmini=bool(secim.get("oran_tahmini", False)),
                                     )
                                     st.rerun()
+
+                        kart_col, sil_col = st.columns([8, 2])
+                        with kart_col:
+                            st.markdown("<div style='height:1px'></div>", unsafe_allow_html=True)
                         with sil_col:
                             if st.button("🗑️", key=f"auto_coupon_delete_{kayit.get('kupon_id')}", use_container_width=True):
                                 yeni_gecmis = [x for x in kupon_gecmisi if x.get("kupon_id") != kayit.get("kupon_id")]
