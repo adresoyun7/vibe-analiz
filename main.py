@@ -16,6 +16,13 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 
+
+def kart_takim_adi(ad):
+    """Kartlarda baştaki yaygın kulüp eklerini gizler; veri eşleştirmesini etkilemez."""
+    s = str(ad or "").strip()
+    s = re.sub(r"^(?:FC|CF|AFC|SC|AC)\s+", "", s, flags=re.IGNORECASE)
+    return s.strip() or str(ad or "")
+
 def parse_mac_datetime(value):
     if isinstance(value, datetime):
         return value
