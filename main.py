@@ -5822,21 +5822,8 @@ else:
                                 f'{escape(destek_yazi)} ({len(destekler)}/6)</div>'
                                 if destekler else ""
                             )
-                            satir_col, detay_col, ekle_col = st.columns([7.2, 1.8, 0.8], gap="small")
-                            with satir_col:
-                                st.markdown(
-                                    f"""
-                                    <div style="background:{arka};border:1px solid rgba(255,255,255,.14);
-                                                border-radius:9px;padding:8px 10px;min-height:58px;color:#f8fafc">
-                                      <b>{escape(str(secim.get('ev', '')))} – {escape(str(secim.get('dep', '')))}</b>
-                                      <div style="font-size:.77rem;color:#dbeafe;margin-top:3px">
-                                        {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
-                                      </div>
-                                      {hassasiyet_alt}
-                                    </div>
-                                    """,
-                                    unsafe_allow_html=True,
-                                )
+                            # Aksiyonlar kartın üstünde; maç kartı profil sütununun tamamını kullanır.
+                            ust_bosluk, detay_col, ekle_col = st.columns([5.8, 2.7, 1.5], gap="small")
                             with detay_col:
                                 if st.button(
                                     "Detay",
@@ -5875,6 +5862,21 @@ else:
                                         oran_tahmini=bool(secim.get("oran_tahmini", False)),
                                     )
                                     st.rerun()
+
+                            st.markdown(
+                                f"""
+                                <div style="background:{arka};border:1px solid rgba(255,255,255,.16);
+                                            border-radius:11px;padding:12px 14px;min-height:76px;
+                                            width:100%;box-sizing:border-box;color:#f8fafc;margin:0 0 12px 0">
+                                  <b style="font-size:.94rem">{escape(str(secim.get('ev', '')))} – {escape(str(secim.get('dep', '')))}</b>
+                                  <div style="font-size:.80rem;color:#dbeafe;margin-top:5px">
+                                    {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
+                                  </div>
+                                  {hassasiyet_alt}
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
 
                         kart_col, sil_col = st.columns([8, 2])
                         with kart_col:
