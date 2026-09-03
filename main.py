@@ -2619,7 +2619,7 @@ def form_ozet_yazi(profil):
         f"({dep['gf']:.1f}/{dep['ga']:.1f} gol)"
     )
 
-def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True, kalibrasyon_aktif=True):
+def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True, kalibrasyon_aktif=True, form_profili_override=None):
     # Form, oran eşleşmesi yapılmadan önceki tarihsel takım maçlarından hesaplanır.
     form_kaynagi = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
     b_df = form_kaynagi
@@ -2683,10 +2683,13 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=True, kalib
     oran_dep = float(m_row["a"])
 
     # Güncel form: yalnızca hedef maçtan önceki son 5 maç.
-    form_profili = mac_form_profili(form_kaynagi, m_row, limit=5) if form_aktif else {
-        "aktif": False, "form_farki": 0.0, "goal_signal": 0.5, "btts_signal": 0.5,
-        "draw_signal": 0.33, "durum": "Formsuz karşılaştırma"
-    }
+    if form_aktif:
+        form_profili = form_profili_override if form_profili_override is not None else mac_form_profili(form_kaynagi, m_row, limit=5)
+    else:
+        form_profili = {
+            "aktif": False, "form_farki": 0.0, "goal_signal": 0.5, "btts_signal": 0.5,
+            "draw_signal": 0.33, "durum": "Formsuz karşılaştırma"
+        }
 
     sample_factor = sample_factor_hesapla(sample, float(tolerans))
     if oran_ev < 1.40 or oran_dep < 1.40:
@@ -4031,27 +4034,134 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
 
 def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min_ornek,
                                     sadece_ayni_lig=False, lig_kodlari=None, max_test=500):
-    """0.00–0.10 arasındaki 11 toleransı otomatik test eder.
-    Seçili toleransın detay DataFrame'ini ayrıca döndürür.
+    """0.00–0.10 arasındaki 11 toleransı TEK kronolojik geçişte test eder.
+
+    Eski sürüm her tolerans için bütün sezon backtestini baştan çalıştırıyordu.
+    Bu sürüm test maçını ve train kümesini bir kez hazırlar; takım formunu da maç
+    başına bir kez hesaplar ve aynı tarih noktasında 11 toleransı birlikte değerlendirir.
     """
-    satirlar = []
-    secili_df = None
+    if gecmis_df is None or gecmis_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
     toleranslar = [round(i / 100.0, 2) for i in range(11)]
+    secili_tol = round(float(secili_tolerans), 2)
 
+    veri = gecmis_df.copy()
+    veri["Date"] = pd.to_datetime(veri["Date"], errors="coerce")
+    veri = veri.dropna(subset=["Date", "FTHG", "FTAG", "FTR"]).sort_values("Date")
+
+    test = veri[veri["season_code"].astype(str) == str(test_sezonu)].copy()
+    if lig_kodlari:
+        test = test[test["league_code"].isin(set(lig_kodlari))]
+    test = test.sort_values("Date").tail(int(max_test))
+
+    # Her tolerans kendi tahmin geçmişine ve rolling kalibrasyonuna sahip olmalı.
+    sonuclar = {tol: [] for tol in toleranslar}
+    kalibrasyon = {tol: [] for tol in toleranslar}
+
+    # Pandas boolean filtreyi 11 kez tekrarlamamak için tarih dizisini bir kez hazırla.
+    veri_tarih = veri["Date"].to_numpy()
+
+    for _, row in test.iterrows():
+        tarih = row["Date"]
+        # Veri zaten tarih sıralı: searchsorted ile geçmiş sınırını bul.
+        idx = veri["Date"].searchsorted(tarih, side="left")
+        train = veri.iloc[:idx]
+        if sadece_ayni_lig:
+            train = train[train["league_code"] == row["league_code"]]
+        if train.empty:
+            continue
+
+        hedef = {
+            "h": row["B365H"], "b": row["B365D"], "a": row["B365A"],
+            "ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
+            "zaman": tarih,
+        }
+
+        # Form toleranstan bağımsız: bu maç için yalnızca BİR KEZ hesaplanır.
+        ortak_form = mac_form_profili(train, hedef, limit=5)
+
+        for tol in toleranslar:
+            t, benzerler = hesapla(
+                train, hedef, tol,
+                form_aktif=True,
+                kalibrasyon_aktif=False,
+                form_profili_override=ortak_form,
+            )
+            if t is None or len(benzerler) < int(min_ornek):
+                continue
+            if int(t.get("ana_p", 0) or 0) <= 60:
+                continue
+
+            # Formsuz model aynı toleransta hesaplanır; form taraması tekrar yapılmaz.
+            t_formsuz, _ = hesapla(
+                train, hedef, tol,
+                form_aktif=False,
+                kalibrasyon_aktif=False,
+            )
+
+            label = t.get("ana_label", "")
+            tuttu = tahmin_tuttu_mu(label, row)
+            if tuttu is None:
+                continue
+
+            oran = market_label_to_odd(hedef, label)
+            kalibre_p, kal_kaynak, kal_n = rolling_kalibre_olasilik(
+                kalibrasyon[tol], label, t.get("ana_p", 0)
+            )
+            value_m = value_edge_hesapla(hedef, label, kalibre_p)
+
+            kar = None
+            if oran is not None:
+                kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
+
+            formsuz_guven = int(t_formsuz.get("ana_p", 0) or 0) if t_formsuz else 0
+            formsuz_gecerli = bool(t_formsuz and formsuz_guven > 60)
+            formsuz_label = t_formsuz.get("ana_label", "") if formsuz_gecerli else ""
+            formsuz_tuttu = tahmin_tuttu_mu(formsuz_label, row) if formsuz_label else None
+            formsuz_oran = market_label_to_odd(hedef, formsuz_label) if formsuz_label else None
+            formsuz_kar = None
+            if formsuz_oran is not None and formsuz_tuttu is not None:
+                formsuz_kar = round((float(formsuz_oran) - 1) * 100 if formsuz_tuttu else -100, 2)
+
+            kayit = {
+                "Tarih": tarih.date(),
+                "Lig": row.get("league_code", "-"),
+                "Maç": f"{row.get('HomeTeam', '')} - {row.get('AwayTeam', '')}",
+                "Tahmin": label,
+                "Güven": int(t.get("ana_p", 0)),
+                "Örnek": int(t.get("ornek", 0)),
+                "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
+                "Tuttu": bool(tuttu),
+                "Oran": round(float(oran), 2) if oran is not None else None,
+                "Kâr (100 TL)": kar,
+                "Piyasa Fair %": value_m.get("fair_prob"),
+                "Kalibre Model %": round(float(kalibre_p), 1) if kalibre_p is not None else None,
+                "Kalibrasyon Kaynağı": kal_kaynak,
+                "Kalibrasyon N": int(kal_n),
+                "Edge (puan)": value_m.get("edge"),
+                "Model EV %": value_m.get("ev"),
+                "Value Durumu": value_m.get("value_label", "N/A"),
+                "Form": t.get("form_text", "—"),
+                "Form Çarpanı": t.get("form_factor", 1.0),
+                "Formsuz Tahmin": formsuz_label or "—",
+                "Formsuz Güven": formsuz_guven if formsuz_gecerli else None,
+                "Formsuz Tuttu": bool(formsuz_tuttu) if formsuz_tuttu is not None else None,
+                "Formsuz Oran": round(float(formsuz_oran), 2) if formsuz_oran is not None else None,
+                "Formsuz Kâr (100 TL)": formsuz_kar,
+            }
+            sonuclar[tol].append(kayit)
+            kalibrasyon[tol].append({
+                "Tahmin": label,
+                "Güven": int(t.get("ana_p", 0)),
+                "Güven Bandı": guven_bandi(t.get("ana_p", 0)),
+                "Tuttu": bool(tuttu),
+            })
+
+    satirlar = []
     for tol in toleranslar:
-        bt = backtest_calistir(
-            gecmis_df,
-            test_sezonu,
-            tol,
-            min_ornek,
-            sadece_ayni_lig=sadece_ayni_lig,
-            lig_kodlari=lig_kodlari,
-            max_test=max_test,
-        )
-        if abs(float(tol) - float(secili_tolerans)) < 1e-9:
-            secili_df = bt.copy()
-
-        if bt is None or bt.empty:
+        bt = pd.DataFrame(sonuclar[tol])
+        if bt.empty:
             satirlar.append({
                 "Hassasiyet": f"{tol:.2f}", "Tahmin": 0,
                 "Formlu Başarı %": None, "Formsuz Başarı %": None,
@@ -4062,23 +4172,15 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
 
         toplam = len(bt)
         basari = float(bt["Tuttu"].astype(bool).mean() * 100.0)
-
         fz = bt["Formsuz Tuttu"].dropna() if "Formsuz Tuttu" in bt.columns else pd.Series(dtype=bool)
         fz_basari = float(fz.astype(bool).mean() * 100.0) if len(fz) else None
-        katk = (basari - fz_basari) if fz_basari is not None else None
+        katk = basari - fz_basari if fz_basari is not None else None
 
         ms = bt[bt["Kâr (100 TL)"].notna()].copy()
-        ms_roi = (
-            float(ms["Kâr (100 TL)"].sum()) / (len(ms) * 100.0) * 100.0
-            if len(ms) else None
-        )
-
+        ms_roi = float(ms["Kâr (100 TL)"].sum()) / (len(ms) * 100.0) * 100.0 if len(ms) else None
         edge_ms = ms[ms["Edge (puan)"].notna()].copy() if "Edge (puan)" in ms.columns else pd.DataFrame()
         poz = edge_ms[edge_ms["Edge (puan)"] > 0].copy() if not edge_ms.empty else pd.DataFrame()
-        poz_roi = (
-            float(poz["Kâr (100 TL)"].sum()) / (len(poz) * 100.0) * 100.0
-            if len(poz) else None
-        )
+        poz_roi = float(poz["Kâr (100 TL)"].sum()) / (len(poz) * 100.0) * 100.0 if len(poz) else None
 
         satirlar.append({
             "Hassasiyet": f"{tol:.2f}",
@@ -4092,14 +4194,8 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             "Pozitif Edge ROI %": round(poz_roi, 1) if poz_roi is not None else None,
         })
 
-    if secili_df is None:
-        secili_df = backtest_calistir(
-            gecmis_df, test_sezonu, secili_tolerans, min_ornek,
-            sadece_ayni_lig=sadece_ayni_lig,
-            lig_kodlari=lig_kodlari, max_test=max_test,
-        )
+    secili_df = pd.DataFrame(sonuclar.get(secili_tol, []))
     return pd.DataFrame(satirlar), secili_df
-
 
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
@@ -5551,7 +5647,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
 
 
 if backtest_btn:
-    with st.spinner("🧪 11 hassasiyet (0.00–0.10) tarih sırasıyla test ediliyor... Bu işlem normal backtestten daha uzun sürebilir."):
+    with st.spinner("⚡ 11 hassasiyet tek geçişte test ediliyor (0.00–0.10)..."):
         bt_sezonlar = list(dict.fromkeys(list(yillar) + [backtest_sezonu]))
         bt_gecmis = futbol_veri_motoru(tuple(bt_sezonlar))
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
@@ -5605,7 +5701,7 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
             Backtest yalnızca güveni %60'ın üstünde olan (%61+) tahminleri değerlendirir.
             Aynı maç ayrıca formsuz modelle de test edilerek form katkısı doğrudan karşılaştırılır; formsuz kıyas da %61+ eşiğini kullanır.
             MS 1/X/2 Value/Edge hesabında ham güven değil, yalnızca önceki test sonuçlarından öğrenilen kalibre olasılık kullanılır.
-            BACKTESTİ BAŞLAT tek seferde 0.00–0.10 arasındaki 11 hassasiyetin tamamını test eder.
+            BACKTESTİ BAŞLAT 0.00–0.10 arasındaki 11 hassasiyeti tek kronolojik geçişte test eder; takım formu maç başına bir kez hesaplanır.
           </div>
           <div class="backtest-season-fix" style="font-size:.82rem;font-weight:800;margin-top:7px;">Test sezonu: {escape(str(backtest_sezonu))}</div>
         </div>
