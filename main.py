@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 58
+APP_SCHEMA_VERSION = 59
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1374,6 +1374,46 @@ def bulten_cek(key, kodlar, t):
     df = df.sort_values("zaman").reset_index(drop=True)
     return df
 
+
+
+
+def bulten_sorgu_anahtari(kodlar, t):
+    """Aynı tarih + aynı lig seçimi için tek bir bülten snapshot'ı kullan."""
+    return (str(t), tuple(sorted(str(k) for k in (kodlar or []))))
+
+
+def bulten_cacheli_al(key, kodlar, t, force=False):
+    """
+    The Odds API bültenini aynı tarih/lig kombinasyonu için yalnızca bir kez çeker.
+
+    Hassasiyet, minimum örnek, güven filtresi, sayfa modu vb. değişikliklerinde
+    API'ye tekrar gitmez; session_state içindeki aynı oran snapshot'ını kullanır.
+    force=True yalnızca kullanıcı özellikle "Oranları Yenile" dediğinde kullanılır.
+    """
+    sorgu_key = bulten_sorgu_anahtari(kodlar, t)
+    cache = st.session_state.setdefault("bulten_cache", {})
+
+    if not force and sorgu_key in cache:
+        kayitli = cache[sorgu_key]
+        if isinstance(kayitli, pd.DataFrame):
+            return kayitli.copy()
+
+    yeni_bulten = bulten_cek(key, kodlar, t)
+    cache[sorgu_key] = yeni_bulten.copy() if isinstance(yeni_bulten, pd.DataFrame) else pd.DataFrame()
+    st.session_state["bulten_cache"] = cache
+    st.session_state["aktif_bulten_key"] = sorgu_key
+    return cache[sorgu_key].copy()
+
+
+def aktif_bulteni_sil(kodlar, t):
+    """Sadece ekranda seçili tarih + lig kombinasyonunun önbelleğini temizler."""
+    sorgu_key = bulten_sorgu_anahtari(kodlar, t)
+    cache = st.session_state.get("bulten_cache", {})
+    if isinstance(cache, dict):
+        cache.pop(sorgu_key, None)
+        st.session_state["bulten_cache"] = cache
+    st.session_state.pop("last_bulten_df", None)
+    st.session_state.pop("aktif_bulten_key", None)
 
 
 
@@ -4165,6 +4205,14 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
+
+# API tasarrufu: normal analizler kayıtlı bülteni kullanır.
+# Kullanıcı yalnızca gerçekten yeni oran istediğinde bu düğmeye basar.
+with st.sidebar:
+    if st.button('🔄 Oranları Yenile', use_container_width=True, key='oranlari_yenile_btn'):
+        aktif_bulteni_sil(secili_kodlar, secili_tarih)
+        st.success('Oran önbelleği temizlendi. Bir sonraki analiz güncel oranları API’den çekecek.')
+
 legal_sidebar_sections()
 
 # Ana analiz eylemi, sık kullanılan ayarlarla aynı üst satırda gösterilir.
@@ -4230,7 +4278,7 @@ if gecmis_btn:
     else:
         with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
             gi_gecmis = futbol_veri_motoru(tuple(yillar))
-            gi_bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
+            gi_bulten = bulten_cacheli_al(API_KEY, secili_kodlar, secili_tarih)
             inceleme = []
             for _, gi_mac in gi_bulten.iterrows():
                 ornekler = gecmis_ornekleri_bul(
@@ -4312,7 +4360,7 @@ if yuksek_oran_btn:
     else:
         with st.spinner("💎 1/2, 2/1 ve iki yarıda da KG örnekleri taranıyor..."):
             yo_gecmis = futbol_veri_motoru(tuple(yillar))
-            yo_bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
+            yo_bulten = bulten_cacheli_al(API_KEY, secili_kodlar, secili_tarih)
             yuksek_liste = []
             for _, yo_mac in yo_bulten.iterrows():
                 tum_ornekler = gecmis_ornekleri_bul(
@@ -4771,7 +4819,7 @@ if analiz_btn:
     else:
         with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
-            bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
+            bulten = bulten_cacheli_al(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
 
