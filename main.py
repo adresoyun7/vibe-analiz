@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 def parse_mac_datetime(value):
@@ -157,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 44
+APP_SCHEMA_VERSION = 45
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1627,7 +1628,7 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
 def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
     """Analiz listesinden başlamamış ve veri kalitesi yeterli kupon taslağı üretir."""
     ayarlar = {
-        "Temkinli": {"min_guven": 65, "taban": 2, "maks": 4, "min_stabil": 2, "ek_stabil": 3, "min_oran": 1.0},
+        "Temkinli": {"min_guven": 62, "taban": 2, "maks": 4, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
         "Dengeli": {"min_guven": 60, "taban": 3, "maks": 6, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
         "Yüksek Oran": {"min_guven": 58, "taban": 3, "maks": 5, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.70},
     }
@@ -1677,8 +1678,6 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
             continue
         if stabil < cfg["min_stabil"]:
             continue
-        if profil == "Temkinli" and dar_stabil < 1:
-            continue
         if profil == "Yüksek Oran" and (secim_oran is None or secim_oran < cfg["min_oran"]):
             continue
 
@@ -1695,7 +1694,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli"):
 
         ekstra_uygun = stabil >= cfg["ek_stabil"]
         if profil == "Temkinli":
-            ekstra_uygun = ekstra_uygun and dar_stabil >= 1 and guven >= 67
+            ekstra_uygun = ekstra_uygun and guven >= 65 and (dar_stabil >= 1 or stabil >= 3)
         adaylar.append({
             "m": m, "t": t, "kalite": kalite, "oran": secim_oran,
             "secim_label": secim_label, "secim_guven": secim_guven,
@@ -3095,6 +3094,7 @@ for key, default in [
     ("filtre", "tumu"),
     ("kupona", []),
     ("coupon_popup_open", False),
+    ("scroll_to_coupon", False),
     ("last_gecmis_df", None),
     ("last_bulten_df", None),
     ("backtest_df", None),
@@ -3711,9 +3711,9 @@ with st.container(key="sticky_analysis_controls"):
         # Düğme, sidebar'da görünüm seçildikten sonra bu üst konuma yazdırılır.
         ust_analiz_buton_alani = st.empty()
 
-    tarih_lig_col, sezon_col = st.columns([2.2, 1], gap="small")
-    with tarih_lig_col:
-        with st.expander("📅 Tarih ve Lig Seçimi", expanded=False):
+    with st.expander("📅 Tarih, Lig ve Sezon Seçimi", expanded=False):
+        tarih_col, sezon_col = st.columns([1.35, 1], gap="medium")
+        with tarih_col:
             st.radio(
                 "Tarih modu",
                 options=["Bugün", "Yarın", "2 gün sonra", "Özel Tarih"],
@@ -3733,35 +3733,7 @@ with st.container(key="sticky_analysis_controls"):
             )
             st.caption(f"Seçili tarih: {format_tr_date(secili_tarih)}")
 
-            preset1, preset2, preset3 = st.columns(3, gap="small")
-            with preset1:
-                if st.button("Hepsini Aç", use_container_width=True, key="preset_all_top"):
-                    set_leagues(tum_lig_kodlari())
-                    st.rerun()
-            with preset2:
-                if st.button("Temizle", use_container_width=True, key="preset_clear_top"):
-                    clear_leagues()
-                    st.rerun()
-            with preset3:
-                if st.button("Avrupa Ana + Alt", use_container_width=True, key="preset_core_top"):
-                    toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek_value"])
-                    st.rerun()
-
-            lig_arama = st.text_input(
-                "Lig ara", placeholder="örn. Premier, Türkiye, MLS",
-                key="lig_arama_top", on_change=clear_detail_on_filter_change,
-            )
-            filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
-            st.caption(f"Gösterilen lig: {len(filtreli_ligler)} · Seçili lig: {len(selected_league_codes())}")
-            lig_box = st.container(height=300, border=True)
-            with lig_box:
-                lig_kolonlari = st.columns(3, gap="small")
-                for lig_no, lig in enumerate(filtreli_ligler):
-                    with lig_kolonlari[lig_no % 3]:
-                        st.checkbox(lig["label"], key=f"cb_{lig['kod']}", on_change=clear_detail_on_filter_change)
-
-    with sezon_col:
-        with st.expander("🧪 Sezon ve Veri Ayarları", expanded=False):
+        with sezon_col:
             sezon_secenekleri = ["2122", "2223", "2324", "2425", "2526", "2627"]
             yillar = st.multiselect(
                 "Sezonlar", options=sezon_secenekleri, default=sezon_secenekleri,
@@ -3773,6 +3745,33 @@ with st.container(key="sticky_analysis_controls"):
                 help="Açıkken maç yalnızca kendi liginin geçmişiyle karşılaştırılır.",
                 on_change=clear_detail_on_filter_change,
             )
+
+        preset1, preset2, preset3 = st.columns(3, gap="small")
+        with preset1:
+            if st.button("Hepsini Aç", use_container_width=True, key="preset_all_top"):
+                set_leagues(tum_lig_kodlari())
+                st.rerun()
+        with preset2:
+            if st.button("Temizle", use_container_width=True, key="preset_clear_top"):
+                clear_leagues()
+                st.rerun()
+        with preset3:
+            if st.button("Avrupa Ana + Alt", use_container_width=True, key="preset_core_top"):
+                toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek_value"])
+                st.rerun()
+
+        lig_arama = st.text_input(
+            "Lig ara", placeholder="örn. Premier, Türkiye, MLS",
+            key="lig_arama_top", on_change=clear_detail_on_filter_change,
+        )
+        filtreli_ligler = filtrelenmis_lig_listesi(lig_arama)
+        st.caption(f"Gösterilen lig: {len(filtreli_ligler)} · Seçili lig: {len(selected_league_codes())}")
+        lig_box = st.container(height=300, border=True)
+        with lig_box:
+            lig_kolonlari = st.columns(3, gap="small")
+            for lig_no, lig in enumerate(filtreli_ligler):
+                with lig_kolonlari[lig_no % 3]:
+                    st.checkbox(lig["label"], key=f"cb_{lig['kod']}", on_change=clear_detail_on_filter_change)
 
     secili_kodlar = selected_league_codes()
 
@@ -3879,6 +3878,7 @@ with st.sidebar:
 
     if st.button('🎫 Kuponlarım', use_container_width=True, key='toggle_coupon_popup'):
         st.session_state.coupon_popup_open = True
+        st.session_state.scroll_to_coupon = True
         st.rerun()
 
     if 'son_analiz' in st.session_state:
@@ -4862,22 +4862,10 @@ fl = st.session_state.final_list
 
 hc1, hc2 = st.columns([6, 1])
 with hc1:
-    st.markdown(f"""
-    <div class="top-header">
-      <div>
-        <h2>ANA MAÇ EKRANI</h2>
-        <div class="sub">{format_tr_date(secili_tarih)}</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="top-filters">
-      <div class="tf-chip">📅 Kartlı görünüm</div>
-      <div class="tf-chip">🎯 Detaylı tahmin ekranı</div>
-      <div class="tf-chip">🔥 Smart filter</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-size:.88rem;color:#475569;font-weight:800;margin-top:10px">📅 {format_tr_date(secili_tarih)}</div>',
+        unsafe_allow_html=True,
+    )
 
 with hc2:
     if fl:
@@ -4899,47 +4887,6 @@ if not fl:
     </div>
     """, unsafe_allow_html=True)
 else:
-    if st.session_state.get("sayfa_modu", "Maç Analizi") == "Maç Analizi":
-        kupon_profil_col, kupon_btn_col = st.columns([2.2, 1], gap="small")
-        with kupon_profil_col:
-            gunun_kupon_profili = st.selectbox(
-                "Günün kuponu profili",
-                ["Temkinli", "Dengeli", "Yüksek Oran"],
-                index=1,
-                key="gunun_kupon_profili",
-                help="Kararlılığa göre Temkinli 2-4, Dengeli 3-6, Yüksek Oran 3-5 seçim üretir.",
-            )
-        with kupon_btn_col:
-            st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-            gunun_kupon_btn = st.button(
-                "🎫 GÜNÜN KUPONUNU OLUŞTUR",
-                use_container_width=True,
-                type="primary",
-                key="gunun_kuponunu_olustur_btn",
-            )
-
-        if gunun_kupon_btn:
-            otomatik_secimler = gunun_kuponunu_olustur(fl, gunun_kupon_profili)
-            if not otomatik_secimler:
-                st.warning("Bu profilin kurallarını karşılayan en az iki güçlü seçim bulunamadı. Bugün kupon oluşturulmadı.")
-            else:
-                mevcutlar = {
-                    (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
-                    for x in st.session_state.kupona if isinstance(x, dict)
-                }
-                eklenen = 0
-                for secim in otomatik_secimler:
-                    anahtar = (secim["ev"], secim["dep"], secim["tahmin"])
-                    if anahtar not in mevcutlar:
-                        st.session_state.kupona.append(secim)
-                        mevcutlar.add(anahtar)
-                        eklenen += 1
-                st.session_state.coupon_popup_open = True
-                if eklenen:
-                    st.success(f"{gunun_kupon_profili} profilinde {eklenen} seçim Kuponlarım'a eklendi.")
-                else:
-                    st.info("Üretilen seçimlerin tamamı zaten Kuponlarım'da bulunuyor.")
-
     indexed_fl = list(enumerate(fl))
     yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
     orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
@@ -5193,9 +5140,73 @@ else:
                     st.session_state.coupon_popup_open = True
                 st.rerun()
 
+    st.markdown("<br><div class='list-heading'>🎫 GÜNÜN KUPONUNU OLUŞTUR</div>", unsafe_allow_html=True)
+    kupon_profilleri = [
+        ("Temkinli", "2–4 maç", "Daha yüksek güven; ek seçimlerde daha güçlü kararlılık aranır."),
+        ("Dengeli", "3–6 maç", "Güven, örnek sayısı ve kararlılığı birlikte dengeler."),
+        ("Yüksek Oran", "3–5 maç", "Oranı bulunan güçlü seçim ve kombinasyonlara öncelik verir."),
+    ]
+    kupon_kolonlari = st.columns(3, gap="small")
+    kupon_mesaji = None
+    for profil_col, (profil_adi, mac_araligi, profil_aciklama) in zip(kupon_kolonlari, kupon_profilleri):
+        with profil_col:
+            with st.container(border=True):
+                st.markdown(
+                    f"""
+                    <div style="min-height:92px">
+                      <div style="font-size:1.05rem;font-weight:900;color:#0f172a">{escape(profil_adi)}</div>
+                      <div style="font-size:.78rem;font-weight:800;color:#2563eb;margin-top:3px">{escape(mac_araligi)}</div>
+                      <div style="font-size:.76rem;color:#475569;line-height:1.35;margin-top:6px">{escape(profil_aciklama)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    f"{profil_adi} kuponu oluştur",
+                    key=f"gunun_kuponu_{profil_adi}",
+                    use_container_width=True,
+                    type="primary" if profil_adi == "Dengeli" else "secondary",
+                ):
+                    otomatik_secimler = gunun_kuponunu_olustur(fl, profil_adi)
+                    if not otomatik_secimler:
+                        kupon_mesaji = ("warning", f"{profil_adi} profili için en az iki uygun seçim bulunamadı; kupon oluşturulmadı.")
+                    else:
+                        mevcutlar = {
+                            (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
+                            for x in st.session_state.kupona if isinstance(x, dict)
+                        }
+                        eklenen = 0
+                        for secim in otomatik_secimler:
+                            anahtar = (secim["ev"], secim["dep"], secim["tahmin"])
+                            if anahtar not in mevcutlar:
+                                st.session_state.kupona.append(secim)
+                                mevcutlar.add(anahtar)
+                                eklenen += 1
+                        st.session_state.coupon_popup_open = True
+                        if eklenen:
+                            kupon_mesaji = ("success", f"{profil_adi} profilinde {eklenen} seçim Kuponlarım'a eklendi.")
+                        else:
+                            kupon_mesaji = ("info", "Üretilen seçimlerin tamamı zaten Kuponlarım'da bulunuyor.")
+
+    if kupon_mesaji:
+        getattr(st, kupon_mesaji[0])(kupon_mesaji[1])
+
     # Kuponlarım: dialog/modal yerine normal, engellemeyen panel.
-    # Boşken arama sırasında "Henüz kupona maç eklemedin" uyarısı göstermez.
-    if st.session_state.get("coupon_popup_open") and st.session_state.get("kupona"):
+    if st.session_state.get("coupon_popup_open"):
+        st.markdown('<div id="kuponlarim-anchor"></div>', unsafe_allow_html=True)
+        if st.session_state.get("scroll_to_coupon"):
+            components.html(
+                """
+                <script>
+                setTimeout(function () {
+                    const hedef = window.parent.document.getElementById('kuponlarim-anchor');
+                    if (hedef) hedef.scrollIntoView({behavior:'smooth', block:'start'});
+                }, 180);
+                </script>
+                """,
+                height=0,
+            )
+            st.session_state.scroll_to_coupon = False
         normalized_kupona = []
         for k in st.session_state.kupona:
             if isinstance(k, dict):
@@ -5224,6 +5235,9 @@ else:
             """,
             unsafe_allow_html=True,
         )
+
+        if not st.session_state.kupona:
+            st.info("Henüz kupona maç eklemedin. Maç kartlarından seçim ekleyebilir veya yukarıdaki üç profilden kupon oluşturabilirsin.")
 
         for del_i, item in enumerate(list(st.session_state.kupona)):
             mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
