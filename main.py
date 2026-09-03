@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 70
+APP_SCHEMA_VERSION = 71
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3449,6 +3449,9 @@ def analiz_tahminlerini_kaydet(final):
             "zaman": zaman_iso,
             "ev": str(m.get("ev", "")),
             "dep": str(m.get("dep", "")),
+            "h": float(m.get("h")) if m.get("h") is not None else None,
+            "b": float(m.get("b")) if m.get("b") is not None else None,
+            "a": float(m.get("a")) if m.get("a") is not None else None,
             "tahmin": label,
             "guven": int(t.get("ana_p", 0)),
             "alternatif_tahmin": str(t.get("alt_label", "") or ""),
@@ -4303,6 +4306,9 @@ for key, default in [
     ("backtest_11_df", None),
     ("gecmis_inceleme_list", None),
     ("yuksek_oran_list", None),
+    ("sonuc_detay_kaydi", None),
+    ("sonuc_detay_hatasi", ""),
+    ("sonuc_detay_tablo_surumu", 0),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -5007,6 +5013,8 @@ with st.sidebar:
         else:
             st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için API key gerekir.")
 
+    if st.session_state.pop("sonuc_detay_navigasyon", False):
+        st.session_state["sayfa_modu"] = "Maç Analizi"
 
     sayfa_modu = st.radio(
         "Görünüm",
@@ -5595,7 +5603,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         if gorunen.empty:
             st.warning("Seçilen dönemde kayıt yok.")
         else:
-            liste = gorunen.sort_values("zaman_dt", ascending=False).copy()
+            liste = gorunen.sort_values("zaman_dt", ascending=False).reset_index(drop=True).copy()
             liste["Tarih"] = liste["zaman_dt"].dt.strftime("%d.%m.%Y %H:%M")
             liste["Maç"] = liste["ev"].astype(str) + " – " + liste["dep"].astype(str)
             liste["Sonuç"] = liste.apply(lambda x: f"{int(x['ev_gol'])}-{int(x['dep_gol'])}" if pd.notna(x.get("ev_gol")) and pd.notna(x.get("dep_gol")) else "—", axis=1)
@@ -5614,14 +5622,28 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                     liste[kolon] = varsayilan
             liste["alternatif_tahmin"] = liste["alternatif_tahmin"].fillna("").replace("None", "")
             goster = liste[[
-                "Tarih", "lig", "Maç", "tahmin", "guven", "oran", "Sonuç", "Durum",
+                "Tarih", "lig", "Maç", "tahmin", "guven", "Sonuç", "Durum",
                 "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
             ]].rename(columns={
-                "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %", "oran":"Oran",
+                "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %",
                 "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
             })
+            goster.insert(0, "Detay", "🔎 Aç")
             st.markdown("#### Kaydedilen tahminler")
-            st.dataframe(goster, use_container_width=True, hide_index=True)
+            st.caption("Bir maçı yeniden analiz edip detay kartını açmak için ilgili satıra tıkla.")
+            tablo_olayi = st.dataframe(
+                goster, use_container_width=True, hide_index=True,
+                key=f"sonuc_takibi_detay_tablosu_{st.session_state.get('sonuc_detay_tablo_surumu', 0)}",
+                on_select="rerun", selection_mode="single-row",
+            )
+            secilen_satirlar = list(getattr(getattr(tablo_olayi, "selection", None), "rows", []) or [])
+            if secilen_satirlar:
+                satir_no = int(secilen_satirlar[0])
+                if 0 <= satir_no < len(liste):
+                    st.session_state["sonuc_detay_kaydi"] = liste.iloc[satir_no].to_dict()
+                    st.session_state["sonuc_detay_navigasyon"] = True
+                    st.session_state["sonuc_detay_tablo_surumu"] = int(st.session_state.get("sonuc_detay_tablo_surumu", 0)) + 1
+                    st.rerun()
             st.download_button("CSV olarak indir", goster.to_csv(index=False).encode("utf-8-sig"), "vibe_sonuc_takibi.csv", "text/csv", use_container_width=True)
     legal_footer()
     st.stop()
@@ -5884,7 +5906,7 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
 
     ev = str(secim.get("ev", ""))
     dep = str(secim.get("dep", ""))
-    zaman_iso = str(secim.get("zaman_iso", ""))
+    zaman_iso = str(secim.get("zaman_iso") or secim.get("zaman") or "")
     hedef_zaman = parse_mac_datetime(zaman_iso)
 
     m = None
@@ -5912,24 +5934,49 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
     if m is None:
         try:
             h, b, a = secim.get("h"), secim.get("b"), secim.get("a")
-            if h is None or b is None or a is None:
-                return None
-            m = {
-                "match_id": secim.get("match_id", ""),
-                "sport_key": secim.get("sport_key", ""),
-                "lig": secim.get("lig", ""),
-                "zaman": hedef_zaman,
-                "ev": ev,
-                "dep": dep,
-                "h": float(h),
-                "b": float(b),
-                "a": float(a),
-            }
+            if h is not None and b is not None and a is not None:
+                m = {
+                    "match_id": secim.get("match_id", ""),
+                    "sport_key": secim.get("sport_key", ""),
+                    "lig": secim.get("lig", ""),
+                    "zaman": hedef_zaman,
+                    "ev": ev,
+                    "dep": dep,
+                    "h": float(h), "b": float(b), "a": float(a),
+                }
         except Exception:
-            return None
+            m = None
 
     gecmis = st.session_state.get("last_gecmis_df")
     if gecmis is None or getattr(gecmis, "empty", True):
+        return None
+
+    # Eski sonuç kayıtlarında oranlar saklanmamış olabilir. Aynı maçı tarihsel
+    # veri içinde bulup o maçın kapanış 1-X-2 oranlarıyla detayı yeniden kur.
+    if m is None and hedef_zaman is not None:
+        try:
+            tarih_serisi = pd.to_datetime(gecmis["Date"], errors="coerce")
+            ev_norm, dep_norm = takim_adi_norm(ev), takim_adi_norm(dep)
+            aday = gecmis[
+                (tarih_serisi.dt.date == hedef_zaman.date())
+                & (gecmis["HomeTeam"].map(takim_adi_norm) == ev_norm)
+                & (gecmis["AwayTeam"].map(takim_adi_norm) == dep_norm)
+            ]
+            if not aday.empty:
+                row = aday.iloc[-1]
+                h_col = "REF_H" if "REF_H" in aday.columns else "B365H"
+                d_col = "REF_D" if "REF_D" in aday.columns else "B365D"
+                a_col = "REF_A" if "REF_A" in aday.columns else "B365A"
+                m = {
+                    "match_id": secim.get("match_id", ""),
+                    "sport_key": secim.get("sport_key", ""),
+                    "lig": secim.get("lig", row.get("league_code", "")),
+                    "zaman": hedef_zaman, "ev": ev, "dep": dep,
+                    "h": float(row[h_col]), "b": float(row[d_col]), "a": float(row[a_col]),
+                }
+        except Exception:
+            m = None
+    if m is None:
         return None
 
     try:
@@ -5938,16 +5985,47 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
         tolerans = 0.08
 
     try:
-        t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=sadece_ayni_lig)
+        if secim.get("kayit_id"):
+            t, b_det = hassasiyet_birlesik_hesapla(
+                gecmis, m, max(1, int(st.session_state.get("top_min_ornek", 1) or 1)),
+                sadece_ayni_lig=sadece_ayni_lig,
+            )
+        else:
+            t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=sadece_ayni_lig)
         if t is None:
             # Aynı lig filtresi eski kuponlarda eşleşmeyi engelliyorsa detayın
             # tamamen kaybolmaması için genel geçmişte bir kez daha dene.
-            t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=False)
+            if secim.get("kayit_id"):
+                t, b_det = hassasiyet_birlesik_hesapla(
+                    gecmis, m, max(1, int(st.session_state.get("top_min_ornek", 1) or 1)),
+                    sadece_ayni_lig=False,
+                )
+            else:
+                t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=False)
         if t is None:
             return None
         return {"m": m, "t": t, "b": b_det}
     except Exception:
         return None
+
+
+if st.session_state.get("sonuc_detay_kaydi") is not None:
+    sonuc_kaydi = st.session_state.pop("sonuc_detay_kaydi")
+    if st.session_state.get("last_gecmis_df") is None:
+        with st.spinner("Sonuç kaydı geçmiş verilerle yeniden analiz ediliyor..."):
+            st.session_state.last_gecmis_df = futbol_veri_motoru(tuple(yillar))
+    sonuc_detayi = kupon_seciminden_detay_itemi(sonuc_kaydi, sadece_ayni_lig=sadece_ayni_lig)
+    if sonuc_detayi is not None:
+        st.session_state.detay_item = sonuc_detayi
+        st.session_state.detay_idx = None
+        st.session_state.sonuc_detay_hatasi = ""
+    else:
+        st.session_state.sonuc_detay_hatasi = (
+            "Bu eski kayıt için gerekli oran/geçmiş eşleşmesi bulunamadığından detay yeniden oluşturulamadı."
+        )
+
+if st.session_state.get("sonuc_detay_hatasi"):
+    st.warning(st.session_state.pop("sonuc_detay_hatasi"))
 
 
 def ana_tahmin_gecmis_detayi(m, t, b_det):
@@ -6028,9 +6106,6 @@ def detay_ana_icerik():
         """,
         unsafe_allow_html=True,
     )
-
-    with st.expander("📊 Ana tahminin benzer geçmiş maçları", expanded=True):
-        ana_tahmin_gecmis_detayi(m, t, b_det)
 
     ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
 
@@ -6217,6 +6292,9 @@ def detay_ana_icerik():
       {neden_html}
     </div>
     """, unsafe_allow_html=True)
+
+    with st.expander("📊 Ana tahminin benzer geçmiş maçları", expanded=True):
+        ana_tahmin_gecmis_detayi(m, t, b_det)
 
 
 
