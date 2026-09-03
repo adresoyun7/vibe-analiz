@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 73
+APP_SCHEMA_VERSION = 74
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -4934,19 +4934,6 @@ with st.container(key="sticky_analysis_controls"):
         """,
         unsafe_allow_html=True,
     )
-    sistem_bilgi_col, sistem_yenile_col = st.columns([5.2, 1], gap="small")
-    with sistem_bilgi_col:
-        st.markdown(
-            f"**🕒 Sistem tarihi ve saati:** {sistem_simdi.strftime('%d.%m.%Y %H:%M')} (Türkiye)"
-        )
-    with sistem_yenile_col:
-        st.button(
-            "🔄 Günü Yenile",
-            key="sistem_gununu_yenile_btn",
-            use_container_width=True,
-            on_click=sistem_gununu_yenile,
-            help="Tarihi gerçek bugüne alır ve önceki günden kalan maç listelerini temizler.",
-        )
     ayar_tol_col, ayar_ornek_col, ayar_oynanabilir_col, ayar_canli_col, ayar_buton_col = st.columns(
         [2.1, .9, 1.25, 1.05, 1.15], gap="small"
     )
@@ -5092,6 +5079,64 @@ with st.container(key="sticky_analysis_controls"):
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
 with st.sidebar:
+    with st.container(key="sidebar_system_clock"):
+        st.markdown(
+            """
+            <style>
+            .st-key-sidebar_system_clock {
+                background:#ffffff !important;
+                border:1px solid #cbd5e1 !important;
+                border-radius:12px !important;
+                padding:8px 9px 6px 9px !important;
+                margin:2px 0 9px 0 !important;
+                box-shadow:0 4px 12px rgba(15,23,42,.08) !important;
+            }
+            .st-key-sidebar_system_clock .system-clock-label,
+            .st-key-sidebar_system_clock .system-clock-label * {
+                color:#0f172a !important;
+                -webkit-text-fill-color:#0f172a !important;
+                opacity:1 !important;
+            }
+            .st-key-sidebar_system_clock .system-clock-label {
+                font-size:.72rem;
+                line-height:1.3;
+                font-weight:700;
+                padding-top:2px;
+            }
+            .st-key-sidebar_system_clock .system-clock-time {
+                display:block;
+                margin-top:2px;
+                color:#0f172a !important;
+                -webkit-text-fill-color:#0f172a !important;
+                font-size:.82rem;
+                font-weight:900;
+            }
+            .st-key-sidebar_system_clock button {
+                min-height:38px !important;
+                color:#ffffff !important;
+                -webkit-text-fill-color:#ffffff !important;
+                font-weight:800 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        sistem_bilgi_col, sistem_yenile_col = st.columns([1.55, 1], gap="small")
+        with sistem_bilgi_col:
+            st.markdown(
+                f'<div class="system-clock-label">🕒 Sistem tarihi ve saati'
+                f'<span class="system-clock-time">{sistem_simdi.strftime("%d.%m.%Y %H:%M")}</span>'
+                f'<span>Türkiye</span></div>',
+                unsafe_allow_html=True,
+            )
+        with sistem_yenile_col:
+            st.button(
+                "🔄 Yenile",
+                key="sistem_gununu_yenile_btn",
+                use_container_width=True,
+                on_click=sistem_gununu_yenile,
+                help="Tarihi gerçek bugüne alır ve önceki günden kalan maç listelerini temizler.",
+            )
     st.markdown("""
     <div style="display:flex;align-items:center;gap:10px;margin:4px 0 14px 0;padding:10px 8px;border-radius:14px;background:linear-gradient(90deg,#07111f 0%,#0a1830 100%);border:1px solid #21334f;">
       <div class="brand-logo" style="width:36px;height:36px;font-size:1.1rem">⚡</div>
