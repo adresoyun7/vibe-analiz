@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 71
+APP_SCHEMA_VERSION = 72
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3310,6 +3310,45 @@ def mac_key(m):
 TAHMIN_LOG_PATH = Path(__file__).with_name("vibe_tahmin_sonuclari.json")
 
 
+def _json_guvenli_deger(value):
+    if isinstance(value, dict):
+        return {str(k): _json_guvenli_deger(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_guvenli_deger(v) for v in value]
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return value
+
+
+def detay_snapshot_olustur(m, t, benzerler):
+    """Sonuç detayını ana ekrandan bağımsız açmak için kompakt analiz kopyası."""
+    gerekli = [
+        "Date", "HomeTeam", "AwayTeam", "HTHG", "HTAG", "FTHG", "FTAG", "HTR", "FTR",
+        "B365H", "B365D", "B365A", "REF_H", "REF_D", "REF_A",
+    ]
+    try:
+        b = benzerler if isinstance(benzerler, pd.DataFrame) else pd.DataFrame()
+        kolonlar = [c for c in gerekli if c in b.columns]
+        b_records = json.loads(b[kolonlar].head(50).to_json(orient="records", date_format="iso")) if kolonlar else []
+    except Exception:
+        b_records = []
+    return {
+        "m": _json_guvenli_deger(dict(m)),
+        "t": _json_guvenli_deger(dict(t)),
+        "b": b_records,
+    }
+
+
 def tahmin_kaydi_mac_anahtari(kayit):
     """Marketten bağımsız tek maç anahtarı üretir."""
     match_id = str(kayit.get("match_id", "") or "").strip()
@@ -3479,11 +3518,14 @@ def analiz_tahminlerini_kaydet(final):
             "tuttu": eski.get("tuttu"),
             "alternatif_tuttu": eski.get("alternatif_tuttu"),
             "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
+            "detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
         }
         # Sonuçlanmış ana tahmin dondurulur; yeni tarama yalnızca eksik/daha
         # güçlü alternatif bilgisini tamamlayabilir.
         if eski.get("durum") == "Tamamlandı":
             secilen = dict(eski)
+            if aday.get("detay_snapshot", {}).get("b"):
+                secilen["detay_snapshot"] = aday["detay_snapshot"]
             alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
                 secilen.get("tahmin"), [eski, aday]
             )
@@ -5904,6 +5946,22 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
     if not isinstance(secim, dict):
         return None
 
+    snapshot = secim.get("detay_snapshot")
+    if isinstance(snapshot, dict) and snapshot.get("m") and snapshot.get("t") and snapshot.get("b"):
+        try:
+            snap_m = dict(snapshot["m"])
+            snap_m["zaman"] = parse_mac_datetime(snap_m.get("zaman"))
+            snap_t = dict(snapshot["t"])
+            snap_b = pd.DataFrame(snapshot["b"])
+            snap_b["Date"] = pd.to_datetime(snap_b["Date"], errors="coerce")
+            for kolon in ["HTHG", "HTAG", "FTHG", "FTAG", "B365H", "B365D", "B365A", "REF_H", "REF_D", "REF_A"]:
+                if kolon in snap_b.columns:
+                    snap_b[kolon] = pd.to_numeric(snap_b[kolon], errors="coerce")
+            if snap_m.get("zaman") is not None and not snap_b.empty:
+                return {"m": snap_m, "t": snap_t, "b": snap_b}
+        except Exception:
+            pass
+
     ev = str(secim.get("ev", ""))
     dep = str(secim.get("dep", ""))
     zaman_iso = str(secim.get("zaman_iso") or secim.get("zaman") or "")
@@ -5930,11 +5988,32 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
         except Exception:
             m = None
 
+    # Maç mevcut analiz kartlarında olmasa bile, oynanmamış eski kaydı kendi
+    # liginden doğrudan sorgula ve 1-X-2 oranlarını yeniden al.
+    if m is None and hedef_zaman is not None and secim.get("sport_key") and get_app_api_key():
+        try:
+            uzak_bulten = bulten_guncel_al(
+                get_app_api_key(), [str(secim.get("sport_key"))], hedef_zaman.date()
+            )
+            if uzak_bulten is not None and not uzak_bulten.empty:
+                match_id = str(secim.get("match_id", "") or "")
+                if match_id and "match_id" in uzak_bulten.columns:
+                    aday = uzak_bulten[uzak_bulten["match_id"].astype(str) == match_id]
+                else:
+                    aday = uzak_bulten[
+                        (uzak_bulten["ev"].map(takim_adi_norm) == takim_adi_norm(ev))
+                        & (uzak_bulten["dep"].map(takim_adi_norm) == takim_adi_norm(dep))
+                    ]
+                if not aday.empty:
+                    m = aday.iloc[0].to_dict()
+        except Exception:
+            m = None
+
     # Bülten artık bellekte değilse yeni kuponlarda sakladığımız oranları kullan.
     if m is None:
         try:
             h, b, a = secim.get("h"), secim.get("b"), secim.get("a")
-            if h is not None and b is not None and a is not None:
+            if h is not None and b is not None and a is not None and pd.notna(h) and pd.notna(b) and pd.notna(a):
                 m = {
                     "match_id": secim.get("match_id", ""),
                     "sport_key": secim.get("sport_key", ""),
