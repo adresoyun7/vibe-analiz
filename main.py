@@ -1,6 +1,5 @@
 
 import io
-import base64
 import json
 import math
 import re
@@ -61,14 +60,6 @@ def get_app_api_key():
     if user_key:
         return user_key
     return str(get_secret_value("ODDS_API_KEY", "")).strip()
-
-
-def get_openai_api_key():
-    """Görsel okuma anahtarı yalnızca aktif oturumdan veya Streamlit secret'tan alınır."""
-    user_key = str(st.session_state.get("user_openai_api_key", "")).strip()
-    if user_key:
-        return user_key
-    return str(get_secret_value("OPENAI_API_KEY", "")).strip()
 
 
 def api_key_panel():
@@ -174,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 64
+APP_SCHEMA_VERSION = 63
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -4032,198 +4023,6 @@ def yuksek_oran_istatistikleri(tum_ornekler, filtre_12=True, filtre_21=True,
     return istatistikler, en_iyi, oneri
 
 
-# ==========================================================
-# KUPON GÖRSELİ OKUMA VE MEVCUT ANALİZLE KARŞILAŞTIRMA
-# ==========================================================
-
-def _responses_output_text(payload):
-    """Responses API yanıtındaki metni SDK gerektirmeden güvenli biçimde çıkarır."""
-    for item in payload.get("output", []) if isinstance(payload, dict) else []:
-        if item.get("type") != "message":
-            continue
-        for content in item.get("content", []):
-            if content.get("type") in ("output_text", "text") and content.get("text"):
-                return str(content["text"])
-    return ""
-
-
-def kupon_gorselini_oku(openai_key, image_bytes, mime_type):
-    """Kupon görselinden yalnızca görünen maç/seçim/oran bilgilerini çıkarır."""
-    if not openai_key:
-        raise ValueError("OpenAI API anahtarı gerekli.")
-    if not image_bytes:
-        raise ValueError("Görsel dosyası boş.")
-    if len(image_bytes) > 10 * 1024 * 1024:
-        raise ValueError("Görsel en fazla 10 MB olabilir.")
-
-    mime_type = mime_type if mime_type in {"image/png", "image/jpeg", "image/webp"} else "image/jpeg"
-    image_data = base64.b64encode(image_bytes).decode("ascii")
-    schema = {
-        "type": "object",
-        "properties": {
-            "matches": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "home_team": {"type": "string"},
-                        "away_team": {"type": "string"},
-                        "selection": {"type": "string"},
-                        "odds": {"type": "string"},
-                        "read_confidence": {"type": "integer", "minimum": 0, "maximum": 100},
-                    },
-                    "required": ["home_team", "away_team", "selection", "odds", "read_confidence"],
-                    "additionalProperties": False,
-                },
-            },
-            "note": {"type": "string"},
-        },
-        "required": ["matches", "note"],
-        "additionalProperties": False,
-    }
-    body = {
-        "model": str(get_secret_value("OPENAI_VISION_MODEL", "gpt-5.6")),
-        "store": False,
-        "input": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": (
-                        "Bu bir spor bahis kuponu ekran görüntüsü. Yalnızca görselde açıkça görünen "
-                        "futbol maçlarını çıkar. Ev ve deplasman takımlarını, seçilen marketi ve varsa "
-                        "seçim oranını yaz. Marketleri mümkünse MS 1, MS X, MS 2, 2.5 Üst, 2.5 Alt, "
-                        "KG Var, KG Yok biçiminde standartlaştır; birleşik marketleri örneğin "
-                        "'MS 1 + 1.5 Üst' veya '2.5 Üst + KG Var' olarak tek seçim halinde koru. Tahmin veya "
-                        "eksik bilgi uydurma; okunmayan alanı boş string bırak."
-                    ),
-                },
-                {
-                    "type": "input_image",
-                    "image_url": f"data:{mime_type};base64,{image_data}",
-                    "detail": "high",
-                },
-            ],
-        }],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "coupon_image_extract",
-                "strict": True,
-                "schema": schema,
-            }
-        },
-        "max_output_tokens": 2000,
-    }
-    response = requests.post(
-        "https://api.openai.com/v1/responses",
-        headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
-        json=body,
-        timeout=60,
-    )
-    if response.status_code != 200:
-        try:
-            mesaj = response.json().get("error", {}).get("message", "")
-        except Exception:
-            mesaj = response.text[:300]
-        raise RuntimeError(f"Görsel okunamadı ({response.status_code}): {mesaj or 'API hatası'}")
-    text_output = _responses_output_text(response.json())
-    if not text_output:
-        raise RuntimeError("Görselden yapılandırılmış sonuç alınamadı.")
-    parsed = json.loads(text_output)
-    return parsed if isinstance(parsed, dict) else {"matches": [], "note": ""}
-
-
-def _secim_norm(value):
-    s = str(value or "").casefold()
-    s = s.translate(str.maketrans({"ı": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c"}))
-    s = re.sub(r"\s+", " ", s).strip()
-    s = s.replace("karşılıklı gol", "kg").replace("karsilikli gol", "kg")
-    s = s.replace("maç sonucu", "ms").replace("mac sonucu", "ms")
-    s = s.replace(" ve ", " + ")
-    return re.sub(r"[^a-z0-9+x.]+", "", s)
-
-
-def _secim_olasiligi(t, secim):
-    """Görseldeki seçimi mevcut model alanlarından yaklaşık güvene eşler."""
-    n = _secim_norm(secim)
-    bulunan = []
-    if re.search(r"(?:^|\+)ms?1(?:\+|$)", n) or n in {"1", "evsahibi"}:
-        bulunan.append((int(t.get("ms1_p", 0) or 0), "MS 1"))
-    if re.search(r"(?:^|\+)ms?x(?:\+|$)", n) or n in {"x", "beraberlik"}:
-        bulunan.append((int(t.get("msx_p", 0) or 0), "Beraberlik"))
-    if re.search(r"(?:^|\+)ms?2(?:\+|$)", n) or n in {"2", "deplasman"}:
-        bulunan.append((int(t.get("ms2_p", 0) or 0), "MS 2"))
-    if "2.5" in n and ("ust" in n or "over" in n):
-        bulunan.append((int(t.get("ms25_p", 0) or 0), "2.5 Üst"))
-    elif "2.5" in n and ("alt" in n or "under" in n):
-        bulunan.append((int(t.get("ms25a_p", 0) or 0), "2.5 Alt"))
-    elif "1.5" in n and ("ust" in n or "over" in n):
-        bulunan.append((int(t.get("ms15_p", 0) or 0), "1.5 Üst"))
-    if ("kg" in n and "var" in n) or "bttsyes" in n:
-        bulunan.append((int(t.get("kg_var_p", 0) or 0), "KG Var"))
-    elif ("kg" in n and "yok" in n) or "bttsno" in n:
-        bulunan.append((int(t.get("kg_yok_p", 0) or 0), "KG Yok"))
-
-    # Birleşik seçimde bütün bileşenlerin desteklenmesi gerekir; en zayıf bileşen belirleyicidir.
-    if "+" in n and bulunan:
-        return min(x[0] for x in bulunan), " + ".join(dict.fromkeys(x[1] for x in bulunan))
-    if bulunan:
-        return bulunan[0]
-
-    combo_n = _secim_norm(t.get("combo_label", ""))
-    if combo_n and (n == combo_n or n in combo_n or combo_n in n):
-        return int(t.get("combo_p", 0) or 0), str(t.get("combo_label", ""))
-    return 0, "Eşleştirilemeyen market"
-
-
-def _mac_eslesme_skoru(home, away, m):
-    h1, a1 = takim_adi_norm(home), takim_adi_norm(away)
-    h2, a2 = takim_adi_norm(m.get("ev", "")), takim_adi_norm(m.get("dep", ""))
-    if not all((h1, a1, h2, a2)):
-        return 0.0
-    duz = (SequenceMatcher(None, h1, h2).ratio() + SequenceMatcher(None, a1, a2).ratio()) / 2
-    ters = (SequenceMatcher(None, h1, a2).ratio() + SequenceMatcher(None, a1, h2).ratio()) / 2
-    return max(duz, ters * 0.97)
-
-
-def kupon_satirlarini_degerlendir(rows, final_list):
-    sonuc = []
-    for row in rows:
-        home = str(row.get("Ev sahibi", "")).strip()
-        away = str(row.get("Deplasman", "")).strip()
-        secim = str(row.get("Seçim", "")).strip()
-        adaylar = []
-        for item in final_list or []:
-            skor = _mac_eslesme_skoru(home, away, item.get("m", {}))
-            adaylar.append((skor, item))
-        adaylar.sort(key=lambda x: x[0], reverse=True)
-        if not adaylar or adaylar[0][0] < 0.78:
-            sonuc.append({**row, "Sistem maçı": "Bulunamadı", "Model güveni": None,
-                          "Durum": "⚪ Analiz yok", "Sistem tercihi": "—"})
-            continue
-        item = adaylar[0][1]
-        t, m = item.get("t", {}), item.get("m", {})
-        guven, model_market = _secim_olasiligi(t, secim)
-        ana_n = _secim_norm(t.get("ana_label", ""))
-        secim_n = _secim_norm(secim)
-        ana_uyum = bool(ana_n and (ana_n in secim_n or secim_n in ana_n))
-        if guven >= 65 and ana_uyum:
-            durum = "🟢 Uyumlu"
-        elif guven >= 55:
-            durum = "🟡 Denenebilir"
-        else:
-            durum = "🔴 Riskli/Pas"
-        sonuc.append({
-            **row,
-            "Sistem maçı": f"{m.get('ev', '')} – {m.get('dep', '')}",
-            "Model güveni": guven,
-            "Durum": durum,
-            "Sistem tercihi": f"{t.get('ana_label', '—')} (%{int(t.get('ana_p', 0) or 0)})",
-        })
-    return sonuc
-
-
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
@@ -4241,8 +4040,6 @@ for key, default in [
     ("backtest_11_df", None),
     ("gecmis_inceleme_list", None),
     ("yuksek_oran_list", None),
-    ("kupon_gorsel_sonucu", None),
-    ("kupon_gorsel_degerlendirme", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -4947,32 +4744,9 @@ with st.sidebar:
         else:
             st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için API key gerekir.")
 
-    with st.expander("📷 Görsel Okuma API", expanded=False):
-        openai_key_input = st.text_input(
-            "OPENAI API KEY",
-            value=st.session_state.get("user_openai_api_key", ""),
-            placeholder="sk-...",
-            type="password",
-            key="openai_api_key_input_sidebar",
-            help="Yalnızca kupon görselini okumak için kullanılır; dosyaya kaydedilmez.",
-        )
-        ok1, ok2 = st.columns(2)
-        with ok1:
-            if st.button("Kullan", use_container_width=True, key="use_openai_key_btn"):
-                st.session_state["user_openai_api_key"] = openai_key_input.strip()
-                st.rerun()
-        with ok2:
-            if st.button("Temizle", use_container_width=True, key="clear_openai_key_btn"):
-                st.session_state.pop("user_openai_api_key", None)
-                st.rerun()
-        if get_openai_api_key():
-            st.success("Görsel okuma hazır ✅")
-        else:
-            st.caption("Kupon görseli için OpenAI API anahtarı gerekli.")
-
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 50 Market", "Kupon Görseli", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -5117,98 +4891,6 @@ elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
             type='primary',
             key='canliyi_yenile_btn',
         )
-
-
-if st.session_state.get('sayfa_modu') == 'Kupon Görseli':
-    st.markdown(
-        """
-        <div class="history-page-header" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
-          <div style="font-size:1.55rem;font-weight:900;color:#0f172a">📷 Kupon Görseli Analizi</div>
-          <div style="font-size:.90rem;margin-top:7px;line-height:1.5;color:#334155">
-            Görseldeki maç ve marketleri okur; doğruladıktan sonra son YapAiKupon analiziyle karşılaştırır.
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    gorsel = st.file_uploader(
-        "Kupon ekran görüntüsünü yükle",
-        type=["png", "jpg", "jpeg", "webp"],
-        key="kupon_gorsel_uploader",
-    )
-    if gorsel is not None:
-        gor_col, bilgi_col = st.columns([1, 1.3], gap="large")
-        with gor_col:
-            st.image(gorsel, caption=gorsel.name, use_container_width=True)
-        with bilgi_col:
-            st.info("Görsel okuması tahmin üretmez. Okunan seçimler mevcut istatistiksel analizle karşılaştırılır.")
-            if st.button("📷 GÖRSELİ OKU", type="primary", use_container_width=True, key="kupon_gorseli_oku_btn"):
-                if not get_openai_api_key():
-                    st.error("Sol menüdeki Görsel Okuma API bölümüne OpenAI API anahtarı gir.")
-                else:
-                    try:
-                        with st.spinner("Kupondaki maçlar ve seçimler okunuyor..."):
-                            parsed = kupon_gorselini_oku(
-                                get_openai_api_key(), gorsel.getvalue(), gorsel.type or "image/jpeg"
-                            )
-                        st.session_state.kupon_gorsel_sonucu = parsed
-                        st.session_state.kupon_gorsel_degerlendirme = None
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(str(exc))
-
-    parsed = st.session_state.get("kupon_gorsel_sonucu")
-    if isinstance(parsed, dict) and parsed.get("matches"):
-        st.markdown("### Okunan kuponu doğrula")
-        st.caption("Yanlış okunan takım, seçim veya oran varsa tabloda düzelt.")
-        edit_df = pd.DataFrame([
-            {
-                "Ev sahibi": x.get("home_team", ""),
-                "Deplasman": x.get("away_team", ""),
-                "Seçim": x.get("selection", ""),
-                "Oran": x.get("odds", ""),
-                "Okuma güveni": int(x.get("read_confidence", 0) or 0),
-            }
-            for x in parsed.get("matches", []) if isinstance(x, dict)
-        ])
-        dogrulanmis = st.data_editor(
-            edit_df,
-            use_container_width=True,
-            hide_index=True,
-            num_rows="dynamic",
-            disabled=["Okuma güveni"],
-            key="kupon_gorsel_editor",
-        )
-        if parsed.get("note"):
-            st.caption(f"Görsel notu: {parsed.get('note')}")
-        if st.button("🔎 MEVCUT ANALİZLE KARŞILAŞTIR", type="primary", use_container_width=True, key="kupon_gorsel_karsilastir_btn"):
-            if not st.session_state.get("final_list"):
-                st.warning("Önce Maç Analizi görünümünden ilgili günün analizini çalıştır.")
-            else:
-                rows = dogrulanmis.to_dict("records")
-                st.session_state.kupon_gorsel_degerlendirme = kupon_satirlarini_degerlendir(
-                    rows, st.session_state.get("final_list", [])
-                )
-
-    degerlendirme = st.session_state.get("kupon_gorsel_degerlendirme")
-    if degerlendirme:
-        sonuc_df = pd.DataFrame(degerlendirme)
-        st.markdown("### Kupon kontrolü")
-        st.dataframe(sonuc_df, use_container_width=True, hide_index=True)
-        bulunanlar = [x for x in degerlendirme if x.get("Model güveni") is not None]
-        if bulunanlar:
-            en_zayif = min(bulunanlar, key=lambda x: int(x.get("Model güveni") or 0))
-            uyumlu = sum(str(x.get("Durum", "")).startswith("🟢") for x in bulunanlar)
-            st.markdown(
-                f"**Özet:** {len(bulunanlar)} maç analizle eşleşti · {uyumlu} seçim ana modelle güçlü uyumlu.  "
-                f"**En zayıf seçim:** {en_zayif.get('Ev sahibi')} – {en_zayif.get('Deplasman')} · "
-                f"{en_zayif.get('Seçim')} (%{int(en_zayif.get('Model güveni') or 0)})."
-            )
-        st.warning("Bu kontrol istatistiksel karşılaştırmadır; kesin sonuç veya kazanç garantisi değildir.")
-    elif isinstance(parsed, dict) and not parsed.get("matches"):
-        st.warning("Görselde okunabilir bir futbol maçı bulunamadı.")
-    legal_footer()
-    st.stop()
 
 
 if gecmis_btn:
