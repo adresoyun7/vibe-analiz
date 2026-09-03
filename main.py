@@ -29,7 +29,7 @@ def parse_mac_datetime(value):
     except Exception:
         return datetime.now()
 
-st.set_page_config(page_title="VIBE PRO EXPERT", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 
 
 # ==========================================================
@@ -158,7 +158,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 54
+APP_SCHEMA_VERSION = 56
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -2801,6 +2801,123 @@ def tahmin_sonuclarini_guncelle(api_key):
     return guncellenen, hata
 
 
+def tahmini_mac_dakikasi(baslangic, simdi=None):
+    """Başlangıç saatinden yaklaşık futbol dakikası üretir; API gerçek dakika sağlamaz."""
+    simdi = simdi or (datetime.utcnow() + timedelta(hours=3))
+    gecen = max(0, int((simdi - baslangic).total_seconds() // 60))
+    if gecen <= 50:
+        return min(gecen, 45), f"~{min(gecen, 45)}'"
+    if gecen <= 65:
+        return 45, "Devre arası (~)"
+    dakika = min(90, max(46, gecen - 15))
+    return dakika, f"~{dakika}'"
+
+
+def canli_tahmin_durumu(label, ev_gol, dep_gol, dakika):
+    """Yalnızca skor ve tahmini dakikadan ihtiyatlı canlı durum üretir."""
+    label = str(label or "").replace("MS1", "MS 1").replace("MS2", "MS 2").replace("MSX", "Beraberlik").replace("MS X", "Beraberlik")
+    if "+" in label:
+        parcalar = [x.strip() for x in label.split("+")]
+        durumlar = [canli_tahmin_durumu(x, ev_gol, dep_gol, dakika) for x in parcalar]
+        if any(x[0] == "zayif" for x in durumlar):
+            return "zayif", "Kombinasyonun en az bir ayağı canlı skorla zayıfladı."
+        if all(x[0] == "guclu" for x in durumlar):
+            return "guclu", "Kombinasyonun bütün ayakları canlı skorla destekleniyor."
+        return "bekle", "Kombinasyon için skor ve dakika henüz yeterli değil."
+
+    toplam = int(ev_gol) + int(dep_gol)
+    if label == "2.5 Üst":
+        if toplam >= 3:
+            return "guclu", "2.5 Üst tahmini şimdiden gerçekleşti."
+        if (dakika <= 35 and toplam >= 1) or (dakika <= 60 and toplam >= 2):
+            return "guclu", "Gol temposu 2.5 Üst tahminini destekliyor."
+        if dakika >= 70 and toplam <= 1:
+            return "zayif", "Kalan süreye göre gol sayısı düşük kaldı."
+    elif label == "2.5 Alt":
+        if toplam >= 3:
+            return "zayif", "2.5 Alt tahmini artık gerçekleşemez."
+        if dakika >= 65 and toplam <= 1:
+            return "guclu", "Düşük skor 2.5 Alt tahminini destekliyor."
+        if dakika <= 35 and toplam >= 2:
+            return "zayif", "Erken gol temposu 2.5 Alt için olumsuz."
+    elif label == "KG Var":
+        if ev_gol > 0 and dep_gol > 0:
+            return "guclu", "KG Var tahmini şimdiden gerçekleşti."
+        if dakika >= 72:
+            return "zayif", "Takımlardan biri henüz gol atamadı ve süre azalıyor."
+        if dakika <= 35 and toplam >= 1:
+            return "guclu", "Erken gol KG Var ihtimalini destekliyor."
+    elif label == "KG Yok":
+        if ev_gol > 0 and dep_gol > 0:
+            return "zayif", "KG Yok tahmini artık gerçekleşemez."
+        if dakika >= 70:
+            return "guclu", "Takımlardan birinin golsüz kalması KG Yok'u destekliyor."
+    elif label == "MS 1":
+        if dakika >= 55 and ev_gol > dep_gol:
+            return "guclu", "Ev sahibi önde; MS 1 tahmini destekleniyor."
+        if dakika >= 55 and ev_gol < dep_gol:
+            return "zayif", "Ev sahibi geride; MS 1 tahmini zayıfladı."
+    elif label == "MS 2":
+        if dakika >= 55 and dep_gol > ev_gol:
+            return "guclu", "Deplasman önde; MS 2 tahmini destekleniyor."
+        if dakika >= 55 and dep_gol < ev_gol:
+            return "zayif", "Deplasman geride; MS 2 tahmini zayıfladı."
+    elif label == "Beraberlik":
+        if dakika >= 68 and ev_gol == dep_gol:
+            return "guclu", "Skor eşit; beraberlik tahmini destekleniyor."
+        if dakika >= 75 and abs(ev_gol - dep_gol) >= 2:
+            return "zayif", "Skor farkı ve kalan süre beraberlik için olumsuz."
+    return "bekle", "Skor ve dakika henüz net bir canlı sinyal üretmiyor."
+
+
+def canli_analizleri_getir(api_key):
+    """Kaydedilmiş maç önü analizlerini güncel canlı skorlarla eşleştirir."""
+    kayitlar = tahmin_logunu_oku()
+    bekleyen = [x for x in kayitlar if x.get("durum") != "Tamamlandı"]
+    ligler = sorted({x.get("sport_key") for x in bekleyen if x.get("sport_key")})
+    if not api_key:
+        return [], "Canlı skorları yenilemek için API key gerekli."
+    skorlar, hatalar = [], []
+    for lig in ligler:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{lig}/scores/",
+                params={"apiKey": api_key, "daysFrom": 1, "dateFormat": "iso"},
+                timeout=15,
+            )
+            if r.status_code == 200 and isinstance(r.json(), list):
+                skorlar.extend(r.json())
+            else:
+                hatalar.append(f"{lig}: HTTP {r.status_code}")
+        except Exception as exc:
+            hatalar.append(f"{lig}: {exc}")
+
+    simdi = datetime.utcnow() + timedelta(hours=3)
+    canlilar = []
+    for kayit in bekleyen:
+        eslesen = next((s for s in skorlar if str(s.get("id", "")) == str(kayit.get("match_id", "")) and s.get("id")), None)
+        if eslesen is None:
+            eslesen = next((s for s in skorlar if takim_anahtari(s.get("home_team")) == takim_anahtari(kayit.get("ev")) and takim_anahtari(s.get("away_team")) == takim_anahtari(kayit.get("dep"))), None)
+        if not eslesen or eslesen.get("completed"):
+            continue
+        try:
+            baslangic = datetime.fromisoformat(str(eslesen.get("commence_time", "")).replace("Z", "+00:00")).replace(tzinfo=None) + timedelta(hours=3)
+        except Exception:
+            baslangic = parse_mac_datetime(kayit.get("zaman"))
+        if simdi < baslangic or simdi > baslangic + timedelta(hours=3):
+            continue
+        puanlar = {takim_anahtari(x.get("name")): int(x.get("score", 0)) for x in (eslesen.get("scores") or [])}
+        try:
+            ev_gol = puanlar[takim_anahtari(kayit.get("ev"))]
+            dep_gol = puanlar[takim_anahtari(kayit.get("dep"))]
+        except (KeyError, TypeError, ValueError):
+            continue
+        dakika, dakika_yazi = tahmini_mac_dakikasi(baslangic, simdi)
+        durum, aciklama = canli_tahmin_durumu(kayit.get("tahmin"), ev_gol, dep_gol, dakika)
+        canlilar.append({**kayit, "ev_gol": ev_gol, "dep_gol": dep_gol, "dakika": dakika, "dakika_yazi": dakika_yazi, "canli_durum": durum, "canli_aciklama": aciklama})
+    return sorted(canlilar, key=lambda x: (x.get("canli_durum") == "guclu", x.get("guven", 0)), reverse=True), "; ".join(hatalar[:3]) or None
+
+
 def kupon_marketi_uygun(label):
     """Kuponda yalnızca MS, 2.5 Alt/Üst, KG ve bunların kombinasyonlarına izin ver."""
     parcalar = [x.strip() for x in str(label or "").split("+")]
@@ -3988,7 +4105,7 @@ with st.sidebar:
     st.markdown("""
     <div style="display:flex;align-items:center;gap:10px;margin:4px 0 14px 0;padding:10px 8px;border-radius:14px;background:linear-gradient(90deg,#07111f 0%,#0a1830 100%);border:1px solid #21334f;">
       <div class="brand-logo" style="width:36px;height:36px;font-size:1.1rem">⚡</div>
-      <div class="brand-text" style="font-size:1.35rem">VIBE <span>PRO</span></div>
+      <div class="brand-text" style="font-size:1.35rem">YapAi<span>Kupon</span></div>
     </div>
     """, unsafe_allow_html=True)
     with st.expander("🔑 API Key", expanded=False):
@@ -4008,11 +4125,11 @@ with st.sidebar:
         if get_app_api_key():
             st.success("API key aktif ✅")
         else:
-            st.warning("Maçları çekmek için API key girmen gerekiyor.")
+            st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için API key gerekir.")
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -4044,6 +4161,8 @@ with st.sidebar:
     backtest_btn = False
     gecmis_btn = False
     yuksek_oran_btn = False
+    canli_yenile_btn = False
+    canli_otomatik = False
     sonuc_yenile_btn = False
     if st.session_state.get('sayfa_modu') == 'Backtest':
         backtest_sezonu = st.selectbox(
@@ -4080,6 +4199,9 @@ with st.sidebar:
         yuksek_oran_btn = False
     elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         st.caption("Kaydedilen analizlerin sonuçlarını buradan yenileyebilirsin.")
+    elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
+        st.caption("Daha önce analiz edilmiş ve şu anda oynanan maçları takip eder.")
+        canli_otomatik = st.toggle("90 saniyede otomatik yenile", value=False, key="canli_otomatik_yenile")
     else:
         analiz_btn = False
 
@@ -4141,6 +4263,15 @@ elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             use_container_width=True,
             type='primary',
             key='sonuclari_yenile_btn',
+        )
+elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        canli_yenile_btn = st.button(
+            '🔄 CANLIYI YENİLE',
+            use_container_width=True,
+            type='primary',
+            key='canliyi_yenile_btn',
         )
 
 
@@ -4362,6 +4493,83 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                     "Yüksek oran olayı": ornekler["Olay"],
                 })
                 st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+    legal_footer()
+    st.stop()
+
+
+if st.session_state.get('sayfa_modu') == 'Canlı Takip':
+    st.markdown(
+        """
+        <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;color:#0f172a">
+          <div style="font-size:1.55rem;font-weight:900;color:#0f172a">📡 Canlı Tahmin Takibi</div>
+          <div style="font-size:.90rem;margin-top:7px;color:#334155">
+            Kaydedilmiş maç önü tahminlerini canlı skor ve başlangıç saatinden hesaplanan tahmini dakikayla karşılaştırır.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    simdi_canli = datetime.utcnow() + timedelta(hours=3)
+    son_yenileme = st.session_state.get("canli_son_yenileme")
+    otomatik_zamani = (
+        canli_otomatik
+        and (son_yenileme is None or (simdi_canli - son_yenileme).total_seconds() >= 85)
+    )
+    ilk_acilis = "canli_takip_listesi" not in st.session_state
+    if canli_yenile_btn or otomatik_zamani or ilk_acilis:
+        takip_key = get_app_api_key()
+        if not takip_key:
+            st.session_state.canli_takip_hatasi = "Canlı skorları çekmek için API key gerekli."
+            st.session_state.canli_takip_listesi = []
+        else:
+            with st.spinner("Canlı skorlar kontrol ediliyor..."):
+                canli_liste, canli_hata = canli_analizleri_getir(takip_key)
+            st.session_state.canli_takip_listesi = canli_liste
+            st.session_state.canli_takip_hatasi = canli_hata
+            st.session_state.canli_son_yenileme = simdi_canli
+
+    canli_hata = st.session_state.get("canli_takip_hatasi")
+    if canli_hata:
+        st.warning(canli_hata)
+    canli_liste = st.session_state.get("canli_takip_listesi", [])
+    if not canli_liste:
+        st.info("Şu anda canlı oynanan ve daha önce analizi kaydedilmiş eşleşen maç bulunamadı.")
+    else:
+        renkler = {
+            "guclu": ("#14532d", "#4ade80", "🟢 TAHMİN GÜÇLENDİ"),
+            "bekle": ("#422006", "#facc15", "🟡 BEKLE"),
+            "zayif": ("#450a0a", "#f87171", "🔴 TAHMİN ZAYIFLADI"),
+        }
+        guclu_adet = sum(x.get("canli_durum") == "guclu" for x in canli_liste)
+        bekle_adet = sum(x.get("canli_durum") == "bekle" for x in canli_liste)
+        zayif_adet = sum(x.get("canli_durum") == "zayif" for x in canli_liste)
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("Canlı maç", len(canli_liste))
+        mc2.metric("Güçlendi", guclu_adet)
+        mc3.metric("Bekle", bekle_adet)
+        mc4.metric("Zayıfladı", zayif_adet)
+        for item in canli_liste:
+            arka, vurgu, durum_yazi = renkler.get(item.get("canli_durum"), renkler["bekle"])
+            st.markdown(
+                f"""
+                <div style="background:{arka};border:1px solid {vurgu};border-radius:14px;padding:14px 16px;margin:10px 0;color:#f8fafc">
+                  <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                    <b style="font-size:1.06rem;color:#f8fafc">{escape(str(item.get('ev','')))} – {escape(str(item.get('dep','')))}</b>
+                    <b style="color:{vurgu}">{escape(str(item.get('dakika_yazi','~')))} · {int(item.get('ev_gol',0))}-{int(item.get('dep_gol',0))}</b>
+                  </div>
+                  <div style="margin-top:7px;color:#e2e8f0">Maç önü: <b>{escape(str(item.get('tahmin','-')))}</b> · Güven %{int(item.get('guven',0))}</div>
+                  <div style="margin-top:8px;color:{vurgu};font-weight:900">{durum_yazi}</div>
+                  <div style="margin-top:4px;color:#e2e8f0;font-size:.86rem">{escape(str(item.get('canli_aciklama','')))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    st.caption("Dakika yaklaşık değerdir; devre arası hesaba katılarak başlangıç saatinden hesaplanır. Canlı giriş kararı garanti değildir.")
+    if canli_otomatik:
+        components.html(
+            "<script>setTimeout(function(){window.parent.location.reload();},90000);</script>",
+            height=0,
+        )
     legal_footer()
     st.stop()
 
