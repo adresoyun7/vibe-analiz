@@ -5517,6 +5517,67 @@ def uygula_tema_css(koyu_mod: bool):
             -webkit-text-fill-color:#f8fafc !important;
         }
 
+        /* === DARK MODE OKUNABİLİRLİK FIX: Ana Analiz Ayarları + Görünüm === */
+        .st-key-sticky_analysis_controls {
+            background:linear-gradient(180deg,#0b1628 0%,#0a1830 100%) !important;
+            border-color:#315487 !important;
+            box-shadow:0 8px 24px rgba(0,0,0,.30) !important;
+        }
+        .st-key-sticky_analysis_controls .top-analysis-controls b,
+        .st-key-sticky_analysis_controls label,
+        .st-key-sticky_analysis_controls label *,
+        .st-key-sticky_analysis_controls p,
+        .st-key-sticky_analysis_controls span,
+        .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"],
+        .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"] * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+            opacity:1 !important;
+        }
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] label,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] label *,
+        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] label,
+        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] label *,
+        .st-key-sticky_analysis_controls [data-testid="stSelectbox"] label,
+        .st-key-sticky_analysis_controls [data-testid="stSelectbox"] label * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+            font-weight:800 !important;
+        }
+        .st-key-sticky_analysis_controls [data-baseweb="select"] > div,
+        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] div[data-baseweb="input"] > div {
+            background:#0f1b31 !important;
+            border-color:#315487 !important;
+        }
+        .st-key-sticky_analysis_controls [data-baseweb="select"] *,
+        .st-key-sticky_analysis_controls input {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+
+        /* Sidebar Görünüm başlığı ve tüm radio seçenekleri */
+        .st-key-sayfa_modu,
+        .st-key-sayfa_modu [data-testid="stRadio"] {
+            color:#f8fafc !important;
+        }
+        .st-key-sayfa_modu label,
+        .st-key-sayfa_modu label *,
+        .st-key-sayfa_modu p,
+        .st-key-sayfa_modu span,
+        .st-key-sayfa_modu [data-testid="stWidgetLabel"],
+        .st-key-sayfa_modu [data-testid="stWidgetLabel"] * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+            opacity:1 !important;
+        }
+        .st-key-sayfa_modu [role="radiogroup"] label,
+        .st-key-sayfa_modu [role="radiogroup"] label *,
+        section[data-testid="stSidebar"] .st-key-sayfa_modu [role="radiogroup"] p {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+            font-weight:700 !important;
+        }
+
         /* Footer */
         [data-testid="stMain"] div[style*="text-align:center"][style*="font-size:12px"] {
             color:#9db2d1 !important;
