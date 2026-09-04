@@ -5090,6 +5090,43 @@ with st.container(key="sticky_analysis_controls"):
         """,
         unsafe_allow_html=True,
     )
+
+    # Panel, sidebar tema anahtarından önce çizildiği için koyu modu doğrudan
+    # session_state üzerinden burada da uygula. Böylece ilk CSS'teki beyaz
+    # arka plan koyu modda hiçbir rerun/sıralama durumunda görünmez.
+    if bool(st.session_state.get("koyu_mod", False)):
+        st.markdown(
+            """
+            <style>
+            .st-key-sticky_analysis_controls,
+            div.st-key-sticky_analysis_controls {
+                background:#0b1628 !important;
+                background-color:#0b1628 !important;
+                background-image:linear-gradient(180deg,#0b1628 0%,#0a1830 100%) !important;
+                border:1px solid #315487 !important;
+                box-shadow:0 8px 24px rgba(0,0,0,.30) !important;
+            }
+            .st-key-sticky_analysis_controls > div,
+            .st-key-sticky_analysis_controls [data-testid="stVerticalBlock"],
+            .st-key-sticky_analysis_controls [data-testid="stHorizontalBlock"],
+            .st-key-sticky_analysis_controls [data-testid="column"],
+            .st-key-sticky_analysis_controls div[data-testid="stElementContainer"] {
+                background-color:transparent !important;
+            }
+            .st-key-sticky_analysis_controls .top-analysis-controls b,
+            .st-key-sticky_analysis_controls label,
+            .st-key-sticky_analysis_controls label *,
+            .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"],
+            .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"] * {
+                color:#f8fafc !important;
+                -webkit-text-fill-color:#f8fafc !important;
+                opacity:1 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
     ayar_tol_col, ayar_ornek_col, ayar_oynanabilir_col, ayar_buton_col = st.columns(
         [2.25, .95, 1.35, 1.25], gap="small"
     )
