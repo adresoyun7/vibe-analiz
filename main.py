@@ -5578,6 +5578,46 @@ def uygula_tema_css(koyu_mod: bool):
             font-weight:700 !important;
         }
 
+        /* === SLIDER / ANA ANALİZ AYARLARI KOYU MOD NETLİK FIX === */
+        .st-key-sticky_analysis_controls .top-analysis-controls,
+        .st-key-sticky_analysis_controls .top-analysis-controls *,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] label,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] label *,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stWidgetLabel"],
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stWidgetLabel"] *,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBar"],
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBar"] *,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBarMin"],
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBarMax"],
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"],
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"] * {
+            color:#ffffff !important;
+            -webkit-text-fill-color:#ffffff !important;
+            opacity:1 !important;
+        }
+        .st-key-sticky_analysis_controls .top-analysis-controls b {
+            color:#ffffff !important;
+            -webkit-text-fill-color:#ffffff !important;
+            text-shadow:0 1px 1px rgba(0,0,0,.35) !important;
+        }
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] svg,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] button svg,
+        .st-key-sticky_analysis_controls [data-testid="stTooltipIcon"] svg {
+            color:#f8fafc !important;
+            fill:#f8fafc !important;
+            stroke:#f8fafc !important;
+            opacity:1 !important;
+        }
+        /* Slider uç değerleri (örn. 0.00 / 0.30) ve aktif değer (örn. 0.02) */
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] div,
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] span {
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"] {
+            background:#facc15 !important;
+            border-color:#ffe27a !important;
+        }
+
         /* Footer */
         [data-testid="stMain"] div[style*="text-align:center"][style*="font-size:12px"] {
             color:#9db2d1 !important;
