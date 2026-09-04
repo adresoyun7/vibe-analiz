@@ -6759,6 +6759,16 @@ if analiz_btn:
                 if t is None:
                     continue
 
+                # Minimum Örnek Sayısı ana maç analizinde de kesin olarak uygulanır.
+                # Manuel hassasiyet hesapla() içinde aday havuzu oluşsa bile, seçilen
+                # minimumun altında kalan maçlar sonuç listesine/kuponlara giremez.
+                try:
+                    gercek_ornek = len(b_det) if b_det is not None else 0
+                except Exception:
+                    gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
+                if gercek_ornek < max(1, int(min_ornek or 1)):
+                    continue
+
                 if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
                     continue
                 m_dict = m.to_dict()
