@@ -6178,10 +6178,21 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             """
             <style>
             [class*="st-key-gecmis_mac_baslik_"] {
-                margin-bottom:-0.95rem !important;
+                margin:0 !important;
+                padding:0 !important;
             }
             [class*="st-key-gecmis_mac_baslik_"] > div[data-testid="stVerticalBlock"] {
                 gap:0 !important;
+                margin:0 !important;
+                padding:0 !important;
+            }
+            /* Maç kartlarını taşıyan ana Streamlit dikey bloğunda ekstra satır aralığı bırakma. */
+            div[data-testid="stVerticalBlock"]:has(> div [class*="st-key-gecmis_mac_baslik_"]) {
+                gap:0 !important;
+            }
+            [class*="st-key-gecmis_mac_baslik_"] div[data-testid="stElementContainer"] {
+                margin-top:0 !important;
+                margin-bottom:0 !important;
             }
             </style>
             """,
@@ -6302,6 +6313,11 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             overflow:hidden !important;
                             padding:2px 4px 4px 4px !important;
                         }}
+                        /* Tam ekranda tablo normal satır yüksekliğini korur.
+                           Satırlar ekran yüksekliğini aşarsa tablonun kendi dikey kaydırması devreye girer. */
+                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stDataFrame"] {{
+                            max-height:calc(100vh - 82px) !important;
+                        }}
                         .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] > div,
                         .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] [data-testid="stVerticalBlock"] {{
                             gap:0 !important;
@@ -6342,67 +6358,21 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         "Özel olay": ornekler["Olay"],
                     })
                     if tam_ekran_aktif:
-                        # Tam ekran modunda tabloyu dış kaydırma olmadan tek görüntüye sığdır.
-                        # Satır yüksekliği mevcut ekran yüksekliğini örnek sayısına bölerek ayarlanır.
-                        satir_sayisi = max(1, len(tablo))
-                        kompakt_stil = gecmis_tablo_stili(tablo).hide(axis="index")
-                        kompakt_html = kompakt_stil.to_html()
-                        # st.markdown yerine st.html kullanıyoruz; Styler'ın <style> etiketi
-                        # artık düz metin olarak görünmez. Tam ekranda dış/iç scrollbar yoktur.
-                        tam_html = f"""<style>
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table {{
-    /* Dikey kaydırma yok; bütün örnek satırları tek ekrana sığar.
-       Genişlik yetmezse yalnızca yatay kaydırma çubuğu çıkar. */
-    height:calc(100vh - 96px) !important;
-    max-height:calc(100vh - 96px) !important;
-    overflow-x:auto !important;
-    overflow-y:hidden !important;
-    width:100% !important;
-    margin:0 !important;
-    padding:0 0 14px 0 !important;
-    box-sizing:border-box !important;
-}}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table table {{
-    width:max(100%, 1180px) !important;
-    min-width:1180px !important;
-    table-layout:fixed !important;
-    border-collapse:collapse !important;
-    margin:0 !important;
-}}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table thead tr,
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table tbody tr {{
-    height:calc((100vh - 122px) / {satir_sayisi + 1}) !important;
-    max-height:calc((100vh - 122px) / {satir_sayisi + 1}) !important;
-}}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th,
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td {{
-    padding:0 4px !important;
-    line-height:.95 !important;
-    font-size:clamp(5px, calc((100vh - 145px) / {satir_sayisi + 1} * .36), 11px) !important;
-    white-space:nowrap !important;
-    overflow:hidden !important;
-    text-overflow:ellipsis !important;
-    vertical-align:middle !important;
-    border:1px solid rgba(148,163,184,.24) !important;
-}}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(1),
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(1) {{ width:8% !important; }}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(2),
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(2) {{ width:7% !important; }}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(3),
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(3) {{ width:24% !important; }}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table::-webkit-scrollbar {{
-    height:10px !important;
-}}
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table::-webkit-scrollbar-thumb {{
-    background:#64748b !important;
-    border-radius:999px !important;
-}}
-</style><div class="gecmis-full-table">{kompakt_html}</div>"""
-                        if hasattr(st, "html"):
-                            st.html(tam_html)
-                        else:
-                            st.markdown(tam_html, unsafe_allow_html=True)
+                        # Tam ekran yalnızca inceleme alanını büyütür; tablo görünümü normal modla aynıdır.
+                        # Az örnekte satırlar gereksiz büyümez. Çok örnekte ise tablo kendi dikey
+                        # kaydırma çubuğunu gösterir. Genişlik yetmezse Streamlit yatay kaydırmayı sağlar.
+                        normal_satir_yuksekligi = 35
+                        baslik_yuksekligi = 38
+                        tam_ekran_tablo_yuksekligi = min(
+                            900,
+                            baslik_yuksekligi + max(1, len(tablo)) * normal_satir_yuksekligi,
+                        )
+                        st.dataframe(
+                            gecmis_tablo_stili(tablo),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=tam_ekran_tablo_yuksekligi,
+                        )
                     else:
                         st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
