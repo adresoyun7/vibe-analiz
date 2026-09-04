@@ -6171,6 +6171,22 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             reverse=True,
         )
         st.success(f"{len(inceleme)} güncel maç bulundu.")
+        # Geçmiş maç başlıklarını eskisi gibi aralıksız/kompakt göster.
+        # Key'li container'lar Streamlit'in varsayılan dikey boşluğunu taşıdığı için
+        # negatif alt marj ile yalnızca bu görünümde arayı kapatıyoruz.
+        st.markdown(
+            """
+            <style>
+            [class*="st-key-gecmis_mac_baslik_"] {
+                margin-bottom:-0.95rem !important;
+            }
+            [class*="st-key-gecmis_mac_baslik_"] > div[data-testid="stVerticalBlock"] {
+                gap:0 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         for sira, item in enumerate(inceleme, start=1):
             m = item["m"]
             ornekler = item["ornekler"]
@@ -6282,9 +6298,15 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             overflow:hidden !important;
                         }}
                         .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] {{
-                            height:calc(100vh - 64px) !important;
+                            height:calc(100vh - 62px) !important;
                             overflow:hidden !important;
-                            padding:4px 8px 6px 8px !important;
+                            padding:2px 4px 4px 4px !important;
+                        }}
+                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] > div,
+                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] [data-testid="stVerticalBlock"] {{
+                            gap:0 !important;
+                            margin:0 !important;
+                            padding:0 !important;
                         }}
                         .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                             position:absolute !important;
@@ -6329,36 +6351,52 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         # artık düz metin olarak görünmez. Tam ekranda dış/iç scrollbar yoktur.
                         tam_html = f"""<style>
 .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table {{
-    height:calc(100vh - 68px) !important;
-    overflow:hidden !important;
+    /* Dikey kaydırma yok; bütün örnek satırları tek ekrana sığar.
+       Genişlik yetmezse yalnızca yatay kaydırma çubuğu çıkar. */
+    height:calc(100vh - 96px) !important;
+    max-height:calc(100vh - 96px) !important;
+    overflow-x:auto !important;
+    overflow-y:hidden !important;
     width:100% !important;
+    margin:0 !important;
+    padding:0 0 14px 0 !important;
+    box-sizing:border-box !important;
 }}
 .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table table {{
-    width:100% !important;
-    height:100% !important;
+    width:max(100%, 1180px) !important;
+    min-width:1180px !important;
     table-layout:fixed !important;
     border-collapse:collapse !important;
     margin:0 !important;
 }}
 .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table thead tr,
 .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table tbody tr {{
-    height:calc((100vh - 72px) / {satir_sayisi + 1}) !important;
-    max-height:calc((100vh - 72px) / {satir_sayisi + 1}) !important;
+    height:calc((100vh - 122px) / {satir_sayisi + 1}) !important;
+    max-height:calc((100vh - 122px) / {satir_sayisi + 1}) !important;
 }}
 .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th,
 .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td {{
     padding:0 4px !important;
-    line-height:1 !important;
-    font-size:clamp(6px, calc((100vh - 88px) / {satir_sayisi + 1} * .42), 12px) !important;
+    line-height:.95 !important;
+    font-size:clamp(5px, calc((100vh - 145px) / {satir_sayisi + 1} * .36), 11px) !important;
     white-space:nowrap !important;
     overflow:hidden !important;
     text-overflow:ellipsis !important;
     vertical-align:middle !important;
     border:1px solid rgba(148,163,184,.24) !important;
 }}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(1),
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(1) {{ width:8% !important; }}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(2),
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(2) {{ width:7% !important; }}
 .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(3),
-.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(3) {{
-    width:24% !important;
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(3) {{ width:24% !important; }}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table::-webkit-scrollbar {{
+    height:10px !important;
+}}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table::-webkit-scrollbar-thumb {{
+    background:#64748b !important;
+    border-radius:999px !important;
 }}
 </style><div class="gecmis-full-table">{kompakt_html}</div>"""
                         if hasattr(st, "html"):
