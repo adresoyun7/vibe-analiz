@@ -6197,7 +6197,11 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         # Aynı lig anahtarı değiştiyse mevcut maç listesini API'ye tekrar gitmeden
         # yalnızca yerel/tarihsel veriyle yeniden hesapla.
         if gecmis_ayni_lig != mevcut_ayni_lig:
-            st.session_state["sadece_ayni_lig"] = bool(gecmis_ayni_lig)
+            # `sadece_ayni_lig` anahtarı sayfanın başka yerinde zaten bir widget key'i
+            # olarak oluşturulmuş olabilir. Widget oluşturulduktan sonra aynı key'e
+            # session_state üzerinden değer yazmak StreamlitWidgetAlreadyInstantiatedError
+            # üretir. Bu yüzden Geçmiş Örnekleri anahtarını bağımsız tutup yalnızca
+            # bu görünümün örneklerini yeniden hesaplıyoruz.
             gi_gecmis_yeniden = futbol_veri_motoru(tuple(yillar))
             yeniden = []
             for eski_item in inceleme:
