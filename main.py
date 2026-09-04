@@ -6032,6 +6032,8 @@ if gecmis_btn:
                     limit=gecmis_limit,
                 )
                 inceleme.append({"m": gi_mac.to_dict(), "ornekler": ornekler})
+            # Geçmiş Örnekleri görünümünde maçları, bulunan örnek sayısı çoktan aza sırala.
+            inceleme.sort(key=lambda x: len(x.get("ornekler", [])), reverse=True)
             st.session_state.gecmis_inceleme_list = inceleme
             st.rerun()
 
@@ -6064,6 +6066,12 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     elif not inceleme:
         st.warning("Bu tarih ve özel filtrelerle eşleşen maç bulunamadı.")
     else:
+        # Eski session verisi kalmış olsa bile görünümde örnek sayısına göre çoktan aza sırala.
+        inceleme = sorted(
+            inceleme,
+            key=lambda x: len(x.get("ornekler", [])),
+            reverse=True,
+        )
         st.success(f"{len(inceleme)} güncel maç bulundu.")
         for sira, item in enumerate(inceleme, start=1):
             m = item["m"]
