@@ -2594,42 +2594,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     toplam_gol = b["FTHG"] + b["FTAG"]
     ilk_yari_gol = b["HTHG"] + b["HTAG"]
 
-    # MESAFE AĞIRLIKLI BENZERLİK
-    # Tolerans yalnızca aday havuzunu belirler. Havuzun içinde güncel 1-X-2 oranına
-    # daha yakın geçmiş maçlar daha fazla ağırlık alır. Böylece ±0.10 gibi geniş
-    # pencerelerde sınırdaki maç ile neredeyse birebir oranlı maç eşit sayılmaz.
-    if float(tolerans) > 0:
-        dh = (b[ref_h] - float(m_row["h"])) / float(tolerans)
-        dd = (b[ref_d] - float(m_row["b"])) / float(tolerans)
-        da = (b[ref_a] - float(m_row["a"])) / float(tolerans)
-        # Üç oranın normalize RMS mesafesi. Ağırlık exp(-mesafe):
-        # merkezde 1.00, tipik sınır mesafesinde yaklaşık 0.37.
-        mesafe = ((dh * dh + dd * dd + da * da) / 3.0).pow(0.5)
-        b["_similarity_weight"] = mesafe.map(lambda x: math.exp(-float(x)))
-    else:
-        # 0.00 yalnızca birebir eşleşmeleri içerdiği için tüm eşleşmeler eşit ağırlıkta.
-        b["_similarity_weight"] = 1.0
-
-    weights = pd.to_numeric(b["_similarity_weight"], errors="coerce").fillna(0.0)
-    weight_sum = float(weights.sum())
-    if weight_sum <= 0:
-        b["_similarity_weight"] = 1.0
-        weights = b["_similarity_weight"]
-        weight_sum = float(len(b))
-
-    def weighted_mean(mask):
-        vals = pd.Series(mask, index=b.index).astype(float)
-        return float((vals * weights).sum() / weight_sum)
-
-    def weighted_distribution(series):
-        tmp = pd.DataFrame({"v": series, "w": weights}).dropna(subset=["v"])
-        if tmp.empty or float(tmp["w"].sum()) <= 0:
-            return pd.Series(dtype=float)
-        sums = tmp.groupby("v")["w"].sum()
-        return sums / float(sums.sum())
-
-    ms_vc = weighted_distribution(b["FTR"])
-    iy_vc = weighted_distribution(b["HTR"])
+    ms_vc = b["FTR"].value_counts(normalize=True)
+    iy_vc = b["HTR"].value_counts(normalize=True)
 
     ms_mod = ms_vc.idxmax() if not ms_vc.empty else "D"
     ms_raw = float(ms_vc.get(ms_mod, 0))
@@ -2639,17 +2605,16 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     msx_raw = float(ms_vc.get("D", 0))
     ms2_raw = float(ms_vc.get("A", 0))
 
-    ms25_raw = weighted_mean(toplam_gol >= 3)
-    ms35_raw = weighted_mean(toplam_gol >= 4)
-    ms15_raw = weighted_mean(toplam_gol >= 2)
-    kg_raw = weighted_mean((b["FTHG"] > 0) & (b["FTAG"] > 0))
-    iy05_raw = weighted_mean(ilk_yari_gol >= 1)
-    iy15_raw = weighted_mean(ilk_yari_gol >= 2)
+    ms25_raw = float((toplam_gol >= 3).mean())
+    ms35_raw = float((toplam_gol >= 4).mean())
+    ms15_raw = float((toplam_gol >= 2).mean())
+    kg_raw = float(((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
+    iy05_raw = float((ilk_yari_gol >= 1).mean())
+    iy15_raw = float((ilk_yari_gol >= 2).mean())
 
     htft_s = b["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + b["FTR"].replace({"H": "1", "A": "2", "D": "X"})
-    htft_counts = weighted_distribution(htft_s)
-    htft_mod = htft_counts.idxmax() if not htft_counts.empty else "-"
-    htft_raw = float(htft_counts.get(htft_mod, 0)) if not htft_counts.empty else 0.0
+    htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
+    htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
 
     oran_ev = float(m_row["h"])
     oran_ber = float(m_row["b"])
@@ -2770,7 +2735,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     raw_combo_list = []
     for combo_label, combo_cond, combo_type in combo_defs:
         combo_hit = int(combo_cond.sum())
-        combo_raw = weighted_mean(combo_cond)
+        combo_raw = float(combo_cond.mean())
         combo_conf = min(combo_raw * guven_carpani * combo_bias * form_market_carpani(combo_label, form_profili), 0.99)
         combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, sample, float(tolerans))
 
@@ -2791,7 +2756,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
                 "type": combo_type,
             })
 
-    htft_counts = weighted_distribution(htft_series)
+    htft_counts = htft_series.value_counts(normalize=True)
     for htft_label, htft_raw_prob in htft_counts.items():
         htft_hit = int((htft_series == htft_label).sum())
         htft_conf = min(float(htft_raw_prob) * guven_carpani * combo_bias * form_market_carpani(f"HT/FT {htft_label}", form_profili), 0.99)
