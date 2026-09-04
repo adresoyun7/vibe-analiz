@@ -4474,6 +4474,43 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
     return b.sort_values("Date", ascending=False).head(int(limit))
 
 
+
+def gecmis_ornek_siralama_anahtari(item):
+    """Geçmiş Örnekleri sıralaması: önce toplam örnek, sonra İY/MS/2.5/KG içindeki en güçlü tekrar."""
+    ornekler = item.get("ornekler") if isinstance(item, dict) else None
+    if ornekler is None or getattr(ornekler, "empty", True):
+        return (0, 0)
+
+    toplam_ornek = int(len(ornekler))
+    tekrarlar = []
+
+    try:
+        iy = ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str)
+        tekrarlar.append(int(iy.value_counts().max()))
+    except Exception:
+        pass
+
+    try:
+        ms = ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str)
+        tekrarlar.append(int(ms.value_counts().max()))
+    except Exception:
+        pass
+
+    try:
+        alt_ust = ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"})
+        tekrarlar.append(int(alt_ust.value_counts().max()))
+    except Exception:
+        pass
+
+    try:
+        kg = ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"})
+        tekrarlar.append(int(kg.value_counts().max()))
+    except Exception:
+        pass
+
+    en_yuksek_tekrar = max(tekrarlar) if tekrarlar else 0
+    return (toplam_ornek, en_yuksek_tekrar)
+
 def gecmis_tablo_stili(tablo):
     """Geçmiş sonuç tablolarını maç sonucu ve market tipine göre renklendirir."""
     def skor_renk(value):
@@ -6032,8 +6069,10 @@ if gecmis_btn:
                     limit=gecmis_limit,
                 )
                 inceleme.append({"m": gi_mac.to_dict(), "ornekler": ornekler})
-            # Geçmiş Örnekleri görünümünde maçları, bulunan örnek sayısı çoktan aza sırala.
-            inceleme.sort(key=lambda x: len(x.get("ornekler", [])), reverse=True)
+            # Geçmiş Örnekleri sıralaması:
+            # 1) Toplam örnek sayısı çoktan aza
+            # 2) Örnek sayısı eşit/uygunsa İY, MS, 2.5 veya KG içinde en çok tekrar eden sonuç çoktan aza
+            inceleme.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = inceleme
             st.rerun()
 
@@ -6066,10 +6105,10 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     elif not inceleme:
         st.warning("Bu tarih ve özel filtrelerle eşleşen maç bulunamadı.")
     else:
-        # Eski session verisi kalmış olsa bile görünümde örnek sayısına göre çoktan aza sırala.
+        # Eski session verisi kalmış olsa bile aynı gelişmiş sıralamayı uygula.
         inceleme = sorted(
             inceleme,
-            key=lambda x: len(x.get("ornekler", [])),
+            key=gecmis_ornek_siralama_anahtari,
             reverse=True,
         )
         st.success(f"{len(inceleme)} güncel maç bulundu.")
