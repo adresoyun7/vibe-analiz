@@ -165,7 +165,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 76
+APP_SCHEMA_VERSION = 77
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -6192,9 +6192,21 @@ if analiz_btn:
         final = []
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
-                t, b_det = hassasiyet_birlesik_hesapla(
-                    gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
-                )
+                # Maç Analizi: üstte seçilen manuel hassasiyetle TEK kez çalışır.
+                # Top 50 Market: 0.00–0.10 birleşik hassasiyet modeli kullanılmaya devam eder.
+                if st.session_state.get("sayfa_modu") == "Maç Analizi":
+                    t, b_det = hesapla(
+                        gecmis,
+                        m,
+                        TOLERANS,
+                        sadece_ayni_lig=sadece_ayni_lig,
+                        form_aktif=False,
+                        kalibrasyon_aktif=False,
+                    )
+                else:
+                    t, b_det = hassasiyet_birlesik_hesapla(
+                        gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
+                    )
                 if t is None:
                     continue
 
@@ -6234,7 +6246,15 @@ if analiz_btn:
         st.session_state.final_list = final
         analiz_tahminlerini_kaydet(final)
         st.session_state.top10_list = []
-        st.session_state.top50_list = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig)
+        # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
+        # Bu hem manuel hassasiyet mantığını net tutar hem de analizi hızlandırır.
+        if st.session_state.get("sayfa_modu") == "Top 50 Market":
+            st.session_state.top50_list = gunun_en_iyi_10_uret(
+                gecmis, bulten, min_ornek=min_ornek, limit=50,
+                sadece_ayni_lig=sadece_ayni_lig,
+            )
+        else:
+            st.session_state.top50_list = []
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
         st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
