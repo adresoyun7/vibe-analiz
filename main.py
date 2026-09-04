@@ -6171,6 +6171,50 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             reverse=True,
         )
         st.success(f"{len(inceleme)} güncel maç bulundu.")
+
+        # Geçmiş Örnekleri için hızlı görünüm/filtre anahtarları.
+        # Sağ üstte, koyu mod anahtarı gibi açılıp kapanırlar.
+        mevcut_ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
+        if "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
+            st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
+        if "gecmis_oranlari_goster" not in st.session_state:
+            st.session_state["gecmis_oranlari_goster"] = True
+
+        ust_bos, ust_ayni, ust_oran = st.columns([6.2, 1.45, 1.25], gap="small")
+        with ust_ayni:
+            gecmis_ayni_lig = st.toggle(
+                "Sadece aynı ligler",
+                key="gecmis_sadece_ayni_lig_toggle",
+                help="Açıkken geçmiş örnekler yalnızca güncel maçın kendi liginden alınır.",
+            )
+        with ust_oran:
+            gecmis_oranlari_goster = st.toggle(
+                "Oranları göster",
+                key="gecmis_oranlari_goster",
+                help="Kapatınca maç başlığındaki ve geçmiş tablo içindeki 1-X-2 oranları gizlenir.",
+            )
+
+        # Aynı lig anahtarı değiştiyse mevcut maç listesini API'ye tekrar gitmeden
+        # yalnızca yerel/tarihsel veriyle yeniden hesapla.
+        if gecmis_ayni_lig != mevcut_ayni_lig:
+            st.session_state["sadece_ayni_lig"] = bool(gecmis_ayni_lig)
+            gi_gecmis_yeniden = futbol_veri_motoru(tuple(yillar))
+            yeniden = []
+            for eski_item in inceleme:
+                gi_mac_dict = dict(eski_item.get("m", {}) or {})
+                gi_mac_series = pd.Series(gi_mac_dict)
+                yeni_ornekler = gecmis_ornekleri_bul(
+                    gi_gecmis_yeniden,
+                    gi_mac_series,
+                    TOLERANS,
+                    sadece_ayni_lig=bool(gecmis_ayni_lig),
+                    limit=gecmis_limit,
+                )
+                yeniden.append({"m": gi_mac_dict, "ornekler": yeni_ornekler})
+            yeniden.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
+            st.session_state.gecmis_inceleme_list = yeniden
+            st.rerun()
+
         # Geçmiş maç başlıklarını eskisi gibi aralıksız/kompakt göster.
         # Key'li container'lar Streamlit'in varsayılan dikey boşluğunu taşıdığı için
         # negatif alt marj ile yalnızca bu görünümde arayı kapatıyoruz.
@@ -6230,12 +6274,16 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             ms_sonuc, _, ms_pct = ozet["ms"]
             ou_sonuc, _, ou_pct = ozet["ou25"]
             kg_sonuc, _, kg_pct = ozet["kg"]
-            tekrar_ozeti = (
-                f"İY {iy_sonuc} %{iy_pct:.0f} · "
-                f"MS {ms_sonuc} %{ms_pct:.0f} · "
-                f"2.5 {ou_sonuc} %{ou_pct:.0f} · "
-                f"KG {kg_sonuc} %{kg_pct:.0f}"
-            )
+            if len(ornekler) > 0:
+                tekrar_ozeti = (
+                    f"İY {iy_sonuc} %{iy_pct:.0f} · "
+                    f"MS {ms_sonuc} %{ms_pct:.0f} · "
+                    f"2.5 {ou_sonuc} %{ou_pct:.0f} · "
+                    f"KG {kg_sonuc} %{kg_pct:.0f}"
+                )
+            else:
+                # 0 örnekte sağ tarafta anlamsız %0 değerleri gösterme.
+                tekrar_ozeti = ""
             # Yüzde özetini maç başlığından ayırıp expander başlığının en sağına
             # farklı bir vurgu rengiyle yerleştir. Key'li container sayesinde her
             # maçın başlığı kendi dinamik özetini güvenli biçimde alır.
@@ -6252,6 +6300,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     }}
                     .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary::after {{
                         content:"{ozet_css_metni}";
+                        display:{'block' if tekrar_ozeti else 'none'} !important;
                         margin-left:auto !important;
                         padding-left:22px !important;
                         color:{ozet_renk} !important;
@@ -6278,7 +6327,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                         position:absolute !important;
                         left:42px !important;
-                        top:28px !important;
+                        top:4px !important;
                         z-index:20 !important;
                         width:30px !important;
                         min-width:30px !important;
@@ -6350,36 +6399,46 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                             position:absolute !important;
                             left:42px !important;
-                            top:12px !important;
+                            top:4px !important;
                         }}
                         </style>
                         """,
                         unsafe_allow_html=True,
                     )
 
+                oran_baslik = (
+                    f" · Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f}"
+                    if gecmis_oranlari_goster else ""
+                )
                 with st.expander(
-                    f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · "
-                    f"Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f} · {len(ornekler)} örnek",
+                    f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat}"
+                    f"{oran_baslik} · {len(ornekler)} örnek",
                     expanded=(tam_ekran_aktif or sira == 1),
                 ):
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
                         continue
-                    tablo = pd.DataFrame({
+                    tablo_veri = {
                         "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
                         "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
                         "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
+                    }
+                    if gecmis_oranlari_goster:
                         # Filtre hangi oranı kullandıysa tabloda da yalnızca onu göster.
                         # REF_* kapanış oranıdır; eski sezonda yoksa yükleyici B365'e düşer.
-                        "1": ornekler["REF_H"].round(2) if "REF_H" in ornekler.columns else ornekler["B365H"].round(2),
-                        "X": ornekler["REF_D"].round(2) if "REF_D" in ornekler.columns else ornekler["B365D"].round(2),
-                        "2": ornekler["REF_A"].round(2) if "REF_A" in ornekler.columns else ornekler["B365A"].round(2),
+                        tablo_veri.update({
+                            "1": ornekler["REF_H"].round(2) if "REF_H" in ornekler.columns else ornekler["B365H"].round(2),
+                            "X": ornekler["REF_D"].round(2) if "REF_D" in ornekler.columns else ornekler["B365D"].round(2),
+                            "2": ornekler["REF_A"].round(2) if "REF_A" in ornekler.columns else ornekler["B365A"].round(2),
+                        })
+                    tablo_veri.update({
                         "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
                         "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
                         "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
                         "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
                         "Özel olay": ornekler["Olay"],
                     })
+                    tablo = pd.DataFrame(tablo_veri)
                     if tam_ekran_aktif:
                         # Tam ekran yalnızca inceleme alanını büyütür; tablo görünümü normal modla aynıdır.
                         # Az örnekte satırlar gereksiz büyümez. Çok örnekte ise tablo kendi dikey
