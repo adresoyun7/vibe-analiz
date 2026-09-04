@@ -5090,8 +5090,8 @@ with st.container(key="sticky_analysis_controls"):
         """,
         unsafe_allow_html=True,
     )
-    ayar_tol_col, ayar_ornek_col, ayar_oynanabilir_col, ayar_canli_col, ayar_buton_col = st.columns(
-        [2.1, .9, 1.25, 1.05, 1.15], gap="small"
+    ayar_tol_col, ayar_ornek_col, ayar_oynanabilir_col, ayar_buton_col = st.columns(
+        [2.25, .95, 1.35, 1.25], gap="small"
     )
     with ayar_tol_col:
         TOLERANS = st.slider(
@@ -5118,14 +5118,6 @@ with st.container(key="sticky_analysis_controls"):
             index=2,
             format_func=lambda x: "Tümü" if x == 0 else f"Güven ≥ %{x}",
             key="oynanabilir_esik",
-            on_change=clear_detail_on_filter_change,
-        )
-    with ayar_canli_col:
-        canli_filtre = st.selectbox(
-            "Canlı filtre",
-            options=["Tümü", "Canlı", "Başlamamış", "Bitti"],
-            index=0,
-            key="canli_filtre",
             on_change=clear_detail_on_filter_change,
         )
     with ayar_buton_col:
@@ -5522,6 +5514,17 @@ def uygula_tema_css(koyu_mod: bool):
             background:linear-gradient(180deg,#0b1628 0%,#0a1830 100%) !important;
             border-color:#315487 !important;
             box-shadow:0 8px 24px rgba(0,0,0,.30) !important;
+        }
+        /* Ana analiz panelinde Streamlit'in beyaz iç katmanlarını da kapat */
+        .st-key-sticky_analysis_controls > div,
+        .st-key-sticky_analysis_controls [data-testid="stVerticalBlock"],
+        .st-key-sticky_analysis_controls [data-testid="stHorizontalBlock"],
+        .st-key-sticky_analysis_controls [data-testid="column"],
+        .st-key-sticky_analysis_controls div[data-testid="stElementContainer"] {
+            background:transparent !important;
+        }
+        .st-key-sticky_analysis_controls {
+            background-color:#0b1628 !important;
         }
         .st-key-sticky_analysis_controls .top-analysis-controls b,
         .st-key-sticky_analysis_controls label,
