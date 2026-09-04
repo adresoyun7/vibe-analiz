@@ -6227,8 +6227,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     }}
                     .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                         position:absolute !important;
-                        left:36px !important;
-                        top:7px !important;
+                        left:42px !important;
+                        top:38px !important;
                         z-index:20 !important;
                         width:30px !important;
                         min-width:30px !important;
@@ -6288,8 +6288,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         }}
                         .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                             position:absolute !important;
-                            left:46px !important;
-                            top:13px !important;
+                            left:42px !important;
+                            top:12px !important;
                         }}
                         </style>
                         """,
@@ -6325,45 +6325,46 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         satir_sayisi = max(1, len(tablo))
                         kompakt_stil = gecmis_tablo_stili(tablo).hide(axis="index")
                         kompakt_html = kompakt_stil.to_html()
-                        st.markdown(
-                            f"""
-                            <style>
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table {{
-                                height:calc(100vh - 74px) !important;
-                                overflow:hidden !important;
-                                width:100% !important;
-                            }}
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table table {{
-                                width:100% !important;
-                                height:100% !important;
-                                table-layout:fixed !important;
-                                border-collapse:collapse !important;
-                                margin:0 !important;
-                            }}
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table thead tr,
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table tbody tr {{
-                                height:calc((100vh - 78px) / {satir_sayisi + 1}) !important;
-                            }}
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th,
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td {{
-                                padding:0 4px !important;
-                                line-height:1 !important;
-                                font-size:clamp(7px, calc((100vh - 90px) / {satir_sayisi + 1} * .45), 12px) !important;
-                                white-space:nowrap !important;
-                                overflow:hidden !important;
-                                text-overflow:ellipsis !important;
-                                vertical-align:middle !important;
-                                border:1px solid rgba(148,163,184,.24) !important;
-                            }}
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(3),
-                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(3) {{
-                                width:24% !important;
-                            }}
-                            </style>
-                            <div class="gecmis-full-table">{kompakt_html}</div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
+                        # st.markdown yerine st.html kullanıyoruz; Styler'ın <style> etiketi
+                        # artık düz metin olarak görünmez. Tam ekranda dış/iç scrollbar yoktur.
+                        tam_html = f"""<style>
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table {{
+    height:calc(100vh - 68px) !important;
+    overflow:hidden !important;
+    width:100% !important;
+}}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table table {{
+    width:100% !important;
+    height:100% !important;
+    table-layout:fixed !important;
+    border-collapse:collapse !important;
+    margin:0 !important;
+}}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table thead tr,
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table tbody tr {{
+    height:calc((100vh - 72px) / {satir_sayisi + 1}) !important;
+    max-height:calc((100vh - 72px) / {satir_sayisi + 1}) !important;
+}}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th,
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td {{
+    padding:0 4px !important;
+    line-height:1 !important;
+    font-size:clamp(6px, calc((100vh - 88px) / {satir_sayisi + 1} * .42), 12px) !important;
+    white-space:nowrap !important;
+    overflow:hidden !important;
+    text-overflow:ellipsis !important;
+    vertical-align:middle !important;
+    border:1px solid rgba(148,163,184,.24) !important;
+}}
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(3),
+.st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(3) {{
+    width:24% !important;
+}}
+</style><div class="gecmis-full-table">{kompakt_html}</div>"""
+                        if hasattr(st, "html"):
+                            st.html(tam_html)
+                        else:
+                            st.markdown(tam_html, unsafe_allow_html=True)
                     else:
                         st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
