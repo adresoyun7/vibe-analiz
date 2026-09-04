@@ -171,6 +171,10 @@ if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
 
+# Uygulama ilk açılışta varsayılan olarak koyu modda başlasın.
+if "koyu_mod" not in st.session_state:
+    st.session_state["koyu_mod"] = True
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=DM+Sans:wght@400;500;600&display=swap');
@@ -5877,7 +5881,7 @@ def uygula_tema_css(koyu_mod: bool):
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
 with st.sidebar:
     with st.container(key="koyu_mod_toggle"):
-        koyu_mod = st.toggle("🌙 Koyu Mod", value=bool(st.session_state.get("koyu_mod", False)), key="koyu_mod")
+        koyu_mod = st.toggle("🌙 Koyu Mod", value=bool(st.session_state.get("koyu_mod", True)), key="koyu_mod")
     uygula_tema_css(koyu_mod)
     with st.container(key="sidebar_system_clock"):
         st.markdown(
@@ -6353,19 +6357,28 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         display:flex !important;
                         align-items:center !important;
                         width:100% !important;
-                        padding-right:430px !important;
+                        padding-right:min(390px, 42vw) !important;
+                        overflow:hidden !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary p {{
+                        overflow:hidden !important;
+                        text-overflow:ellipsis !important;
+                        white-space:nowrap !important;
                     }}
                     .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag {{
                         position:absolute !important;
-                        right:18px !important;
-                        top:50% !important;
+                        right:14px !important;
+                        top:54px !important;
                         transform:translateY(-50%) !important;
                         z-index:18 !important;
+                        max-width:min(380px, 41vw) !important;
+                        overflow:hidden !important;
+                        text-overflow:ellipsis !important;
                         color:{normal_renk} !important;
                         -webkit-text-fill-color:{normal_renk} !important;
                         font-weight:800 !important;
-                        font-size:.88rem !important;
-                        letter-spacing:.01em !important;
+                        font-size:clamp(.68rem, .72vw, .84rem) !important;
+                        letter-spacing:0 !important;
                         white-space:nowrap !important;
                         pointer-events:none !important;
                     }}
@@ -6382,6 +6395,15 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         color:{normal_renk} !important;
                         -webkit-text-fill-color:{normal_renk} !important;
                         opacity:.75 !important;
+                    }}
+                    @media (max-width: 1150px) {{
+                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
+                            padding-right:250px !important;
+                        }}
+                        .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag {{
+                            max-width:240px !important;
+                            font-size:.68rem !important;
+                        }}
                     }}
                     </style>
                     <div class="gecmis-ozet-sag" style="display:{'block' if tekrar_ozeti_html else 'none'}">{tekrar_ozeti_html}</div>
@@ -6487,7 +6509,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat}"
                     f"{oran_baslik} · {len(ornekler)} örnek",
-                    expanded=(tam_ekran_aktif or sira == 1),
+                    expanded=tam_ekran_aktif,
                 ):
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
