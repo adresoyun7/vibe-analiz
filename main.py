@@ -1321,6 +1321,18 @@ def bulten_cek(key, kodlar, t):
                 timeout=12,
             )
 
+            # The Odds API kota bilgilerini son başarılı/başarısız yanıttan sakla.
+            # Böylece kullanıcı kalan krediyi arayüzden görebilir.
+            try:
+                st.session_state["odds_api_quota"] = {
+                    "remaining": r.headers.get("x-requests-remaining"),
+                    "used": r.headers.get("x-requests-used"),
+                    "last": r.headers.get("x-requests-last"),
+                    "updated_at": time.time(),
+                }
+            except Exception:
+                pass
+
             if r.status_code != 200:
                 continue
 
@@ -1409,9 +1421,77 @@ def bulten_cek(key, kodlar, t):
 
 
 
-def bulten_guncel_al(key, kodlar, t):
-    """Önbellek kullanmadan API'deki o anki son bülteni getirir."""
-    return bulten_cek(key, kodlar, t)
+ODDS_BULTEN_CACHE_TTL = 15 * 60  # 15 dakika
+
+
+def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
+    """
+    Lig bazlı session cache kullanır.
+
+    - Aynı tarih + lig 15 dakika içinde tekrar API'ye gitmez.
+    - Yeni bir lig eklenirse yalnızca o lig çekilir.
+    - Hassasiyet / minimum örnek / güven eşiği değişiklikleri API tüketmez.
+    - zorla_yenile=True yalnızca seçili ligleri yeniden çeker.
+    """
+    cache = st.session_state.setdefault("odds_league_cache", {})
+    simdi_ts = time.time()
+    parcalar = []
+
+    for secili_kod in list(dict.fromkeys(kodlar or [])):
+        cache_key = f"{secili_kod}|{t.isoformat()}"
+        kayit = cache.get(cache_key)
+        gecerli = (
+            isinstance(kayit, dict)
+            and (simdi_ts - float(kayit.get("ts", 0) or 0)) < ODDS_BULTEN_CACHE_TTL
+        )
+
+        if gecerli and not zorla_yenile:
+            lig_df = kayit.get("df")
+            if isinstance(lig_df, pd.DataFrame):
+                parcalar.append(lig_df.copy())
+                continue
+
+        # Cache yoksa/süresi dolduysa yalnızca bu ligi sorgula.
+        lig_df = bulten_cek(key, [secili_kod], t)
+        if not isinstance(lig_df, pd.DataFrame):
+            lig_df = pd.DataFrame()
+        cache[cache_key] = {"ts": simdi_ts, "df": lig_df.copy()}
+        parcalar.append(lig_df)
+
+    # Süresi dolmuş eski kayıtları ara sıra temizle.
+    eski_sinir = simdi_ts - (ODDS_BULTEN_CACHE_TTL * 4)
+    for ck in list(cache.keys()):
+        try:
+            if float(cache[ck].get("ts", 0) or 0) < eski_sinir:
+                cache.pop(ck, None)
+        except Exception:
+            cache.pop(ck, None)
+
+    if not parcalar:
+        return pd.DataFrame()
+    dolu = [x for x in parcalar if isinstance(x, pd.DataFrame) and not x.empty]
+    if not dolu:
+        return pd.DataFrame()
+    df = pd.concat(dolu, ignore_index=True)
+    if all(c in df.columns for c in ["ev", "dep", "zaman"]):
+        df = df.drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
+    return df
+
+
+def odds_cache_bilgi(kodlar, t):
+    """Seçili liglerin cache durumunu (geçerli/toplam) döndürür."""
+    cache = st.session_state.get("odds_league_cache", {})
+    simdi_ts = time.time()
+    toplam = len(list(dict.fromkeys(kodlar or [])))
+    gecerli = 0
+    for kod in list(dict.fromkeys(kodlar or [])):
+        kayit = cache.get(f"{kod}|{t.isoformat()}")
+        try:
+            if isinstance(kayit, dict) and (simdi_ts - float(kayit.get("ts", 0) or 0)) < ODDS_BULTEN_CACHE_TTL:
+                gecerli += 1
+        except Exception:
+            pass
+    return gecerli, toplam
 
 
 
@@ -4504,6 +4584,8 @@ for key, default in [
     ("backtest_11_df", None),
     ("gecmis_inceleme_list", None),
     ("yuksek_oran_list", None),
+    ("odds_league_cache", {}),
+    ("odds_api_quota", {}),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -5756,6 +5838,33 @@ with st.sidebar:
         else:
             st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için API key gerekir.")
 
+    # API TASARRUF PANELİ: analiz butonları cache'teki aynı bülteni kullanır.
+    cache_hazir, cache_toplam = odds_cache_bilgi(secili_kodlar, secili_tarih)
+    kota = st.session_state.get("odds_api_quota", {}) or {}
+    kalan = kota.get("remaining")
+    kullanilan = kota.get("used")
+    kota_yazi = "Kota bilgisi henüz yok"
+    if kalan not in (None, ""):
+        kota_yazi = f"Kalan kredi: {kalan}"
+        if kullanilan not in (None, ""):
+            kota_yazi += f" · Kullanılan: {kullanilan}"
+    st.caption(f"🧠 Bülten cache: {cache_hazir}/{cache_toplam} lig · 15 dk · {kota_yazi}")
+    if st.button(
+        "🔄 Oranları Yenile",
+        use_container_width=True,
+        key="oranlari_zorla_yenile_btn",
+        help="Yalnızca seçili liglerin oranlarını yeniden API'den çeker. Normal analizlerde 15 dakikalık cache kullanılır.",
+    ):
+        if not API_KEY or not secili_kodlar:
+            st.warning("API key ve en az bir lig gerekli.")
+        else:
+            with st.spinner("Seçili liglerin oranları yenileniyor..."):
+                yenilenen_bulten = bulten_guncel_al(
+                    API_KEY, secili_kodlar, secili_tarih, zorla_yenile=True
+                )
+                st.session_state.last_bulten_df = yenilenen_bulten
+            st.success(f"Oranlar yenilendi · {len(yenilenen_bulten)} maç")
+
     sayfa_modu = st.radio(
         "Görünüm",
         ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
@@ -5830,7 +5939,7 @@ with st.sidebar:
         st.caption("Kaydedilen analizlerin sonuçlarını buradan yenileyebilirsin.")
     elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
         st.caption("Daha önce analiz edilmiş ve şu anda oynanan maçları takip eder.")
-        canli_otomatik = st.toggle("90 saniyede otomatik yenile", value=False, key="canli_otomatik_yenile")
+        canli_otomatik = st.toggle("5 dakikada otomatik yenile", value=False, key="canli_otomatik_yenile")
     else:
         analiz_btn = False
 
@@ -6151,10 +6260,11 @@ if st.session_state.get('sayfa_modu') == 'Canlı Takip':
     son_yenileme = st.session_state.get("canli_son_yenileme")
     otomatik_zamani = (
         canli_otomatik
-        and (son_yenileme is None or (simdi_canli - son_yenileme).total_seconds() >= 85)
+        and (son_yenileme is None or (simdi_canli - son_yenileme).total_seconds() >= 295)
     )
-    ilk_acilis = "canli_takip_listesi" not in st.session_state
-    if canli_yenile_btn or otomatik_zamani or ilk_acilis:
+    # Minimum API tüketimi: Canlı Takip sayfasını yalnızca açmak skor isteği atmaz.
+    # Manuel yenileme veya kullanıcı açıkça 5 dk otomatik yenilemeyi açarsa sorgulanır.
+    if canli_yenile_btn or otomatik_zamani:
         takip_key = get_app_api_key()
         if not takip_key:
             st.session_state.canli_takip_hatasi = "Canlı skorları çekmek için API key gerekli."
@@ -6205,7 +6315,7 @@ if st.session_state.get('sayfa_modu') == 'Canlı Takip':
     st.caption("Dakika yaklaşık değerdir; devre arası hesaba katılarak başlangıç saatinden hesaplanır. Canlı giriş kararı garanti değildir.")
     if canli_otomatik:
         components.html(
-            "<script>setTimeout(function(){window.parent.location.reload();},90000);</script>",
+            "<script>setTimeout(function(){window.parent.location.reload();},300000);</script>",
             height=0,
         )
     legal_footer()
@@ -6621,7 +6731,7 @@ if analiz_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
-        with st.spinner("📊 Veriler çekiliyor ve analiz ediliyor..."):
+        with st.spinner("📊 Bülten hazırlanıyor (cache varsa API kullanılmaz) ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
             bulten = bulten_guncel_al(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
