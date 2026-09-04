@@ -5233,8 +5233,305 @@ with st.container(key="sticky_analysis_controls"):
       )
 
 
+# ==========================================================
+# AÇIK / KOYU TEMA
+# ==========================================================
+def uygula_tema_css(koyu_mod: bool):
+    """Uygulamanın tüm ana Streamlit bileşenlerini seçilen temaya uyarlar."""
+    if not koyu_mod:
+        return
+
+    st.markdown(
+        """
+        <style>
+        /* === YAPAIKUPON DARK MODE === */
+        :root {
+            color-scheme: dark;
+            --yk-bg:#07111f;
+            --yk-bg2:#0a1830;
+            --yk-surface:#0b1628;
+            --yk-surface2:#0f1b31;
+            --yk-card:#111827;
+            --yk-border:#284977;
+            --yk-border-soft:#1f2a44;
+            --yk-text:#f8fafc;
+            --yk-muted:#9db2d1;
+            --yk-muted2:#cbd5e1;
+            --yk-accent:#facc15;
+            --yk-blue:#77b4ff;
+        }
+
+        html, body, [class*="css"], .stApp,
+        [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            background:#07111f !important;
+            color:#f8fafc !important;
+        }
+        .stApp, [data-testid="stAppViewContainer"] {
+            background:linear-gradient(180deg,#07111f 0%,#081426 48%,#0a1830 100%) !important;
+        }
+        [data-testid="stHeader"] {
+            background:rgba(7,17,31,.94) !important;
+        }
+        .main .block-container, [data-testid="stMainBlockContainer"] {
+            background:transparent !important;
+        }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div {
+            background:#091526 !important;
+            border-color:#223c63 !important;
+        }
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] label *,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span:not([data-baseweb="tag"] span),
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] h4 {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
+            color:#9db2d1 !important;
+            -webkit-text-fill-color:#9db2d1 !important;
+        }
+
+        /* Tema anahtarı */
+        .st-key-koyu_mod_toggle {
+            background:#0b1628 !important;
+            border:1px solid #284977 !important;
+            border-radius:12px !important;
+            padding:7px 10px 4px 10px !important;
+            margin:2px 0 8px 0 !important;
+        }
+        .st-key-koyu_mod_toggle label,
+        .st-key-koyu_mod_toggle label * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+            font-weight:800 !important;
+        }
+
+        /* Saat kutusu */
+        .st-key-sidebar_system_clock {
+            background:#0b1628 !important;
+            border:1px solid #284977 !important;
+            box-shadow:0 4px 14px rgba(0,0,0,.28) !important;
+        }
+        .st-key-sidebar_system_clock .system-clock-label,
+        .st-key-sidebar_system_clock .system-clock-label *,
+        .st-key-sidebar_system_clock .system-clock-time {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+
+        /* Başlıklar ve açık sayfa metinleri */
+        .top-header h2, .list-heading, .panel-title,
+        .topbar-wrap h1, .topbar-wrap h2, .topbar-wrap h3,
+        [data-testid="stMain"] h1, [data-testid="stMain"] h2,
+        [data-testid="stMain"] h3, [data-testid="stMain"] h4,
+        [data-testid="stMain"] p, [data-testid="stMain"] label {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+        .top-header .sub, .panel-date, .summary-note, .list-subheading,
+        .control-label, .section-kicker, .league-chip-note {
+            color:#9db2d1 !important;
+            -webkit-text-fill-color:#9db2d1 !important;
+        }
+
+        /* Üst filtre/kontrol yüzeyleri */
+        .top-shell, .topbar-wrap, .control-card, .metrics-card,
+        .helper-bar, .rehber-box, .top-hero {
+            background:linear-gradient(180deg,#0b1628 0%,#0a1830 100%) !important;
+            border-color:#284977 !important;
+            color:#f8fafc !important;
+            box-shadow:0 10px 30px rgba(0,0,0,.20) !important;
+        }
+
+        /* Inputs / select / multiselect / date / number */
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="input"] > div,
+        div[data-testid="stNumberInput"] div[data-baseweb="input"] > div,
+        div[data-testid="stTextInput"] div[data-baseweb="input"] > div,
+        div[data-testid="stDateInput"] div[data-baseweb="input"] > div,
+        div[data-testid="stNumberInputContainer"],
+        div[data-testid="stTextInputRootElement"],
+        textarea, input {
+            background:#0f1b31 !important;
+            border-color:#284977 !important;
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+        div[data-baseweb="select"] *,
+        [data-baseweb="popover"] *,
+        [role="listbox"] *, [role="option"] * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+        [data-baseweb="popover"], [role="listbox"] {
+            background:#0b1628 !important;
+            border-color:#284977 !important;
+        }
+        [role="option"]:hover, [aria-selected="true"][role="option"] {
+            background:#17304d !important;
+        }
+
+        /* Butonlar */
+        .stButton > button,
+        div[data-testid="stPopover"] button,
+        div[data-testid="stPopoverButton"] > button,
+        [data-testid="baseButton-secondary"] {
+            background:linear-gradient(180deg,#0f1b31 0%,#0b1628 100%) !important;
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+            border-color:#315487 !important;
+        }
+        .stButton > button:hover,
+        div[data-testid="stPopoverButton"] > button:hover {
+            border-color:#facc15 !important;
+            color:#ffffff !important;
+        }
+        button[kind="primary"], [data-testid="baseButton-primary"] {
+            color:#ffffff !important;
+            -webkit-text-fill-color:#ffffff !important;
+        }
+
+        /* Expanders / radio / checkbox / toggle / tabs */
+        div[data-testid="stExpander"],
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpander"] summary,
+        .streamlit-expanderHeader {
+            background:linear-gradient(90deg,#0b1628 0%,#0a1830 100%) !important;
+            border-color:#284977 !important;
+            color:#f8fafc !important;
+        }
+        div[data-testid="stExpander"] *,
+        .stCheckbox label *, .stRadio label *,
+        div[data-testid="stToggle"] label * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+        div[data-testid="stTabs"] button,
+        div[data-testid="stTabs"] button * {
+            color:#cbd5e1 !important;
+            -webkit-text-fill-color:#cbd5e1 !important;
+        }
+
+        /* Metric / info / warning / success alanları */
+        [data-testid="stMetric"], [data-testid="metric-container"] {
+            background:#0b1628 !important;
+            border:1px solid #223c63 !important;
+            border-radius:12px !important;
+            padding:10px !important;
+        }
+        [data-testid="stMetric"] *, [data-testid="metric-container"] * {
+            color:#f8fafc !important;
+        }
+        div[data-testid="stAlert"] {
+            background:#0b1628 !important;
+            border-color:#284977 !important;
+            color:#f8fafc !important;
+        }
+        div[data-testid="stAlert"] * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+
+        /* Dataframe / tablo çevresi */
+        [data-testid="stDataFrame"], [data-testid="stTable"] {
+            background:#0b1628 !important;
+            border-radius:12px !important;
+            border:1px solid #223c63 !important;
+            overflow:hidden !important;
+        }
+        [data-testid="stDataFrame"] iframe {
+            background:#0b1628 !important;
+        }
+        table, thead, tbody, tr, th, td {
+            border-color:#223c63 !important;
+        }
+        [data-testid="stTable"] table,
+        [data-testid="stTable"] th,
+        [data-testid="stTable"] td {
+            background:#0b1628 !important;
+            color:#f8fafc !important;
+        }
+
+        /* Uygulamanın kendi kartları */
+        .mac-kart, .tahmin-kart, .diger-kart, .neden-kart, .kupon-kart,
+        .combo-kart, .canli-kart, .strateji-kart, .oranlar-kart,
+        .history-card, .ai-comment, .ai-inline, .coupon-item,
+        .recent-match-row, .detail-form-sidebar-title {
+            background:linear-gradient(135deg,#0b1628,#111827) !important;
+            border-color:#223c63 !important;
+            color:#f8fafc !important;
+        }
+        .mac-kart *, .tahmin-kart *, .diger-kart *, .neden-kart *,
+        .kupon-kart *, .combo-kart *, .canli-kart *, .strateji-kart *,
+        .oranlar-kart *, .history-card *, .ai-comment *, .ai-inline * {
+            color:#f8fafc;
+        }
+        .history-sub, .mk-mini, .tk-key, .diger-sub, .hb-sub, .hb-label,
+        .mk-label, .recent-top {
+            color:#9db2d1 !important;
+            -webkit-text-fill-color:#9db2d1 !important;
+        }
+
+        /* Detay modal */
+        div[data-testid="stDialog"] div[role="dialog"] {
+            background:linear-gradient(180deg,#07111f 0%,#0a1830 100%) !important;
+            border-color:#284977 !important;
+        }
+        div[data-testid="stDialog"] div[role="dialog"] p,
+        div[data-testid="stDialog"] div[role="dialog"] label,
+        div[data-testid="stDialog"] div[role="dialog"] h1,
+        div[data-testid="stDialog"] div[role="dialog"] h2,
+        div[data-testid="stDialog"] div[role="dialog"] h3 {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+
+        /* Sidebar özel açık kutular */
+        .sidebar-high-market-title {
+            background:#102340 !important;
+            border-color:#315487 !important;
+        }
+        .sidebar-high-market-title b {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+        .sidebar-high-market-title span {
+            color:#cbd5e1 !important;
+            -webkit-text-fill-color:#cbd5e1 !important;
+        }
+
+        /* Linkler / ayraçlar / spinner */
+        a { color:#77b4ff !important; }
+        hr { border-color:#223c63 !important; }
+        div[data-testid="stSpinner"], div[data-testid="stSpinner"] *,
+        div[data-testid="stStatusWidget"], div[data-testid="stStatusWidget"] * {
+            color:#f8fafc !important;
+            -webkit-text-fill-color:#f8fafc !important;
+        }
+
+        /* Footer */
+        [data-testid="stMain"] div[style*="text-align:center"][style*="font-size:12px"] {
+            color:#9db2d1 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
 with st.sidebar:
+    with st.container(key="koyu_mod_toggle"):
+        koyu_mod = st.toggle("🌙 Koyu Mod", value=bool(st.session_state.get("koyu_mod", False)), key="koyu_mod")
+    uygula_tema_css(koyu_mod)
     with st.container(key="sidebar_system_clock"):
         st.markdown(
             """
