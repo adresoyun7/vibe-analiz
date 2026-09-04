@@ -6216,7 +6216,54 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     unsafe_allow_html=True,
                 )
                 tam_ekran_aktif = st.session_state.get("gecmis_tam_ekran_sira") == sira
+
+                # Sadece ikonlu düğme; expander başlığının SOLUNDA, aynı kutunun içinde görünür.
+                # :has() ile butonun Streamlit element kabını akıştan çıkarıp başlık üzerine bindiriyoruz.
+                st.markdown(
+                    f"""
+                    <style>
+                    .st-key-gecmis_mac_baslik_{sira} {{
+                        position:relative !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has(button) {{
+                        position:absolute !important;
+                        left:34px !important;
+                        top:5px !important;
+                        z-index:20 !important;
+                        width:30px !important;
+                        min-width:30px !important;
+                        height:30px !important;
+                        margin:0 !important;
+                        padding:0 !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has(button) button {{
+                        width:30px !important;
+                        min-width:30px !important;
+                        height:30px !important;
+                        min-height:30px !important;
+                        padding:0 !important;
+                        border-radius:7px !important;
+                        font-size:16px !important;
+                        line-height:1 !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
+                        padding-left:45px !important;
+                    }}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if st.button(
+                    "↙" if tam_ekran_aktif else "⛶",
+                    key=f"gecmis_tam_ekran_btn_{sira}",
+                    help="Normal görünüme dön" if tam_ekran_aktif else "Tüm geçmiş sonuçları tek ekrana sığdır",
+                ):
+                    st.session_state.gecmis_tam_ekran_sira = None if tam_ekran_aktif else sira
+                    st.rerun()
+
                 if tam_ekran_aktif:
+                    tam_arka = '#071426' if bool(st.session_state.get('koyu_mod', False)) else '#f8fafc'
                     st.markdown(
                         f"""
                         <style>
@@ -6224,28 +6271,30 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             position:fixed !important;
                             inset:0 !important;
                             z-index:999999 !important;
-                            background:{'#071426' if bool(st.session_state.get('koyu_mod', False)) else '#f8fafc'} !important;
-                            padding:18px 24px 28px 24px !important;
-                            overflow:auto !important;
+                            background:{tam_arka} !important;
+                            padding:8px 12px !important;
+                            overflow:hidden !important;
                         }}
                         .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] {{
                             width:100% !important;
                             max-width:none !important;
+                            height:calc(100vh - 16px) !important;
+                            overflow:hidden !important;
+                        }}
+                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] {{
+                            height:calc(100vh - 64px) !important;
+                            overflow:hidden !important;
+                            padding:4px 8px 6px 8px !important;
+                        }}
+                        .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has(button) {{
+                            position:absolute !important;
+                            left:46px !important;
+                            top:13px !important;
                         }}
                         </style>
                         """,
                         unsafe_allow_html=True,
                     )
-
-                tam_ekran_col, _ = st.columns([1.15, 8.85])
-                with tam_ekran_col:
-                    if st.button(
-                        "↙ Tam Ekrandan Çık" if tam_ekran_aktif else "⛶ Tam Ekran",
-                        key=f"gecmis_tam_ekran_btn_{sira}",
-                        use_container_width=True,
-                    ):
-                        st.session_state.gecmis_tam_ekran_sira = None if tam_ekran_aktif else sira
-                        st.rerun()
 
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · "
@@ -6270,7 +6319,53 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
                         "Özel olay": ornekler["Olay"],
                     })
-                    st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+                    if tam_ekran_aktif:
+                        # Tam ekran modunda tabloyu dış kaydırma olmadan tek görüntüye sığdır.
+                        # Satır yüksekliği mevcut ekran yüksekliğini örnek sayısına bölerek ayarlanır.
+                        satir_sayisi = max(1, len(tablo))
+                        kompakt_stil = gecmis_tablo_stili(tablo).hide(axis="index")
+                        kompakt_html = kompakt_stil.to_html()
+                        st.markdown(
+                            f"""
+                            <style>
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table {{
+                                height:calc(100vh - 74px) !important;
+                                overflow:hidden !important;
+                                width:100% !important;
+                            }}
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table table {{
+                                width:100% !important;
+                                height:100% !important;
+                                table-layout:fixed !important;
+                                border-collapse:collapse !important;
+                                margin:0 !important;
+                            }}
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table thead tr,
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table tbody tr {{
+                                height:calc((100vh - 78px) / {satir_sayisi + 1}) !important;
+                            }}
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th,
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td {{
+                                padding:0 4px !important;
+                                line-height:1 !important;
+                                font-size:clamp(7px, calc((100vh - 90px) / {satir_sayisi + 1} * .45), 12px) !important;
+                                white-space:nowrap !important;
+                                overflow:hidden !important;
+                                text-overflow:ellipsis !important;
+                                vertical-align:middle !important;
+                                border:1px solid rgba(148,163,184,.24) !important;
+                            }}
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table th:nth-child(3),
+                            .st-key-gecmis_mac_baslik_{sira} .gecmis-full-table td:nth-child(3) {{
+                                width:24% !important;
+                            }}
+                            </style>
+                            <div class="gecmis-full-table">{kompakt_html}</div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
