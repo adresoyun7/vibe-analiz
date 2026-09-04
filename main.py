@@ -6177,6 +6177,11 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         mevcut_ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
         if "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
             st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
+        # Bu değer, Geçmiş Örnekleri listesinin en son hangi "aynı lig" durumuyla
+        # hesaplandığını tutar. Böylece anahtar AÇIK -> KAPALI yapıldığında da liste
+        # yeniden tüm ligleri kapsayacak şekilde hesaplanır.
+        if "gecmis_ayni_lig_uygulandi" not in st.session_state:
+            st.session_state["gecmis_ayni_lig_uygulandi"] = mevcut_ayni_lig
         if "gecmis_oranlari_goster" not in st.session_state:
             st.session_state["gecmis_oranlari_goster"] = True
 
@@ -6195,8 +6200,11 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             )
 
         # Aynı lig anahtarı değiştiyse mevcut maç listesini API'ye tekrar gitmeden
-        # yalnızca yerel/tarihsel veriyle yeniden hesapla.
-        if gecmis_ayni_lig != mevcut_ayni_lig:
+        # yalnızca yerel/tarihsel veriyle yeniden hesapla. Karşılaştırmayı global
+        # widget ile değil, bu listenin en son uygulanan durumuyla yapıyoruz; böylece
+        # AÇIK -> KAPALI geçişinde de eski (tüm ligler) görünüm geri gelir.
+        gecmis_ayni_lig_uygulandi = bool(st.session_state.get("gecmis_ayni_lig_uygulandi", mevcut_ayni_lig))
+        if bool(gecmis_ayni_lig) != gecmis_ayni_lig_uygulandi:
             # `sadece_ayni_lig` anahtarı sayfanın başka yerinde zaten bir widget key'i
             # olarak oluşturulmuş olabilir. Widget oluşturulduktan sonra aynı key'e
             # session_state üzerinden değer yazmak StreamlitWidgetAlreadyInstantiatedError
@@ -6217,6 +6225,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 yeniden.append({"m": gi_mac_dict, "ornekler": yeni_ornekler})
             yeniden.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = yeniden
+            st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_ayni_lig)
             st.rerun()
 
         # Geçmiş maç başlıklarını eskisi gibi aralıksız/kompakt göster.
@@ -6331,7 +6340,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                         position:absolute !important;
                         left:42px !important;
-                        top:4px !important;
+                        top:14px !important;
                         z-index:20 !important;
                         width:30px !important;
                         min-width:30px !important;
@@ -6403,7 +6412,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                             position:absolute !important;
                             left:42px !important;
-                            top:4px !important;
+                            top:14px !important;
                         }}
                         </style>
                         """,
