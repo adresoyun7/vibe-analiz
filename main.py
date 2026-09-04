@@ -4678,6 +4678,7 @@ for key, default in [
     ("backtest_df", None),
     ("backtest_11_df", None),
     ("gecmis_inceleme_list", None),
+    ("gecmis_tam_ekran_sira", None),
     ("yuksek_oran_list", None),
     ("odds_league_cache", {}),
     ("odds_api_quota", {}),
@@ -6214,10 +6215,42 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     """,
                     unsafe_allow_html=True,
                 )
+                tam_ekran_aktif = st.session_state.get("gecmis_tam_ekran_sira") == sira
+                if tam_ekran_aktif:
+                    st.markdown(
+                        f"""
+                        <style>
+                        .st-key-gecmis_mac_baslik_{sira} {{
+                            position:fixed !important;
+                            inset:0 !important;
+                            z-index:999999 !important;
+                            background:{'#071426' if bool(st.session_state.get('koyu_mod', False)) else '#f8fafc'} !important;
+                            padding:18px 24px 28px 24px !important;
+                            overflow:auto !important;
+                        }}
+                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] {{
+                            width:100% !important;
+                            max-width:none !important;
+                        }}
+                        </style>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                tam_ekran_col, _ = st.columns([1.15, 8.85])
+                with tam_ekran_col:
+                    if st.button(
+                        "↙ Tam Ekrandan Çık" if tam_ekran_aktif else "⛶ Tam Ekran",
+                        key=f"gecmis_tam_ekran_btn_{sira}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.gecmis_tam_ekran_sira = None if tam_ekran_aktif else sira
+                        st.rerun()
+
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · "
                     f"Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f} · {len(ornekler)} örnek",
-                    expanded=(sira == 1),
+                    expanded=(tam_ekran_aktif or sira == 1),
                 ):
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
