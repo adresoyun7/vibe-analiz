@@ -4511,6 +4511,59 @@ def gecmis_ornek_siralama_anahtari(item):
     en_yuksek_tekrar = max(tekrarlar) if tekrarlar else 0
     return (en_yuksek_tekrar, toplam_ornek)
 
+
+
+def gecmis_ornek_ozeti(ornekler):
+    """İY/MS/2.5/KG için en sık sonucu ve yüzdesini döndürür."""
+    if ornekler is None or getattr(ornekler, "empty", True):
+        return {
+            "iy": ("—", 0, 0.0),
+            "ms": ("—", 0, 0.0),
+            "ou25": ("—", 0, 0.0),
+            "kg": ("—", 0, 0.0),
+        }
+
+    toplam = max(1, int(len(ornekler)))
+
+    def en_sik(series):
+        try:
+            vc = series.value_counts(dropna=True)
+            if vc.empty:
+                return ("—", 0, 0.0)
+            sonuc = str(vc.index[0])
+            adet = int(vc.iloc[0])
+            yuzde = adet / toplam * 100.0
+            return (sonuc, adet, yuzde)
+        except Exception:
+            return ("—", 0, 0.0)
+
+    try:
+        iy = ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str)
+    except Exception:
+        iy = pd.Series(dtype="object")
+
+    try:
+        ms = ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str)
+    except Exception:
+        ms = pd.Series(dtype="object")
+
+    try:
+        ou25 = ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"})
+    except Exception:
+        ou25 = pd.Series(dtype="object")
+
+    try:
+        kg = ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"})
+    except Exception:
+        kg = pd.Series(dtype="object")
+
+    return {
+        "iy": en_sik(iy),
+        "ms": en_sik(ms),
+        "ou25": en_sik(ou25),
+        "kg": en_sik(kg),
+    }
+
 def gecmis_tablo_stili(tablo):
     """Geçmiş sonuç tablolarını maç sonucu ve market tipine göre renklendirir."""
     def skor_renk(value):
@@ -6117,9 +6170,21 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             m = item["m"]
             ornekler = item["ornekler"]
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+            ozet = gecmis_ornek_ozeti(ornekler)
+            iy_sonuc, _, iy_pct = ozet["iy"]
+            ms_sonuc, _, ms_pct = ozet["ms"]
+            ou_sonuc, _, ou_pct = ozet["ou25"]
+            kg_sonuc, _, kg_pct = ozet["kg"]
+            tekrar_ozeti = (
+                f"İY {iy_sonuc} %{iy_pct:.0f} · "
+                f"MS {ms_sonuc} %{ms_pct:.0f} · "
+                f"2.5 {ou_sonuc} %{ou_pct:.0f} · "
+                f"KG {kg_sonuc} %{kg_pct:.0f}"
+            )
             with st.expander(
                 f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · "
-                f"Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f} · {len(ornekler)} örnek",
+                f"Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f} · {len(ornekler)} örnek · "
+                f"{tekrar_ozeti}",
                 expanded=(sira == 1),
             ):
                 if ornekler.empty:
