@@ -6340,7 +6340,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                         position:absolute !important;
                         left:42px !important;
-                        top:14px !important;
+                        top:39px !important;
                         z-index:20 !important;
                         width:30px !important;
                         min-width:30px !important;
