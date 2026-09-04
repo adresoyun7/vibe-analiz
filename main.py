@@ -4476,7 +4476,7 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
 
 
 def gecmis_ornek_siralama_anahtari(item):
-    """Geçmiş Örnekleri sıralaması: önce toplam örnek, sonra İY/MS/2.5/KG içindeki en güçlü tekrar."""
+    """Geçmiş Örnekleri sıralaması: önce İY/MS/2.5/KG içindeki en güçlü tekrar, sonra toplam örnek."""
     ornekler = item.get("ornekler") if isinstance(item, dict) else None
     if ornekler is None or getattr(ornekler, "empty", True):
         return (0, 0)
@@ -4509,7 +4509,7 @@ def gecmis_ornek_siralama_anahtari(item):
         pass
 
     en_yuksek_tekrar = max(tekrarlar) if tekrarlar else 0
-    return (toplam_ornek, en_yuksek_tekrar)
+    return (en_yuksek_tekrar, toplam_ornek)
 
 def gecmis_tablo_stili(tablo):
     """Geçmiş sonuç tablolarını maç sonucu ve market tipine göre renklendirir."""
@@ -6071,7 +6071,8 @@ if gecmis_btn:
                 inceleme.append({"m": gi_mac.to_dict(), "ornekler": ornekler})
             # Geçmiş Örnekleri sıralaması:
             # 1) Toplam örnek sayısı çoktan aza
-            # 2) Örnek sayısı eşit/uygunsa İY, MS, 2.5 veya KG içinde en çok tekrar eden sonuç çoktan aza
+            # 1) İY, MS, 2.5 veya KG içinde en güçlü tekrar çoktan aza
+            # 2) En güçlü tekrar eşitse toplam örnek sayısı çoktan aza
             inceleme.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = inceleme
             st.rerun()
