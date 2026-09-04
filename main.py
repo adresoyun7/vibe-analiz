@@ -6185,31 +6185,59 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 f"2.5 {ou_sonuc} %{ou_pct:.0f} · "
                 f"KG {kg_sonuc} %{kg_pct:.0f}"
             )
-            with st.expander(
-                f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · "
-                f"Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f} · {len(ornekler)} örnek · "
-                f"{tekrar_ozeti}",
-                expanded=(sira == 1),
-            ):
-                if ornekler.empty:
-                    st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
-                    continue
-                tablo = pd.DataFrame({
-                    "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
-                    "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
-                    "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
-                    # Filtre hangi oranı kullandıysa tabloda da yalnızca onu göster.
-                    # REF_* kapanış oranıdır; eski sezonda yoksa yükleyici B365'e düşer.
-                    "1": ornekler["REF_H"].round(2) if "REF_H" in ornekler.columns else ornekler["B365H"].round(2),
-                    "X": ornekler["REF_D"].round(2) if "REF_D" in ornekler.columns else ornekler["B365D"].round(2),
-                    "2": ornekler["REF_A"].round(2) if "REF_A" in ornekler.columns else ornekler["B365A"].round(2),
-                    "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
-                    "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
-                    "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
-                    "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
-                    "Özel olay": ornekler["Olay"],
-                })
-                st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+            # Yüzde özetini maç başlığından ayırıp expander başlığının en sağına
+            # farklı bir vurgu rengiyle yerleştir. Key'li container sayesinde her
+            # maçın başlığı kendi dinamik özetini güvenli biçimde alır.
+            ozet_css_metni = tekrar_ozeti.replace("\\", "\\\\").replace('"', '\\"')
+            ozet_renk = "#67e8f9" if bool(st.session_state.get("koyu_mod", False)) else "#0369a1"
+            with st.container(key=f"gecmis_mac_baslik_{sira}"):
+                st.markdown(
+                    f"""
+                    <style>
+                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
+                        display:flex !important;
+                        align-items:center !important;
+                        width:100% !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary::after {{
+                        content:"{ozet_css_metni}";
+                        margin-left:auto !important;
+                        padding-left:22px !important;
+                        color:{ozet_renk} !important;
+                        -webkit-text-fill-color:{ozet_renk} !important;
+                        font-weight:800 !important;
+                        font-size:.88rem !important;
+                        letter-spacing:.01em !important;
+                        white-space:nowrap !important;
+                    }}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                with st.expander(
+                    f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · "
+                    f"Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f} · {len(ornekler)} örnek",
+                    expanded=(sira == 1),
+                ):
+                    if ornekler.empty:
+                        st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
+                        continue
+                    tablo = pd.DataFrame({
+                        "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
+                        "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
+                        "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
+                        # Filtre hangi oranı kullandıysa tabloda da yalnızca onu göster.
+                        # REF_* kapanış oranıdır; eski sezonda yoksa yükleyici B365'e düşer.
+                        "1": ornekler["REF_H"].round(2) if "REF_H" in ornekler.columns else ornekler["B365H"].round(2),
+                        "X": ornekler["REF_D"].round(2) if "REF_D" in ornekler.columns else ornekler["B365D"].round(2),
+                        "2": ornekler["REF_A"].round(2) if "REF_A" in ornekler.columns else ornekler["B365A"].round(2),
+                        "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
+                        "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
+                        "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
+                        "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
+                        "Özel olay": ornekler["Olay"],
+                    })
+                    st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
