@@ -4485,13 +4485,15 @@ def gecmis_ornek_siralama_anahtari(item):
     tekrarlar = []
 
     try:
-        iy = ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str)
+        # İY için skor değil 1/X/2 sonucu tekrarını kullan.
+        iy = ornekler["HTR"].replace({"H": "1", "D": "X", "A": "2"})
         tekrarlar.append(int(iy.value_counts().max()))
     except Exception:
         pass
 
     try:
-        ms = ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str)
+        # MS için skor değil 1/X/2 sonucu tekrarını kullan.
+        ms = ornekler["FTR"].replace({"H": "1", "D": "X", "A": "2"})
         tekrarlar.append(int(ms.value_counts().max()))
     except Exception:
         pass
@@ -4538,12 +4540,14 @@ def gecmis_ornek_ozeti(ornekler):
             return ("—", 0, 0.0)
 
     try:
-        iy = ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str)
+        # İY: en sık ilk yarı sonucu (1/X/2), skor değil.
+        iy = ornekler["HTR"].replace({"H": "1", "D": "X", "A": "2"})
     except Exception:
         iy = pd.Series(dtype="object")
 
     try:
-        ms = ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str)
+        # MS: en sık maç sonucu (1/X/2), skor değil.
+        ms = ornekler["FTR"].replace({"H": "1", "D": "X", "A": "2"})
     except Exception:
         ms = pd.Series(dtype="object")
 
