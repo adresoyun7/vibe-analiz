@@ -6194,6 +6194,29 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 margin-top:0 !important;
                 margin-bottom:0 !important;
             }
+            /* Geçmiş maç başlıklarını olabildiğince dip dibe getir.
+               Streamlit'in key'li container çevresinde bıraktığı dikey alanı da sıfırla. */
+            [class*="st-key-gecmis_mac_baslik_"] {
+                margin-top:0 !important;
+                margin-bottom:-10px !important;
+                padding-top:0 !important;
+                padding-bottom:0 !important;
+            }
+            [class*="st-key-gecmis_mac_baslik_"] > div[data-testid="stVerticalBlock"],
+            [class*="st-key-gecmis_mac_baslik_"] > div[data-testid="stVerticalBlockBorderWrapper"],
+            [class*="st-key-gecmis_mac_baslik_"] [data-testid="stVerticalBlockBorderWrapper"] {
+                margin-top:0 !important;
+                margin-bottom:0 !important;
+                padding-top:0 !important;
+                padding-bottom:0 !important;
+                gap:0 !important;
+            }
+            /* Kapalı maç satırının yüksekliğini de biraz azalt; içerik açılınca tablo etkilenmez. */
+            [class*="st-key-gecmis_mac_baslik_"] [data-testid="stExpander"] summary {
+                min-height:38px !important;
+                padding-top:4px !important;
+                padding-bottom:4px !important;
+            }
             </style>
             """,
             unsafe_allow_html=True,
@@ -6255,7 +6278,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                         position:absolute !important;
                         left:42px !important;
-                        top:38px !important;
+                        top:28px !important;
                         z-index:20 !important;
                         width:30px !important;
                         min-width:30px !important;
