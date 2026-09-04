@@ -6225,10 +6225,10 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     .st-key-gecmis_mac_baslik_{sira} {{
                         position:relative !important;
                     }}
-                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has(button) {{
+                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                         position:absolute !important;
-                        left:34px !important;
-                        top:5px !important;
+                        left:36px !important;
+                        top:7px !important;
                         z-index:20 !important;
                         width:30px !important;
                         min-width:30px !important;
@@ -6236,7 +6236,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         margin:0 !important;
                         padding:0 !important;
                     }}
-                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has(button) button {{
+                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) button {{
                         width:30px !important;
                         min-width:30px !important;
                         height:30px !important;
@@ -6247,7 +6247,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         line-height:1 !important;
                     }}
                     .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
-                        padding-left:45px !important;
+                        padding-left:76px !important;
                     }}
                     </style>
                     """,
@@ -6286,7 +6286,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             overflow:hidden !important;
                             padding:4px 8px 6px 8px !important;
                         }}
-                        .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has(button) {{
+                        .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
                             position:absolute !important;
                             left:46px !important;
                             top:13px !important;
