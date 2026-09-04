@@ -6287,43 +6287,76 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             ms_sonuc, _, ms_pct = ozet["ms"]
             ou_sonuc, _, ou_pct = ozet["ou25"]
             kg_sonuc, _, kg_pct = ozet["kg"]
+            # Sağdaki özet değerlerinden yüzdesi en yüksek olanı ayrı renkle vurgula.
+            # Eşitlik varsa aynı en yüksek yüzdeye sahip olanların hepsi vurgulanır.
+            ozetler = [
+                ("İY", iy_sonuc, float(iy_pct)),
+                ("MS", ms_sonuc, float(ms_pct)),
+                ("2.5", ou_sonuc, float(ou_pct)),
+                ("KG", kg_sonuc, float(kg_pct)),
+            ]
+            max_ozet_pct = max((x[2] for x in ozetler), default=0.0)
+            koyu_aktif = bool(st.session_state.get("koyu_mod", False))
+            normal_renk = "#67e8f9" if koyu_aktif else "#0369a1"
+            guclu_renk = "#facc15" if koyu_aktif else "#b45309"
+
             if len(ornekler) > 0:
-                tekrar_ozeti = (
-                    f"İY {iy_sonuc} %{iy_pct:.0f} · "
-                    f"MS {ms_sonuc} %{ms_pct:.0f} · "
-                    f"2.5 {ou_sonuc} %{ou_pct:.0f} · "
-                    f"KG {kg_sonuc} %{kg_pct:.0f}"
-                )
+                ozet_html_parcalar = []
+                for idx_ozet, (etiket_ozet, sonuc_ozet, pct_ozet) in enumerate(ozetler):
+                    guclu_class = " gecmis-ozet-en-guclu" if pct_ozet == max_ozet_pct else ""
+                    ayirici = '<span class="gecmis-ozet-ayirici"> · </span>' if idx_ozet else ""
+                    ozet_html_parcalar.append(
+                        ayirici
+                        + f'<span class="gecmis-ozet-deger{guclu_class}">{escape(etiket_ozet)} {escape(str(sonuc_ozet))} %{pct_ozet:.0f}</span>'
+                    )
+                tekrar_ozeti_html = "".join(ozet_html_parcalar)
             else:
                 # 0 örnekte sağ tarafta anlamsız %0 değerleri gösterme.
-                tekrar_ozeti = ""
-            # Yüzde özetini maç başlığından ayırıp expander başlığının en sağına
-            # farklı bir vurgu rengiyle yerleştir. Key'li container sayesinde her
-            # maçın başlığı kendi dinamik özetini güvenli biçimde alır.
-            ozet_css_metni = tekrar_ozeti.replace("\\", "\\\\").replace('"', '\\"')
-            ozet_renk = "#67e8f9" if bool(st.session_state.get("koyu_mod", False)) else "#0369a1"
+                tekrar_ozeti_html = ""
+
             with st.container(key=f"gecmis_mac_baslik_{sira}"):
                 st.markdown(
                     f"""
                     <style>
+                    .st-key-gecmis_mac_baslik_{sira} {{
+                        position:relative !important;
+                    }}
                     .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
                         display:flex !important;
                         align-items:center !important;
                         width:100% !important;
+                        padding-right:430px !important;
                     }}
-                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary::after {{
-                        content:"{ozet_css_metni}";
-                        display:{'block' if tekrar_ozeti else 'none'} !important;
-                        margin-left:auto !important;
-                        padding-left:22px !important;
-                        color:{ozet_renk} !important;
-                        -webkit-text-fill-color:{ozet_renk} !important;
+                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag {{
+                        position:absolute !important;
+                        right:18px !important;
+                        top:50% !important;
+                        transform:translateY(-50%) !important;
+                        z-index:18 !important;
+                        color:{normal_renk} !important;
+                        -webkit-text-fill-color:{normal_renk} !important;
                         font-weight:800 !important;
                         font-size:.88rem !important;
                         letter-spacing:.01em !important;
                         white-space:nowrap !important;
+                        pointer-events:none !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag .gecmis-ozet-deger {{
+                        color:{normal_renk} !important;
+                        -webkit-text-fill-color:{normal_renk} !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag .gecmis-ozet-en-guclu {{
+                        color:{guclu_renk} !important;
+                        -webkit-text-fill-color:{guclu_renk} !important;
+                        font-weight:950 !important;
+                    }}
+                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag .gecmis-ozet-ayirici {{
+                        color:{normal_renk} !important;
+                        -webkit-text-fill-color:{normal_renk} !important;
+                        opacity:.75 !important;
                     }}
                     </style>
+                    <div class="gecmis-ozet-sag" style="display:{'block' if tekrar_ozeti_html else 'none'}">{tekrar_ozeti_html}</div>
                     """,
                     unsafe_allow_html=True,
                 )
