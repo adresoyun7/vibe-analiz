@@ -8192,6 +8192,99 @@ else:
                 use_container_width=True, type="primary",
             )
 
+        liste_col1, liste_col2 = st.columns([3.2, 1.15], gap="small")
+        with liste_col2:
+            tum_adaylari_goster_btn = st.button(
+                "Tüm aday listeleri", key="tum_profil_adaylari_btn",
+                use_container_width=True,
+                help="Temkinli, Dengeli ve Yüksek Oran için uygun olan tüm seçimleri ayrı listelerde gösterir.",
+            )
+
+        if tum_adaylari_goster_btn:
+            profil_aday_listeleri = {}
+            for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
+                kupon_kaynagi = gunun_en_iyi_10_uret(
+                    st.session_state.get("last_gecmis_df"),
+                    st.session_state.get("last_bulten_df"),
+                    min_ornek=min_ornek,
+                    limit=50,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    kupon_modu=True,
+                    kupon_profili=profil_adi,
+                )
+                kullanilan = set()
+                tum_secimler = []
+                while True:
+                    parca = gunun_kuponunu_olustur(
+                        kupon_kaynagi, profil_adi, haric_secimler=kullanilan
+                    )
+                    if not parca:
+                        break
+                    yeni = False
+                    for secim in parca:
+                        key = (
+                            f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
+                            secim.get("tahmin", ""),
+                        )
+                        if key in kullanilan:
+                            continue
+                        kullanilan.add(key)
+                        tum_secimler.append(secim)
+                        yeni = True
+                    if not yeni:
+                        break
+                profil_aday_listeleri[profil_adi] = tum_secimler
+            st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
+
+        profil_aday_listeleri = st.session_state.get("tum_profil_aday_listeleri")
+        if isinstance(profil_aday_listeleri, dict):
+            st.markdown("#### 📋 Tüm profil adayları")
+            st.caption("Bunlar otomatik kupona girebilecek tüm uygun seçimlerdir. İstediğini + ile Kendi Kuponum'a ekleyebilirsin.")
+            aday_cols = st.columns(3, gap="small")
+            profil_renk = {
+                "Temkinli": ("🟢", "#36d98b"),
+                "Dengeli": ("🔵", "#60a5fa"),
+                "Yüksek Oran": ("🟠", "#f59e0b"),
+            }
+            for aday_col, profil_adi in zip(aday_cols, ["Temkinli", "Dengeli", "Yüksek Oran"]):
+                with aday_col:
+                    ikon, vurgu = profil_renk[profil_adi]
+                    secimler = profil_aday_listeleri.get(profil_adi, []) or []
+                    st.markdown(f"**{ikon} {profil_adi} — {len(secimler)} seçim**")
+                    if not secimler:
+                        st.info("Uygun aday yok.")
+                    for aday_i, secim in enumerate(secimler):
+                        oran_txt = ""
+                        if secim.get("oran") is not None:
+                            try:
+                                oran_txt = f" · Oran {float(secim.get('oran')):.2f}"
+                            except Exception:
+                                pass
+                        st.markdown(
+                            f"**{escape(str(secim.get('ev','')))} – {escape(str(secim.get('dep','')))}**  \n"
+                            f"{escape(str(secim.get('tahmin','-')))} · Güven %{int(secim.get('guven',0) or 0)}{oran_txt}"
+                        )
+                        if st.button(
+                            "+ Kendi Kuponum",
+                            key=f"profil_aday_ekle_{profil_adi}_{aday_i}_{abs(hash(str(secim.get('zaman_iso',''))))}",
+                            use_container_width=True,
+                        ):
+                            coupon_item = dict(secim)
+                            coupon_item["profil"] = "Kendi Kuponum"
+                            coupon_item["otomatik"] = False
+                            mevcutlar = {
+                                (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
+                                for x in st.session_state.kupona if isinstance(x, dict)
+                            }
+                            imza = (coupon_item.get("ev", ""), coupon_item.get("dep", ""), coupon_item.get("tahmin", ""))
+                            if imza not in mevcutlar:
+                                st.session_state.kupona.append(coupon_item)
+                                st.session_state.coupon_popup_open = True
+                                st.session_state.scroll_to_coupon = True
+                                st.rerun()
+                            else:
+                                st.toast("Bu seçim zaten Kendi Kuponum'da.")
+
         if gunun_kupon_btn:
             olusan_profiller = []
             bulunamayan_profiller = []
