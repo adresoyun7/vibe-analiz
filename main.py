@@ -6217,12 +6217,28 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         if "gecmis_oranlari_goster" not in st.session_state:
             st.session_state["gecmis_oranlari_goster"] = True
 
-        ust_bos, ust_ayni, ust_oran = st.columns([6.2, 1.45, 1.25], gap="small")
+        # "Sadece aynı ligler" açıkken, aynı lig filtresinde en az bir geçmiş
+        # örneği kalan maç sayısını toplam güncel maç sayısıyla birlikte göster.
+        # Örn: Sadece aynı ligler 7/10
+        gecmis_ayni_lig_acik = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
+        ayni_lig_dolu_mac = sum(
+            1 for item in inceleme
+            if isinstance(item, dict)
+            and isinstance(item.get("ornekler"), pd.DataFrame)
+            and not item.get("ornekler").empty
+        ) if gecmis_ayni_lig_acik else 0
+        ayni_lig_toggle_label = (
+            f"Sadece aynı ligler {ayni_lig_dolu_mac}/{len(inceleme)}"
+            if gecmis_ayni_lig_acik
+            else "Sadece aynı ligler"
+        )
+
+        ust_bos, ust_ayni, ust_oran = st.columns([6.0, 1.65, 1.25], gap="small")
         with ust_ayni:
             gecmis_ayni_lig = st.toggle(
-                "Sadece aynı ligler",
+                ayni_lig_toggle_label,
                 key="gecmis_sadece_ayni_lig_toggle",
-                help="Açıkken geçmiş örnekler yalnızca güncel maçın kendi liginden alınır.",
+                help="Açıkken geçmiş örnekler yalnızca güncel maçın kendi liginden alınır. Sayaç, aynı lig filtresinde geçmiş örneği bulunan maç / toplam maç sayısını gösterir.",
             )
         with ust_oran:
             gecmis_oranlari_goster = st.toggle(
