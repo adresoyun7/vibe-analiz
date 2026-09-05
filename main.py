@@ -45,9 +45,8 @@ st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 # ==========================================================
 
 # Kullanım:
-# 1) Kullanıcı sidebar'dan kendi ODDS API KEY'ini girebilir.
-# 2) İstersen Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY ekleyebilirsin.
-#    Sidebar'dan girilen key, secrets key'in önüne geçer.
+# The Odds API key yalnızca sidebar'dan manuel girilir.
+# Streamlit Secrets ve key havuzu kullanılmaz.
 
 def get_secret_value(name, default=""):
     try:
@@ -57,10 +56,8 @@ def get_secret_value(name, default=""):
 
 
 def get_app_api_key():
-    user_key = str(st.session_state.get("user_api_key", "")).strip()
-    if user_key:
-        return user_key
-    return str(get_secret_value("ODDS_API_KEY", "")).strip()
+    """Yalnızca sidebar'dan manuel girilen The Odds API key'ini kullanır."""
+    return str(st.session_state.get("user_api_key", "") or "").strip()
 
 
 def get_api_football_key():
@@ -4694,13 +4691,6 @@ def tahmin_sonuclarini_guncelle(api_key):
             skor_url = f"https://api.the-odds-api.com/v4/sports/{lig}/scores/"
             skor_param = {"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}
             r = requests.get(skor_url, params=skor_param, timeout=15)
-            # Oturumda kalmış anahtar geçersizse ve uygulamada farklı bir secret
-            # anahtar varsa sonuç takibini onunla bir kez daha dene.
-            if r.status_code == 401:
-                yedek_key = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
-                if yedek_key and yedek_key != str(api_key).strip():
-                    skor_param["apiKey"] = yedek_key
-                    r = requests.get(skor_url, params=skor_param, timeout=15)
             if r.status_code == 200 and isinstance(r.json(), list):
                 skorlar.extend(r.json())
             elif r.status_code == 401:
