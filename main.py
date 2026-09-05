@@ -2395,43 +2395,70 @@ def _piyasa_25_baglam_destegi(m, label):
 
 
 def gunun_baglam_puani(gecmis_df, m, label, api_fallback=True):
-    """Günün Kuponu bağlamı. Önce yerel veri, eksikse API-Football fallback kullanır."""
+    """Günün Kuponu bağlamı.
+
+    Her katman önce yerel geçmişten hesaplanır. Bir katman yetersizse API-Football
+    fallback o katmanı ayrı ayrı tamamlamaya çalışır. Böylece örneğin ev iç saha
+    verisi varken deplasman tarafının eksik olması tüm saha katmanını boşa çıkarmaz.
+    """
     h2h = _h2h_baglam_destegi(gecmis_df, m, label)
     form = _genel_form_baglam_destegi(gecmis_df, m, label)
     saha = _saha_baglam_destegi(gecmis_df, m, label)
-    api_meta = {"aktif": False, "hata": ""}
-    kaynak = "Yerel geçmiş"
+    api_meta = {"aktif": False, "hata": "", "katmanlar": {}}
+    kaynaklar = {
+        "h2h": "Yerel geçmiş" if int(h2h.get("mac", 0) or 0) >= 3 else "Veri yok",
+        "form": "Yerel geçmiş" if bool(form.get("aktif")) else "Veri yok",
+        "saha": "Yerel geçmiş" if bool(saha.get("aktif")) else "Veri yok",
+    }
 
     yerel_yetersiz = (
         int(h2h.get("mac", 0) or 0) < 3
         or not bool(form.get("aktif"))
         or not bool(saha.get("aktif"))
     )
-    if api_fallback and yerel_yetersiz and get_api_football_key():
+
+    if api_fallback and yerel_yetersiz:
+        # Key yoksa da helper'ı çağır; Detay ekranında bunun nedenini açıkça gösterelim.
         tamamlanmis, api_meta = _baglam_gecmisini_api_ile_tamamla(gecmis_df, m)
-        if api_meta.get("aktif"):
-            h2h2 = _h2h_baglam_destegi(tamamlanmis, m, label)
-            form2 = _genel_form_baglam_destegi(tamamlanmis, m, label)
-            saha2 = _saha_baglam_destegi(tamamlanmis, m, label)
-            # Fallback yalnızca daha dolu veri üretiyorsa onu kullan.
-            if int(h2h2.get("mac", 0) or 0) > int(h2h.get("mac", 0) or 0):
-                h2h = h2h2
-            if form2.get("aktif") and not form.get("aktif"):
-                form = form2
-            elif form2.get("aktif") and form.get("aktif"):
-                form = form2
-            if saha2.get("aktif") and not saha.get("aktif"):
-                saha = saha2
-            elif saha2.get("aktif") and saha.get("aktif"):
-                saha = saha2
-            kaynak = "Yerel + API-Football fallback"
+        if api_meta.get("aktif") and tamamlanmis is not None and not getattr(tamamlanmis, "empty", True):
+            h2h_api = _h2h_baglam_destegi(tamamlanmis, m, label)
+            form_api = _genel_form_baglam_destegi(tamamlanmis, m, label)
+            saha_api = _saha_baglam_destegi(tamamlanmis, m, label)
+
+            # Katman bazında yalnız eksik veya daha dolu olanı değiştir.
+            if int(h2h.get("mac", 0) or 0) < 3 and int(h2h_api.get("mac", 0) or 0) >= 3:
+                h2h = h2h_api
+                kaynaklar["h2h"] = "API-Football fallback"
+            elif int(h2h_api.get("mac", 0) or 0) > int(h2h.get("mac", 0) or 0):
+                h2h = h2h_api
+                kaynaklar["h2h"] = "Yerel + API-Football"
+
+            if not bool(form.get("aktif")) and bool(form_api.get("aktif")):
+                form = form_api
+                kaynaklar["form"] = "API-Football fallback"
+
+            # Yerelde tek taraf eksik olsa bile API ile iki taraf tamamlandıysa kullan.
+            if not bool(saha.get("aktif")) and bool(saha_api.get("aktif")):
+                saha = saha_api
+                kaynaklar["saha"] = "API-Football fallback"
+
+        api_meta = dict(api_meta or {})
+        api_meta["katmanlar"] = dict(kaynaklar)
 
     piyasa = _piyasa_25_baglam_destegi(m, label)
-    toplam = float(h2h.get("puan", 0)) + float(form.get("puan", 0)) + float(saha.get("puan", 0)) + float(piyasa.get("puan", 0))
+    toplam = (
+        float(h2h.get("puan", 0) or 0)
+        + float(form.get("puan", 0) or 0)
+        + float(saha.get("puan", 0) or 0)
+        + float(piyasa.get("puan", 0) or 0)
+    )
     toplam = max(-7.5, min(7.5, toplam))
+    kullanilan = [k for k, v in kaynaklar.items() if v != "Veri yok"]
+    kaynak = " + ".join(sorted(set(kaynaklar[k] for k in kullanilan))) if kullanilan else "Bağlam geçmişi yok"
     return {
         "toplam": round(toplam, 2), "h2h": h2h, "form": form, "saha": saha,
-        "piyasa25": piyasa, "kaynak": kaynak, "api_fallback": api_meta,
+        "piyasa25": piyasa, "kaynak": kaynak, "kaynaklar": kaynaklar,
+        "api_fallback": api_meta,
     }
 
 def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_df=None):
@@ -2464,10 +2491,24 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
 
         if guven < int(min_guven) or ornek < min_ornek_gerekli or stabil < 3:
             continue
-        # Birden fazla güncel veri katmanı güçlü biçimde tersini söylüyorsa,
-        # sırf eski benzer maç güveni yüksek diye kupona alma. Çok yüksek güven +
-        # yüksek kararlılık bu uyarıyı aşabilir.
-        if baglam_ayari <= -5.0 and not (guven >= 90 and stabil >= 7):
+        # Güçlü H2H ters sinyali Günün Kuponu'nda gerçek bir kalite kapısıdır.
+        # Son 5 H2H'nin hiçbiri ana tahmini desteklemiyorsa doğrudan ele.
+        # Yalnız 1/5 destekliyorsa ancak çok güçlü ana model + yüksek kararlılık geçsin.
+        h2h_b = baglam.get("h2h", {}) if isinstance(baglam, dict) else {}
+        h2h_mac = int((h2h_b or {}).get("mac", 0) or 0)
+        h2h_tutan = int((h2h_b or {}).get("tutan", 0) or 0)
+        if h2h_mac >= 5:
+            if h2h_tutan == 0:
+                continue
+            if h2h_tutan == 1 and not (guven >= 90 and stabil >= 7):
+                continue
+
+        # Toplam bağlam artık yalnız sıralama bonusu/cezası değil, kalite kapısı da.
+        # -2..-4 bandında yüksek güven + kararlılık, -4 altında ise çok daha güçlü
+        # ana model gerekir. Pozitif bağlam minimum kalite eşiklerini gevşetmez.
+        if baglam_ayari <= -4.0 and not (guven >= 94 and stabil >= 8):
+            continue
+        if -4.0 < baglam_ayari <= -2.0 and not (guven >= 90 and stabil >= 7):
             continue
 
         # Dinamik kalite kapısı. Yüksek güven, daha düşük kararlılığı bir ölçüde
@@ -8411,6 +8452,23 @@ def baglam_analizi_goster(item):
         if rows: st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
     else:
         st.caption("🤝 H2H: geçmiş karşılaşma bulunamadı.")
+
+    # API-Football fallback görünürlüğü: neden veri gelmediğini saklama.
+    api_meta = baglam.get("api_fallback", {}) if isinstance(baglam.get("api_fallback"), dict) else {}
+    kaynaklar = baglam.get("kaynaklar", {}) if isinstance(baglam.get("kaynaklar"), dict) else {}
+    if kaynaklar:
+        st.caption(
+            "🛰️ Bağlam kaynakları: "
+            f"Genel form = {kaynaklar.get('form','-')} · "
+            f"Saha = {kaynaklar.get('saha','-')} · "
+            f"H2H = {kaynaklar.get('h2h','-')}"
+        )
+    api_hata = str(api_meta.get("hata", "") or "").strip()
+    if api_hata:
+        st.caption(f"⚠️ API-Football fallback: {api_hata}")
+    elif api_meta.get("aktif"):
+        st.caption(f"🛰️ API-Football fallback: aktif · {int(api_meta.get('satir',0) or 0)} geçmiş maç satırı alındı.")
+
     if bool(piyasa.get("aktif")):
         st.caption(f"💹 2.5 piyasa: Üst {float(piyasa.get('over')):.2f} · Alt {float(piyasa.get('under')):.2f} · Seçimin marj-arındırılmış piyasa olasılığı ≈ %{float(piyasa.get('olasilik',0)):.1f}.")
     elif "2.5" in label:
