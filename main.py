@@ -1339,13 +1339,28 @@ def odds_lig_kodu_coz(key, kod):
 
 def bulten_cek(key, kodlar, t):
     st.session_state["odds_api_last_error"] = None
-    secret_key = get_app_api_key()
-    if secret_key:
-        key = secret_key
+    key = str(get_app_api_key() or key or "").strip()
     if not key:
         st.error("Maç bültenini çekmek için ODDS API key gerekli.")
         return pd.DataFrame()
+
     res = []
+    st.session_state["odds_api_raw_match_count"] = 0
+    st.session_state["odds_api_selected_match_count"] = 0
+
+    # Seçilen gün Türkiye saatidir. API UTC kullandığı için gün başlangıç/bitişini
+    # UTC'ye çevirip doğrudan API sorgusuna ekliyoruz.
+    try:
+        from zoneinfo import ZoneInfo
+        _tr_tz = ZoneInfo("Europe/Istanbul")
+        _utc_tz = ZoneInfo("UTC")
+        _gun_bas = datetime(t.year, t.month, t.day, 0, 0, 0, tzinfo=_tr_tz)
+        _gun_bit = datetime(t.year, t.month, t.day, 23, 59, 59, tzinfo=_tr_tz)
+        _from_utc = _gun_bas.astimezone(_utc_tz).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _to_utc = _gun_bit.astimezone(_utc_tz).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        _from_utc = None
+        _to_utc = None
 
     for secili_kod in kodlar:
         k = odds_lig_kodu_coz(key, secili_kod)
@@ -1359,6 +1374,8 @@ def bulten_cek(key, kodlar, t):
                     "regions": "eu",
                     "markets": "h2h,totals",
                     "oddsFormat": "decimal",
+                    **({"commenceTimeFrom": _from_utc, "commenceTimeTo": _to_utc}
+                       if _from_utc and _to_utc else {}),
                 },
                 timeout=12,
             )
@@ -1387,14 +1404,24 @@ def bulten_cek(key, kodlar, t):
             if not isinstance(data, list):
                 continue
 
+            st.session_state["odds_api_raw_match_count"] += len(data)
+
             for m in data:
                 try:
-                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                    _raw_time = str(m["commence_time"])
+                    try:
+                        from zoneinfo import ZoneInfo
+                        _utc_dt = datetime.fromisoformat(_raw_time.replace("Z", "+00:00"))
+                        tm = _utc_dt.astimezone(ZoneInfo("Europe/Istanbul")).replace(tzinfo=None)
+                    except Exception:
+                        tm = datetime.strptime(_raw_time, "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
                 except Exception:
                     continue
 
                 if tm.date() != t:
                     continue
+
+                st.session_state["odds_api_selected_match_count"] += 1
 
                 bookies = m.get("bookmakers", [])
                 if not bookies:
@@ -6879,8 +6906,7 @@ with st.sidebar:
         else:
             st.caption("API-Football fallback kapalı")
 
-    # API TASARRUF PANELİ: analiz butonları cache'teki aynı bülteni kullanır.
-    cache_hazir, cache_toplam = odds_cache_bilgi(secili_kodlar, secili_tarih)
+    # Manuel key sistemi: ana analiz her seferinde güncel bülteni API'den alır.
     kota = st.session_state.get("odds_api_quota", {}) or {}
     kalan = kota.get("remaining")
     kullanilan = kota.get("used")
@@ -6889,7 +6915,7 @@ with st.sidebar:
         kota_yazi = f"Kalan kredi: {kalan}"
         if kullanilan not in (None, ""):
             kota_yazi += f" · Kullanılan: {kullanilan}"
-    st.caption(f"🧠 Bülten cache: {cache_hazir}/{cache_toplam} lig · 15 dk · {kota_yazi}")
+    st.caption(f"🌐 Direkt API modu · {kota_yazi}")
     if st.button(
         "🔄 Oranları Yenile",
         use_container_width=True,
@@ -6899,9 +6925,9 @@ with st.sidebar:
         if not API_KEY or not secili_kodlar:
             st.warning("API key ve en az bir lig gerekli.")
         else:
-            with st.spinner("Seçili liglerin oranları yenileniyor..."):
-                yenilenen_bulten = bulten_guncel_al(
-                    API_KEY, secili_kodlar, secili_tarih, zorla_yenile=True
+            with st.spinner("Seçili liglerin oranları doğrudan API'den yenileniyor..."):
+                yenilenen_bulten = bulten_cek(
+                    API_KEY, secili_kodlar, secili_tarih
                 )
                 st.session_state.last_bulten_df = yenilenen_bulten
             st.success(f"Oranlar yenilendi · {len(yenilenen_bulten)} maç")
@@ -8229,9 +8255,9 @@ if analiz_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
-        with st.spinner("📊 Bülten hazırlanıyor (cache varsa API kullanılmaz) ve analiz ediliyor..."):
+        with st.spinner("📊 Güncel maç bülteni The Odds API'den alınıyor ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
-            bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
             if getattr(bulten, "empty", True):
@@ -8239,7 +8265,12 @@ if analiz_btn:
                 if son_hata:
                     st.error(f"⚠️ The Odds API yanıtı alınamadı: {son_hata}")
                 else:
-                    st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı. Oranları Yenile ile bir kez zorla yenileyebilirsin.")
+                    _raw = int(st.session_state.get("odds_api_raw_match_count", 0) or 0)
+                    _sel = int(st.session_state.get("odds_api_selected_match_count", 0) or 0)
+                    st.warning(
+                        f"⚠️ Seçilen tarih ve liglerde oynanabilir maç bulunamadı. "
+                        f"API ham maç: {_raw} · Türkiye tarihine uyan: {_sel}"
+                    )
 
         final = []
         if not bulten.empty and not gecmis.empty:
