@@ -1324,7 +1324,7 @@ def bulten_cek(key, kodlar, t):
                 params={
                     "apiKey": key,
                     "regions": "eu",
-                    "markets": "h2h",
+                    "markets": "h2h,totals",
                     "oddsFormat": "decimal",
                 },
                 timeout=12,
@@ -1389,15 +1389,17 @@ def bulten_cek(key, kodlar, t):
                     return (1, bk_key)
 
                 market = None
+                totals_market = None
                 secilen_bk_key = ""
                 for bk in sorted(bookies, key=bk_priority):
-                    for mk in bk.get("markets", []):
-                        if mk.get("key") == "h2h":
-                            market = mk
-                            secilen_bk_key = str(bk.get("key", ""))
-                            break
-                    if market:
-                        break
+                    markets_by_key = {str(mk.get("key", "")): mk for mk in bk.get("markets", [])}
+                    h2h_mk = markets_by_key.get("h2h")
+                    if h2h_mk is None:
+                        continue
+                    market = h2h_mk
+                    totals_market = markets_by_key.get("totals")
+                    secilen_bk_key = str(bk.get("key", ""))
+                    break
 
                 if not market:
                     continue
@@ -1409,6 +1411,25 @@ def bulten_cek(key, kodlar, t):
 
                 if h is None or a is None or b is None:
                     continue
+
+                # The Odds API'nin featured totals marketi mevcutsa gerçek 2.5
+                # Alt/Üst fiyatlarını da sakla. Bulunmayan lig/bookmaker için None kalır.
+                o25_over = None
+                o25_under = None
+                if totals_market:
+                    for x in totals_market.get("outcomes", []) or []:
+                        try:
+                            point = float(x.get("point"))
+                            price = float(x.get("price"))
+                        except Exception:
+                            continue
+                        if abs(point - 2.5) > 1e-9:
+                            continue
+                        name = str(x.get("name", "")).strip().lower()
+                        if name == "over":
+                            o25_over = price
+                        elif name == "under":
+                            o25_under = price
 
                 res.append({
                     "match_id": m.get("id", ""),
@@ -1422,6 +1443,8 @@ def bulten_cek(key, kodlar, t):
                     "b": float(b),
                     "a": float(a),
                     "bookmaker_key": secilen_bk_key,
+                    "o25_over": o25_over,
+                    "o25_under": o25_under,
                 })
         except Exception as exc:
             st.session_state["odds_api_last_error"] = f"{k}: {type(exc).__name__}: {exc}"
@@ -1956,7 +1979,190 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
     return secilenler if len(secilenler) >= minimum_secim else []
 
 
-def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72):
+
+def _secim_skorla_tuttu_mu(label, ev_gol, dep_gol, current_home_is_row_home=True):
+    """Bir market etiketini skor üzerinde değerlendirir; H2H'de mevcut ev takımına göre yönü korur."""
+    label = str(label or "").strip()
+    if not label:
+        return None
+    if "+" in label:
+        parcalar = [x.strip() for x in label.split("+") if x.strip()]
+        sonuclar = [_secim_skorla_tuttu_mu(x, ev_gol, dep_gol, current_home_is_row_home) for x in parcalar]
+        if any(x is None for x in sonuclar):
+            return None
+        return all(sonuclar)
+
+    # ev_gol/dep_gol burada geçmiş satırın HomeTeam/AwayTeam skorlarıdır.
+    cur_home_gf = ev_gol if current_home_is_row_home else dep_gol
+    cur_home_ga = dep_gol if current_home_is_row_home else ev_gol
+    toplam = int(ev_gol) + int(dep_gol)
+    if label in {"MS 1", "MS1"}:
+        return cur_home_gf > cur_home_ga
+    if label in {"MS 2", "MS2"}:
+        return cur_home_gf < cur_home_ga
+    if label in {"Beraberlik", "MS X", "MSX"}:
+        return cur_home_gf == cur_home_ga
+    if label == "2.5 Üst":
+        return toplam >= 3
+    if label == "2.5 Alt":
+        return toplam <= 2
+    if label == "KG Var":
+        return ev_gol > 0 and dep_gol > 0
+    if label == "KG Yok":
+        return ev_gol == 0 or dep_gol == 0
+    return None
+
+
+def _h2h_baglam_destegi(gecmis_df, m, label, limit=5):
+    """Son H2H maçlarını küçük bir doğrulama katmanı olarak -4..+4 puana çevirir."""
+    bos = {"puan": 0.0, "mac": 0, "tutan": 0, "oran": None}
+    if gecmis_df is None or getattr(gecmis_df, "empty", True):
+        return bos
+    kaynak = gecmis_df
+    history_code = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")))
+    if history_code and "league_code" in kaynak.columns:
+        dar = kaynak[kaynak["league_code"] == history_code]
+        if not dar.empty:
+            kaynak = dar
+    h2h, _ = takimlar_arasi_maclar(kaynak, m.get("ev", ""), m.get("dep", ""), m.get("zaman"), limit=limit)
+    if h2h is None or h2h.empty:
+        return bos
+    cur_home_norm = takim_adi_norm(m.get("ev", ""))
+    tutan = toplam = 0
+    for _, r in h2h.iterrows():
+        try:
+            hg, ag = int(float(r.get("FTHG"))), int(float(r.get("FTAG")))
+        except Exception:
+            continue
+        row_home_is_current_home = takim_adi_norm(r.get("HomeTeam", "")) == cur_home_norm
+        tuttu = _secim_skorla_tuttu_mu(label, hg, ag, row_home_is_current_home)
+        if tuttu is None:
+            continue
+        toplam += 1
+        tutan += int(bool(tuttu))
+    if toplam < 3:
+        return {**bos, "mac": toplam, "tutan": tutan}
+    oran = tutan / toplam
+    # H2H yardımcı sinyal; modeli asla tek başına çevirmesin.
+    puan = max(-4.0, min(4.0, (oran - 0.50) * 8.0))
+    return {"puan": round(puan, 2), "mac": toplam, "tutan": tutan, "oran": oran}
+
+
+def _saha_form_ozeti(maclar, takim):
+    """Önceden saha bazlı süzülmüş maçlardan basit form/market özeti üretir."""
+    if maclar is None or maclar.empty:
+        return {"mac": 0, "puan_orani": 0.5, "over25": 0.5, "btts": 0.5, "draw_rate": 0.33}
+    hedef = takim_adi_norm(takim)
+    pts = n = draws = overs = btts = 0
+    for _, r in maclar.iterrows():
+        try:
+            hg, ag = int(float(r.get("FTHG"))), int(float(r.get("FTAG")))
+        except Exception:
+            continue
+        row_home = takim_adi_norm(r.get("HomeTeam", "")) == hedef
+        gf, ga = (hg, ag) if row_home else (ag, hg)
+        n += 1
+        pts += 3 if gf > ga else 1 if gf == ga else 0
+        draws += int(gf == ga)
+        overs += int(hg + ag >= 3)
+        btts += int(hg > 0 and ag > 0)
+    if not n:
+        return {"mac": 0, "puan_orani": 0.5, "over25": 0.5, "btts": 0.5, "draw_rate": 0.33}
+    return {"mac": n, "puan_orani": pts/(3*n), "over25": overs/n, "btts": btts/n, "draw_rate": draws/n}
+
+
+def _saha_baglam_destegi(gecmis_df, m, label, limit=5):
+    """Ev takımının iç saha + deplasman takımının dış saha formunu -2.5..+2.5 puanla değerlendirir."""
+    if gecmis_df is None or getattr(gecmis_df, "empty", True):
+        return {"puan": 0.0, "aktif": False}
+    kaynak = gecmis_df
+    history_code = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")))
+    if history_code and "league_code" in kaynak.columns:
+        dar = kaynak[kaynak["league_code"] == history_code]
+        if not dar.empty:
+            kaynak = dar
+    tarih = m.get("zaman")
+    ev_all = takim_son_maclari(kaynak, takim_adi_eslestir(m.get("ev", ""), pd.unique(pd.concat([kaynak["HomeTeam"].astype(str), kaynak["AwayTeam"].astype(str)])).tolist()), tarih, limit=20)
+    dep_all = takim_son_maclari(kaynak, takim_adi_eslestir(m.get("dep", ""), pd.unique(pd.concat([kaynak["HomeTeam"].astype(str), kaynak["AwayTeam"].astype(str)])).tolist()), tarih, limit=20)
+    ev_saha = takim_maclarini_sahaya_gore_filtrele(ev_all, m.get("ev", ""), "Sadece iç saha").head(limit) if ev_all is not None else pd.DataFrame()
+    dep_saha = takim_maclarini_sahaya_gore_filtrele(dep_all, m.get("dep", ""), "Sadece deplasman").head(limit) if dep_all is not None else pd.DataFrame()
+    ev = _saha_form_ozeti(ev_saha, m.get("ev", ""))
+    dep = _saha_form_ozeti(dep_saha, m.get("dep", ""))
+    if ev["mac"] < 3 or dep["mac"] < 3:
+        return {"puan": 0.0, "aktif": False, "ev_mac": ev["mac"], "dep_mac": dep["mac"]}
+
+    label = str(label or "")
+    if label in {"MS 1", "MS1"}:
+        signal = ev["puan_orani"] - dep["puan_orani"]
+    elif label in {"MS 2", "MS2"}:
+        signal = dep["puan_orani"] - ev["puan_orani"]
+    elif label in {"Beraberlik", "MS X", "MSX"}:
+        signal = (((ev["draw_rate"] + dep["draw_rate"])/2) - 0.33) * 2.2 - abs(ev["puan_orani"]-dep["puan_orani"])*0.5
+    elif "2.5 Üst" in label:
+        signal = (((ev["over25"] + dep["over25"])/2) - 0.5) * 2
+    elif "2.5 Alt" in label:
+        signal = (0.5 - ((ev["over25"] + dep["over25"])/2)) * 2
+    elif "KG Var" in label:
+        signal = (((ev["btts"] + dep["btts"])/2) - 0.5) * 2
+    elif "KG Yok" in label:
+        signal = (0.5 - ((ev["btts"] + dep["btts"])/2)) * 2
+    else:
+        signal = 0.0
+    puan = max(-2.5, min(2.5, signal * 2.5))
+    return {"puan": round(puan, 2), "aktif": True, "ev_mac": ev["mac"], "dep_mac": dep["mac"]}
+
+
+def _genel_form_baglam_destegi(gecmis_df, m, label):
+    """Son 5 genel formu, mevcut form_market_carpani mantığıyla -3..+3 puana çevirir."""
+    if gecmis_df is None or getattr(gecmis_df, "empty", True):
+        return {"puan": 0.0, "aktif": False}
+    profil = mac_form_profili(gecmis_df, m, limit=5)
+    if not profil.get("aktif"):
+        return {"puan": 0.0, "aktif": False}
+    factor = float(form_market_carpani(label, profil))
+    puan = max(-3.0, min(3.0, (factor - 1.0) * 60.0))
+    return {"puan": round(puan, 2), "aktif": True, "profil": profil}
+
+
+def _piyasa_25_baglam_destegi(m, label):
+    """Gerçek 2.5 Alt/Üst oranlarından marjı ayıklayıp küçük piyasa doğrulaması verir."""
+    label = str(label or "")
+    if "2.5 Üst" not in label and "2.5 Alt" not in label:
+        return {"puan": 0.0, "aktif": False, "olasilik": None}
+    try:
+        over = float(m.get("o25_over"))
+        under = float(m.get("o25_under"))
+        if over <= 1 or under <= 1:
+            raise ValueError
+    except Exception:
+        return {"puan": 0.0, "aktif": False, "olasilik": None}
+    io, iu = 1.0/over, 1.0/under
+    den = io + iu
+    if den <= 0:
+        return {"puan": 0.0, "aktif": False, "olasilik": None}
+    p_over, p_under = io/den, iu/den
+    p = p_over if "2.5 Üst" in label else p_under
+    puan = max(-3.0, min(3.0, (p - 0.50) * 12.0))
+    return {"puan": round(puan, 2), "aktif": True, "olasilik": round(p*100, 1), "over": over, "under": under}
+
+
+def gunun_baglam_puani(gecmis_df, m, label):
+    """Günün Kuponu için veri katmanlarını küçük artı/eksi puanlara dönüştürür."""
+    h2h = _h2h_baglam_destegi(gecmis_df, m, label)
+    form = _genel_form_baglam_destegi(gecmis_df, m, label)
+    saha = _saha_baglam_destegi(gecmis_df, m, label)
+    piyasa = _piyasa_25_baglam_destegi(m, label)
+    toplam = float(h2h.get("puan",0)) + float(form.get("puan",0)) + float(saha.get("puan",0)) + float(piyasa.get("puan",0))
+    toplam = max(-7.5, min(7.5, toplam))
+    return {
+        "toplam": round(toplam, 2),
+        "h2h": h2h,
+        "form": form,
+        "saha": saha,
+        "piyasa25": piyasa,
+    }
+
+def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_df=None):
     """Kalite eşiğini geçen seçimlerden tek bir Günün Kuponu üretir.
 
     Amaç kuponu 5-6 maça doldurmak değil, gerçekten güçlü seçimlerde durmaktır.
@@ -1980,8 +2186,16 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72):
         stabil = int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0)
         stabil_skor = float(t.get("top10_stabilite_skoru", item.get("top10_stabilite_skoru", 0)) or 0)
         min_ornek_gerekli = max(5, dinamik_min_mac(tolerans))
+        secim_label = str(t.get("ana_label", "-"))
+        baglam = gunun_baglam_puani(gecmis_df, m, secim_label) if gecmis_df is not None else {"toplam": 0.0}
+        baglam_ayari = float(baglam.get("toplam", 0.0) or 0.0)
 
         if guven < int(min_guven) or ornek < min_ornek_gerekli or stabil < 3:
+            continue
+        # Birden fazla güncel veri katmanı güçlü biçimde tersini söylüyorsa,
+        # sırf eski benzer maç güveni yüksek diye kupona alma. Çok yüksek güven +
+        # yüksek kararlılık bu uyarıyı aşabilir.
+        if baglam_ayari <= -5.0 and not (guven >= 90 and stabil >= 7):
             continue
 
         # Dinamik kalite kapısı. Yüksek güven, daha düşük kararlılığı bir ölçüde
@@ -2003,6 +2217,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72):
             + stabil * 1.8
             + min(ornek, 40) * 0.12
             + min(max(stabil_skor, 0.0), 200.0) * 0.015
+            + baglam_ayari
         )
 
         adaylar.append({
@@ -2013,6 +2228,8 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72):
             "stabil_skor": stabil_skor,
             "ornek": ornek,
             "gunun_puani": gunun_puani,
+            "baglam": baglam,
+            "baglam_ayari": baglam_ayari,
         })
 
     adaylar.sort(
@@ -2050,6 +2267,8 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72):
             "h": m.get("h"),
             "b": m.get("b"),
             "a": m.get("a"),
+            "o25_over": m.get("o25_over"),
+            "o25_under": m.get("o25_under"),
         })
         kullanilan_maclar.add(mac_id)
         if len(secimler) >= int(maks):
@@ -8347,7 +8566,7 @@ else:
         with bilgi_col:
             st.caption(
                 "Her maç 0.00 ile 0.10 arasında 0.01'er hassasiyet adımıyla toplam 11 noktada taranır. "
-                "Günün Kuponu güven + kararlılık + örnek kalitesini birlikte değerlendirir; 2-6 maç seçebilir ve sırf kuponu doldurmak için zayıf seçim eklemez. Aynı maçtan yalnızca bir seçim alır. "
+                "Günün Kuponu güven + kararlılık + örnek kalitesini birlikte değerlendirir; ayrıca son 5 takım formu, iç/dış saha formu, H2H ve mevcutsa gerçek 2.5 Alt/Üst piyasa oranından küçük artı/eksi puan uygular. 2-6 maç seçebilir ve sırf kuponu doldurmak için zayıf seçim eklemez. Aynı maçtan yalnızca bir seçim alır. "
                 "Temkinli, Dengeli ve Yüksek Oran profilleri ise kendi kurallarıyla ayrı kuponlar üretir."
             )
         with gunun_col:
@@ -8589,7 +8808,8 @@ else:
                 tum_marketler=True,
             )
             gunun_secimleri = gunun_en_guvenli_kuponunu_olustur(
-                gunun_kaynagi, maks=6, min_guven=72
+                gunun_kaynagi, maks=6, min_guven=72,
+                gecmis_df=st.session_state.get("last_gecmis_df")
             )
             if gunun_secimleri:
                 kupon_gecmisine_ekle(gunun_secimleri, "Günün Kuponu", "0.00–0.10 tarama")
@@ -8814,6 +9034,12 @@ else:
                                 f'{escape(destek_yazi)} ({len(destekler)}/11)</div>'
                                 if destekler else ""
                             )
+                            baglam_val = float(secim.get("baglam_ayari", 0.0) or 0.0)
+                            baglam_alt = (
+                                f'<div style="font-size:.70rem;color:{"#86efac" if baglam_val > 0 else "#fca5a5" if baglam_val < 0 else "#cbd5e1"};margin-top:3px">'
+                                f'Bağlam ayarı: <b>{baglam_val:+.1f}</b> puan</div>'
+                                if secim.get("profil") == "Günün Kuponu" or "baglam_ayari" in secim else ""
+                            )
                             # Maç bilgileri ve aksiyonlar aynı görsel kartın içinde.
                             kart_key = f"auto_coupon_match_{abs(hash(str(kayit.get('kupon_id'))))}_{secim_no}"
                             st.markdown(
@@ -8852,6 +9078,7 @@ else:
                                             {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
                                           </div>
                                           {hassasiyet_alt}
+                                          {baglam_alt}
                                         </div>
                                         """,
                                         unsafe_allow_html=True,
