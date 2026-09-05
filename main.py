@@ -2015,7 +2015,7 @@ def _secim_skorla_tuttu_mu(label, ev_gol, dep_gol, current_home_is_row_home=True
 
 def _h2h_baglam_destegi(gecmis_df, m, label, limit=5):
     """Son H2H maçlarını küçük bir doğrulama katmanı olarak -4..+4 puana çevirir."""
-    bos = {"puan": 0.0, "mac": 0, "tutan": 0, "oran": None}
+    bos = {"puan": 0.0, "mac": 0, "tutan": 0, "oran": None, "sonuclar": []}
     if gecmis_df is None or getattr(gecmis_df, "empty", True):
         return bos
     kaynak = gecmis_df
@@ -2029,6 +2029,7 @@ def _h2h_baglam_destegi(gecmis_df, m, label, limit=5):
         return bos
     cur_home_norm = takim_adi_norm(m.get("ev", ""))
     tutan = toplam = 0
+    sonuclar = []
     for _, r in h2h.iterrows():
         try:
             hg, ag = int(float(r.get("FTHG"))), int(float(r.get("FTAG")))
@@ -2040,12 +2041,18 @@ def _h2h_baglam_destegi(gecmis_df, m, label, limit=5):
             continue
         toplam += 1
         tutan += int(bool(tuttu))
+        try:
+            tarih_txt = pd.to_datetime(r.get("Date"), errors="coerce")
+            tarih_txt = tarih_txt.strftime("%d.%m.%Y") if pd.notna(tarih_txt) else "-"
+        except Exception:
+            tarih_txt = "-"
+        sonuclar.append({"tarih": tarih_txt, "ev": str(r.get("HomeTeam", "")), "dep": str(r.get("AwayTeam", "")), "skor": f"{hg}-{ag}", "tuttu": bool(tuttu)})
     if toplam < 3:
-        return {**bos, "mac": toplam, "tutan": tutan}
+        return {**bos, "mac": toplam, "tutan": tutan, "sonuclar": sonuclar}
     oran = tutan / toplam
     # H2H yardımcı sinyal; modeli asla tek başına çevirmesin.
     puan = max(-4.0, min(4.0, (oran - 0.50) * 8.0))
-    return {"puan": round(puan, 2), "mac": toplam, "tutan": tutan, "oran": oran}
+    return {"puan": round(puan, 2), "mac": toplam, "tutan": tutan, "oran": oran, "sonuclar": sonuclar}
 
 
 def _saha_form_ozeti(maclar, takim):
@@ -2089,7 +2096,7 @@ def _saha_baglam_destegi(gecmis_df, m, label, limit=5):
     ev = _saha_form_ozeti(ev_saha, m.get("ev", ""))
     dep = _saha_form_ozeti(dep_saha, m.get("dep", ""))
     if ev["mac"] < 3 or dep["mac"] < 3:
-        return {"puan": 0.0, "aktif": False, "ev_mac": ev["mac"], "dep_mac": dep["mac"]}
+        return {"puan": 0.0, "aktif": False, "ev_mac": ev["mac"], "dep_mac": dep["mac"], "ev": ev, "dep": dep}
 
     label = str(label or "")
     if label in {"MS 1", "MS1"}:
@@ -2109,7 +2116,7 @@ def _saha_baglam_destegi(gecmis_df, m, label, limit=5):
     else:
         signal = 0.0
     puan = max(-2.5, min(2.5, signal * 2.5))
-    return {"puan": round(puan, 2), "aktif": True, "ev_mac": ev["mac"], "dep_mac": dep["mac"]}
+    return {"puan": round(puan, 2), "aktif": True, "ev_mac": ev["mac"], "dep_mac": dep["mac"], "ev": ev, "dep": dep}
 
 
 def _genel_form_baglam_destegi(gecmis_df, m, label):
@@ -2261,6 +2268,8 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "hassasiyetler": list(t.get("top10_hassasiyetler", t.get("stability_tols", [])) or []),
             "hassasiyet_sayisi": int(aday["stabil"]),
             "gunun_puani": round(float(aday["gunun_puani"]), 1),
+            "baglam_ayari": round(float(aday["baglam_ayari"]), 2),
+            "baglam": aday.get("baglam", {}),
             "otomatik": True,
             "profil": "Günün Kuponu",
             "sport_key": m.get("sport_key", ""),
@@ -7778,7 +7787,7 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
                 if kolon in snap_b.columns:
                     snap_b[kolon] = pd.to_numeric(snap_b[kolon], errors="coerce")
             if snap_m.get("zaman") is not None and not snap_b.empty:
-                return {"m": snap_m, "t": snap_t, "b": snap_b}
+                return {"m": snap_m, "t": snap_t, "b": snap_b, "kupon_secim": secim}
         except Exception:
             pass
 
@@ -7903,7 +7912,7 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
                 t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=False)
         if t is None:
             return None
-        return {"m": m, "t": t, "b": b_det}
+        return {"m": m, "t": t, "b": b_det, "kupon_secim": secim}
     except Exception:
         return None
 
@@ -7953,6 +7962,71 @@ def ana_tahmin_gecmis_detayi(m, t, b_det):
         height=min(700, 38 + len(dt) * 35),
     )
 
+
+
+def baglam_analizi_goster(item):
+    if not isinstance(item, dict):
+        return
+    m = item.get("m", {}) or {}
+    t = item.get("t", {}) or {}
+    secim = item.get("kupon_secim") if isinstance(item.get("kupon_secim"), dict) else {}
+    label = str(secim.get("tahmin") or t.get("ana_label") or "")
+    baglam = secim.get("baglam") if isinstance(secim.get("baglam"), dict) else None
+    gecmis = st.session_state.get("last_gecmis_df")
+    if not baglam:
+        try:
+            baglam = gunun_baglam_puani(gecmis, m, label) if gecmis is not None else None
+        except Exception:
+            baglam = None
+    if not isinstance(baglam, dict):
+        st.info("Bu maç için bağlam verisi bulunamadı.")
+        return
+    toplam = float(baglam.get("toplam", 0.0) or 0.0)
+    h2h, form, saha, piyasa = baglam.get("h2h", {}) or {}, baglam.get("form", {}) or {}, baglam.get("saha", {}) or {}, baglam.get("piyasa25", {}) or {}
+    def satir(ad, veri, aktif):
+        puan=float(veri.get("puan",0.0) or 0.0)
+        if not aktif:
+            return f'<div style="color:#94a3b8"><b>{escape(ad)}:</b> Veri yok / uygulanmadı</div>'
+        renk="#86efac" if puan>0 else "#fca5a5" if puan<0 else "#cbd5e1"
+        return f'<div><b>{escape(ad)}:</b> <span style="color:{renk};font-weight:800">{puan:+.2f}</span> puan</div>'
+    h2h_aktif=int(h2h.get("mac",0) or 0)>=3
+    trenk="#86efac" if toplam>0 else "#fca5a5" if toplam<0 else "#cbd5e1"
+    st.markdown(f'''<div style="background:#0d1728;border:1px solid #29415f;border-radius:14px;padding:14px 16px;margin:0 0 14px 0">
+    <div style="font-family:Rajdhani,sans-serif;font-size:1.05rem;font-weight:800;color:#f8fafc;margin-bottom:8px">📊 BAĞLAM ANALİZİ · {escape(label)}</div>
+    <div style="font-size:.82rem;color:#dbeafe;line-height:1.75">{satir("Son 5 genel form",form,bool(form.get("aktif")))}{satir("İç / dış saha formu",saha,bool(saha.get("aktif")))}{satir("H2H son karşılaşmalar",h2h,h2h_aktif)}{satir("2.5 piyasa doğrulaması",piyasa,bool(piyasa.get("aktif")))}</div>
+    <div style="border-top:1px solid #26364d;margin-top:9px;padding-top:9px;font-size:.88rem;color:#e2e8f0">Toplam bağlam etkisi: <b style="color:{trenk}">{toplam:+.2f} puan</b></div></div>''', unsafe_allow_html=True)
+    fp=form.get("profil",{}) if isinstance(form.get("profil"),dict) else {}
+    if bool(form.get("aktif")) and fp:
+        evf,depf=fp.get("ev",{}) or {},fp.get("dep",{}) or {}
+        c1,c2=st.columns(2,gap="small")
+        with c1:
+            st.caption(f"🏠 {m.get('ev','')} · son {int(evf.get('mac',0) or 0)} genel maç")
+            st.write(f"G/B/M: {int(evf.get('galibiyet',0))}/{int(evf.get('beraberlik',0))}/{int(evf.get('maglubiyet',0))} · 2.5 Üst %{float(evf.get('over25',0))*100:.0f} · KG Var %{float(evf.get('btts',0))*100:.0f} · Gol {float(evf.get('gf',0)):.1f}/{float(evf.get('ga',0)):.1f}")
+        with c2:
+            st.caption(f"✈️ {m.get('dep','')} · son {int(depf.get('mac',0) or 0)} genel maç")
+            st.write(f"G/B/M: {int(depf.get('galibiyet',0))}/{int(depf.get('beraberlik',0))}/{int(depf.get('maglubiyet',0))} · 2.5 Üst %{float(depf.get('over25',0))*100:.0f} · KG Var %{float(depf.get('btts',0))*100:.0f} · Gol {float(depf.get('gf',0)):.1f}/{float(depf.get('ga',0)):.1f}")
+    else:
+        st.caption("Genel form: yeterli veri yok (iki takım için en az 3 geçmiş maç gerekli).")
+    if bool(saha.get("aktif")):
+        evs,deps=saha.get("ev",{}) or {},saha.get("dep",{}) or {}
+        st.caption(f"🏟️ Saha formu: {int(saha.get('ev_mac',0) or 0)} iç saha + {int(saha.get('dep_mac',0) or 0)} dış saha maçı · Ev 2.5 Üst %{float(evs.get('over25',.5))*100:.0f}/KG %{float(evs.get('btts',.5))*100:.0f} · Dep 2.5 Üst %{float(deps.get('over25',.5))*100:.0f}/KG %{float(deps.get('btts',.5))*100:.0f}")
+    else:
+        st.caption(f"🏟️ Saha formu: yeterli veri yok (iç {int(saha.get('ev_mac',0) or 0)}, dış {int(saha.get('dep_mac',0) or 0)}; en az 3'er maç gerekli).")
+    hmac,htutan=int(h2h.get("mac",0) or 0),int(h2h.get("tutan",0) or 0)
+    if hmac:
+        st.caption(f"🤝 H2H: {hmac} maçın {htutan} tanesi '{label}' seçimini destekledi.")
+        rows=[]
+        for r in (h2h.get("sonuclar",[]) or [])[:5]:
+            rows.append({"Tarih":r.get("tarih","-"),"Maç":f"{r.get('ev','')} – {r.get('dep','')}","Skor":r.get("skor","-"),"Tahmine Uyum":"✅" if r.get("tuttu") else "❌"})
+        if rows: st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+    else:
+        st.caption("🤝 H2H: geçmiş karşılaşma bulunamadı.")
+    if bool(piyasa.get("aktif")):
+        st.caption(f"💹 2.5 piyasa: Üst {float(piyasa.get('over')):.2f} · Alt {float(piyasa.get('under')):.2f} · Seçimin marj-arındırılmış piyasa olasılığı ≈ %{float(piyasa.get('olasilik',0)):.1f}.")
+    elif "2.5" in label:
+        st.caption("💹 2.5 piyasa: bu maç için gerçek Üst/Alt oranı bulunamadı.")
+    else:
+        st.caption("💹 2.5 piyasa: seçilen market 2.5 Alt/Üst olmadığı için bu doğrulama uygulanmıyor.")
 
 def detay_ana_icerik():
     item = secili_detay_itemi()
@@ -8026,6 +8100,8 @@ def detay_ana_icerik():
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    baglam_analizi_goster(item)
 
     if t["flip_p"] >= 0.12:
         st.markdown(f"""
