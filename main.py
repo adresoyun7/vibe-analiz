@@ -4549,7 +4549,20 @@ def gecmis_ornek_siralama_anahtari(item):
         pass
 
     en_yuksek_pct = max(yuzdeler) if yuzdeler else 0.0
-    return (en_yuksek_pct, toplam_ornek)
+
+    # Örnek sayısı bonusu: yüksek örnekli maç, yüzdesi birkaç puan daha düşük olsa
+    # bile sıralamada yukarı çıkabilsin. Bonus 25 örnekte +8 puanda tavan yapar.
+    # 5 ve altı örnekte bonus verilmez; arası doğrusal artar.
+    if toplam_ornek <= 5:
+        ornek_bonusu = 0.0
+    elif toplam_ornek >= 25:
+        ornek_bonusu = 8.0
+    else:
+        ornek_bonusu = (toplam_ornek - 5) * (8.0 / 20.0)
+
+    guc_puani = en_yuksek_pct + ornek_bonusu
+    # Önce güç puanı; eşitlikte ham yüzde ve ardından örnek sayısı.
+    return (guc_puani, en_yuksek_pct, toplam_ornek)
 
 
 
