@@ -1956,6 +1956,87 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
     return secilenler if len(secilenler) >= minimum_secim else []
 
 
+def gunun_en_guvenli_kuponunu_olustur(final_list, maks=5, min_guven=65):
+    """Günün en güvenilir seçimlerinden tek kupon üretir.
+
+    - Tüm güçlü marketleri değerlendirir.
+    - Aynı maçtan yalnızca bir seçim alır.
+    - Öncelik: güven > kararlılık > stabilite skoru > örnek sayısı.
+    - En fazla ``maks`` seçim döndürür.
+    """
+    simdi = datetime.now()
+    adaylar = []
+
+    for item in final_list or []:
+        m, t = item.get("m", {}), item.get("t", {})
+        zaman = m.get("zaman")
+        if not hasattr(zaman, "strftime") or zaman <= simdi:
+            continue
+        if t.get("belirsiz") or not t.get("oynanabilir", True):
+            continue
+
+        guven = int(t.get("ana_p", 0) or 0)
+        ornek = int(t.get("ornek", 0) or 0)
+        tolerans = float(t.get("kullanilan_tolerans", 0.08) or 0.08)
+        stabil = int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0)
+        if guven < int(min_guven):
+            continue
+        if ornek < max(5, dinamik_min_mac(tolerans)):
+            continue
+        if stabil < 1:
+            continue
+
+        adaylar.append({
+            "m": m,
+            "t": t,
+            "guven": guven,
+            "stabil": stabil,
+            "stabil_skor": float(t.get("top10_stabilite_skoru", item.get("top10_stabilite_skoru", 0)) or 0),
+            "ornek": ornek,
+        })
+
+    adaylar.sort(
+        key=lambda x: (x["guven"], x["stabil"], x["stabil_skor"], x["ornek"]),
+        reverse=True,
+    )
+
+    secimler = []
+    kullanilan_maclar = set()
+    for aday in adaylar:
+        m, t = aday["m"], aday["t"]
+        mac_id = mac_key(m)
+        if mac_id in kullanilan_maclar:
+            continue
+
+        secim_label = str(t.get("ana_label", "-"))
+        secim_oran = t.get("ana_odd")
+        secimler.append({
+            "ev": m.get("ev", ""),
+            "dep": m.get("dep", ""),
+            "lig": str(m.get("lig", "")),
+            "zaman_iso": m["zaman"].strftime("%Y-%m-%d %H:%M:%S"),
+            "zaman_text": m["zaman"].strftime("%d.%m %H:%M"),
+            "tahmin": secim_label,
+            "guven": int(aday["guven"]),
+            "oran": float(secim_oran) if secim_oran is not None else None,
+            "oran_tahmini": bool(t.get("top10_market_oran_tahmini", False)),
+            "hassasiyet": float(t.get("kullanilan_tolerans", 0.08) or 0.08),
+            "hassasiyetler": list(t.get("top10_hassasiyetler", t.get("stability_tols", [])) or []),
+            "hassasiyet_sayisi": int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0),
+            "otomatik": True,
+            "profil": "Günün Kuponu",
+            "sport_key": m.get("sport_key", ""),
+            "h": m.get("h"),
+            "b": m.get("b"),
+            "a": m.get("a"),
+        })
+        kullanilan_maclar.add(mac_id)
+        if len(secimler) >= int(maks):
+            break
+
+    return secimler if len(secimler) >= 2 else []
+
+
 KUPON_GECMISI_PATH = Path(__file__).with_name("vibe_kupon_gecmisi.json")
 
 
@@ -8239,14 +8320,18 @@ else:
 
     kupon_mesaji = None
     with st.expander("🎫 Günün Kuponunu Oluştur", expanded=False):
-        bilgi_col, olustur_col = st.columns([3.2, 1.15], gap="small")
+        bilgi_col, gunun_col, olustur_col = st.columns([3.2, 1.15, 1.15], gap="small")
         with bilgi_col:
             st.caption(
                 "Her maç 0.00 ile 0.10 arasında 0.01'er hassasiyet adımıyla toplam 11 noktada taranır. "
-                "Farklı tahmin varsa en iyi puanlanan market seçilir; belirli bir minimum destek sayısı zorunlu değildir. "
-                "Tek hassasiyetteki yüksek güven de aday olabilir. Aynı güçlü seçim farklı profil kriterlerini karşılıyorsa "
-                "profiller arasında tekrar kullanılabilir; bülten genişse her profil için birden fazla kupon üretilir. "
-                "Yalnızca MS, 2.5 Alt/Üst, KG ve bunların kombinasyonları kullanılır."
+                "Günün Kuponu tüm uygun marketler içinden güveni en yüksek seçimleri tek kuponda toplar; aynı maçtan yalnızca bir seçim alır. "
+                "Temkinli, Dengeli ve Yüksek Oran profilleri ise kendi kurallarıyla ayrı kuponlar üretir."
+            )
+        with gunun_col:
+            gunun_tek_kupon_btn = st.button(
+                "⭐ Günün kuponu", key="gunun_en_guvenli_tek_kupon_buton",
+                use_container_width=True,
+                help="En güvenilir seçimlerden tek bir kupon oluşturur (en fazla 5 maç).",
             )
         with olustur_col:
             gunun_kupon_btn = st.button(
@@ -8469,6 +8554,34 @@ else:
                                     else:
                                         st.toast("Bu seçim zaten Kendi Kuponum'da.")
 
+        if gunun_tek_kupon_btn:
+            gunun_kaynagi = gunun_en_iyi_10_uret(
+                st.session_state.get("last_gecmis_df"),
+                st.session_state.get("last_bulten_df"),
+                min_ornek=min_ornek,
+                limit=500,
+                sadece_ayni_lig=sadece_ayni_lig,
+                kupon_modu=True,
+                kupon_profili="Günün Kuponu",
+                tum_marketler=True,
+            )
+            gunun_secimleri = gunun_en_guvenli_kuponunu_olustur(
+                gunun_kaynagi, maks=5, min_guven=65
+            )
+            if gunun_secimleri:
+                kupon_gecmisine_ekle(gunun_secimleri, "Günün Kuponu", "0.00–0.10 tarama")
+                st.session_state.coupon_popup_open = True
+                st.session_state.scroll_to_coupon = True
+                kupon_mesaji = (
+                    "success",
+                    f"⭐ Günün Kuponu oluşturuldu: {len(gunun_secimleri)} en güvenilir seçim tek kupona eklendi."
+                )
+            else:
+                kupon_mesaji = (
+                    "warning",
+                    "Günün Kuponu için en az iki yeterince güvenilir ve kararlı seçim bulunamadı."
+                )
+
         if gunun_kupon_btn:
             olusan_profiller = []
             bulunamayan_profiller = []
@@ -8599,7 +8712,7 @@ else:
                     "🗑️ Tüm otomatik kuponları temizle",
                     key="auto_coupon_clear_all",
                     use_container_width=True,
-                    help="Temkinli, Dengeli ve Yüksek Oran altında oluşturulan tüm otomatik kupon kayıtlarını siler. Kendi Kuponum etkilenmez.",
+                    help="Günün Kuponu, Temkinli, Dengeli ve Yüksek Oran altında oluşturulan tüm otomatik kupon kayıtlarını siler. Kendi Kuponum etkilenmez.",
                 ):
                     kupon_gecmisini_yaz([])
                     st.rerun()
@@ -8615,12 +8728,16 @@ else:
                 unsafe_allow_html=True,
             )
             profil_renkleri = {
+                "Günün Kuponu": ("#0b3b46", "#22d3ee", "⭐"),
                 "Temkinli": ("#123d2d", "#36d98b", "🟢"),
                 "Dengeli": ("#12345b", "#60a5fa", "🔵"),
                 "Yüksek Oran": ("#4a2b12", "#f59e0b", "🟠"),
             }
-            profil_sutunlari = st.columns(4, gap="small")
-            for profil_col, profil_adi in zip(profil_sutunlari[:3], ["Temkinli", "Dengeli", "Yüksek Oran"]):
+            profil_sutunlari = st.columns(5, gap="small")
+            for profil_col, profil_adi in zip(
+                profil_sutunlari[:4],
+                ["Günün Kuponu", "Temkinli", "Dengeli", "Yüksek Oran"],
+            ):
                 with profil_col:
                     arka, vurgu, ikon = profil_renkleri[profil_adi]
                     st.markdown(
@@ -8766,7 +8883,7 @@ else:
                                 kupon_gecmisini_yaz(yeni_gecmis)
                                 st.rerun()
 
-            with profil_sutunlari[3]:
+            with profil_sutunlari[4]:
                 st.markdown(
                     """
                     <div style="background:#312e81;border:1px solid #a78bfa;border-radius:12px;
