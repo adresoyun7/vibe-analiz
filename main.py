@@ -67,8 +67,12 @@ def get_odds_api_keys():
         raw = get_secret_value("THE_ODDS_API_KEYS", [])
         if isinstance(raw, str):
             raw = [x.strip() for x in raw.split(",") if x.strip()]
-        if isinstance(raw, (list, tuple)):
-            keys.extend(str(x).strip() for x in raw if str(x).strip())
+        # Streamlit secrets TOML dizileri list-benzeri nesne döndürebilir.
+        if raw and not isinstance(raw, str):
+            try:
+                keys.extend(str(x).strip() for x in list(raw) if str(x).strip())
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -205,34 +209,22 @@ def get_api_football_key():
 
 def api_key_panel():
     with st.sidebar:
-        st.markdown("### 🔑 API Key Girişi")
+        st.markdown("### 🔑 The Odds API")
 
-        current_key = st.session_state.get("user_api_key", "")
-        api_key_input = st.text_input(
-            "ODDS API KEY",
-            value=current_key,
-            placeholder="API key gir...",
-            type="password",
-            key="api_key_input",
-        )
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Kaydet", use_container_width=True, key="save_api_key_btn"):
-                st.session_state["user_api_key"] = api_key_input.strip()
-                st.success("API Key kaydedildi ✅")
-                st.rerun()
-
-        with c2:
-            if st.button("Temizle", use_container_width=True, key="clear_api_key_btn"):
-                st.session_state.pop("user_api_key", None)
-                st.success("API Key temizlendi")
-                st.rerun()
-
-        if get_app_api_key():
-            st.success("Odds API key aktif ✅")
+        _odds_keys = get_odds_api_keys()
+        if _odds_keys:
+            _idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(_odds_keys)
+            st.success(f"Key havuzu aktif ✅  •  {_idx + 1}/{len(_odds_keys)}")
+            _q = st.session_state.get("odds_api_quota", {}) or {}
+            if _q.get("remaining") is not None:
+                st.caption(
+                    f"Kalan kredi: {_q.get('remaining')}  ·  "
+                    f"Kullanılan: {_q.get('used', '—')}"
+                )
+            else:
+                st.caption("Kredi bilgisi ilk başarılı API isteğinden sonra görünür.")
         else:
-            st.warning("Odds API key yok. Kayıtlı bülten varsa açılır; yeni veri çekmek için API key gerekir.")
+            st.error("THE_ODDS_API_KEYS bulunamadı. Streamlit Secrets kaydını kontrol et.")
 
         st.markdown("##### ⚽ API-Football (bağlam fallback)")
         af_current = st.session_state.get("user_api_football_key", "")
