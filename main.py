@@ -6233,7 +6233,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         if "gecmis_ayni_lig_uygulandi" not in st.session_state:
             st.session_state["gecmis_ayni_lig_uygulandi"] = mevcut_ayni_lig
         if "gecmis_oranlari_goster" not in st.session_state:
-            st.session_state["gecmis_oranlari_goster"] = True
+            st.session_state["gecmis_oranlari_goster"] = False
 
         ust_bos, ust_ayni, ust_oran = st.columns([6.2, 1.45, 1.25], gap="small")
         with ust_ayni:
