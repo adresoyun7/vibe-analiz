@@ -4504,42 +4504,52 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
 
 
 def gecmis_ornek_siralama_anahtari(item):
-    """Geçmiş Örnekleri sıralaması: önce İY/MS/2.5/KG içindeki en güçlü tekrar, sonra toplam örnek."""
+    """Geçmiş Örnekleri: en yüksek İY/MS/2.5/KG yüzdesi önce, eşitse örnek sayısı fazla olan önce."""
     ornekler = item.get("ornekler") if isinstance(item, dict) else None
     if ornekler is None or getattr(ornekler, "empty", True):
-        return (0, 0)
+        return (0.0, 0)
 
     toplam_ornek = int(len(ornekler))
-    tekrarlar = []
+    if toplam_ornek <= 0:
+        return (0.0, 0)
+
+    yuzdeler = []
+
+    def en_yuksek_yuzde(series):
+        try:
+            vc = series.value_counts(dropna=True)
+            if vc.empty:
+                return 0.0
+            return float(vc.iloc[0]) / float(toplam_ornek) * 100.0
+        except Exception:
+            return 0.0
 
     try:
-        # İY için skor değil 1/X/2 sonucu tekrarını kullan.
         iy = ornekler["HTR"].replace({"H": "1", "D": "X", "A": "2"})
-        tekrarlar.append(int(iy.value_counts().max()))
+        yuzdeler.append(en_yuksek_yuzde(iy))
     except Exception:
         pass
 
     try:
-        # MS için skor değil 1/X/2 sonucu tekrarını kullan.
         ms = ornekler["FTR"].replace({"H": "1", "D": "X", "A": "2"})
-        tekrarlar.append(int(ms.value_counts().max()))
+        yuzdeler.append(en_yuksek_yuzde(ms))
     except Exception:
         pass
 
     try:
         alt_ust = ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"})
-        tekrarlar.append(int(alt_ust.value_counts().max()))
+        yuzdeler.append(en_yuksek_yuzde(alt_ust))
     except Exception:
         pass
 
     try:
         kg = ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"})
-        tekrarlar.append(int(kg.value_counts().max()))
+        yuzdeler.append(en_yuksek_yuzde(kg))
     except Exception:
         pass
 
-    en_yuksek_tekrar = max(tekrarlar) if tekrarlar else 0
-    return (en_yuksek_tekrar, toplam_ornek)
+    en_yuksek_pct = max(yuzdeler) if yuzdeler else 0.0
+    return (en_yuksek_pct, toplam_ornek)
 
 
 
@@ -6178,9 +6188,8 @@ if gecmis_btn:
                     "tum_ornek_sayisi": tum_ornek_sayisi,
                 })
             # Geçmiş Örnekleri sıralaması:
-            # 1) Toplam örnek sayısı çoktan aza
-            # 1) İY, MS, 2.5 veya KG içinde en güçlü tekrar çoktan aza
-            # 2) En güçlü tekrar eşitse toplam örnek sayısı çoktan aza
+            # 1) İY, MS, 2.5 veya KG içindeki EN YÜKSEK YÜZDE çoktan aza
+            # 2) En yüksek yüzde eşitse toplam örnek sayısı çoktan aza
             inceleme.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = inceleme
             st.rerun()
