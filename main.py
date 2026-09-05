@@ -1469,6 +1469,12 @@ def bulten_cek(key, kodlar, t):
         st.error("Maç bültenini çekmek için ODDS API key gerekli.")
         return pd.DataFrame()
     res = []
+    st.session_state["odds_api_debug"] = {
+        "raw_matches": 0,
+        "date_matches": 0,
+        "selected_date": str(t),
+        "leagues": list(kodlar),
+    }
 
     for secili_kod in kodlar:
         k = odds_lig_kodu_coz(key, secili_kod)
@@ -1509,6 +1515,8 @@ def bulten_cek(key, kodlar, t):
             if not isinstance(data, list):
                 continue
 
+            st.session_state["odds_api_debug"]["raw_matches"] += len(data)
+
             for m in data:
                 try:
                     tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
@@ -1517,6 +1525,8 @@ def bulten_cek(key, kodlar, t):
 
                 if tm.date() != t:
                     continue
+
+                st.session_state["odds_api_debug"]["date_matches"] += 1
 
                 bookies = m.get("bookmakers", [])
                 if not bookies:
@@ -6960,23 +6970,50 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     with st.expander("🔑 API Key", expanded=False):
-        current_key = st.session_state.get("user_api_key", "")
-        api_key_input = st.text_input("ODDS API KEY", value=current_key, placeholder="API key gir...", type="password", key="api_key_input_sidebar_clean")
-        a1, a2 = st.columns(2)
-        with a1:
-            if st.button("Kaydet", use_container_width=True, key="save_api_key_sidebar_clean"):
-                st.session_state["user_api_key"] = api_key_input.strip()
-                st.success("API Key kaydedildi ✅")
-                st.rerun()
-        with a2:
-            if st.button("Temizle", use_container_width=True, key="clear_api_key_sidebar_clean"):
-                st.session_state.pop("user_api_key", None)
-                st.success("API Key temizlendi")
-                st.rerun()
-        if get_app_api_key():
-            st.success("Odds API key aktif ✅")
+        _odds_keys = get_odds_api_keys()
+        if _odds_keys:
+            _idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(_odds_keys)
+            st.success(f"The Odds API havuzu aktif ✅ · Key {_idx + 1}/{len(_odds_keys)}")
+            _q = st.session_state.get("odds_api_quota", {}) or {}
+            if _q.get("remaining") is not None:
+                st.caption(f"Kalan kredi: {_q.get('remaining')} · Kullanılan: {_q.get('used', '—')}")
+            else:
+                st.caption("Kredi bilgisi ilk API isteğinden sonra görünür.")
+
+            if st.button("🧪 Key havuzunu test et", use_container_width=True, key="test_odds_key_pool"):
+                _sonuclar = []
+                for _i, _k in enumerate(_odds_keys, 1):
+                    try:
+                        _r = requests.get(
+                            "https://api.the-odds-api.com/v4/sports/",
+                            params={"apiKey": _k},
+                            timeout=12,
+                        )
+                        _rem = _r.headers.get("x-requests-remaining", "—")
+                        _used = _r.headers.get("x-requests-used", "—")
+                        _sonuclar.append((_i, _r.status_code, _rem, _used))
+                    except Exception as _e:
+                        _sonuclar.append((_i, "BAĞLANTI", "—", str(_e)[:80]))
+
+                for _i, _status, _rem, _used in _sonuclar:
+                    if _status == 200:
+                        st.success(f"Key {_i}: Çalışıyor · kalan {_rem} · kullanılan {_used}")
+                    else:
+                        st.error(f"Key {_i}: HTTP {_status} · kalan {_rem} · {_used}")
         else:
-            st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için Odds API key gerekir.")
+            st.error("THE_ODDS_API_KEYS okunamadı. Streamlit Secrets kaydını kontrol et.")
+
+        _last_odds_error = st.session_state.get("odds_api_last_error")
+        if _last_odds_error:
+            st.error(f"Son bülten hatası: {_last_odds_error}")
+
+        _dbg = st.session_state.get("odds_api_debug", {}) or {}
+        if _dbg:
+            st.caption(
+                f"API ham maç: {_dbg.get('raw_matches', 0)} · "
+                f"Seçili tarihte: {_dbg.get('date_matches', 0)} · "
+                f"Tarih: {_dbg.get('selected_date', '—')}"
+            )
 
         st.markdown("##### ⚽ API-Football · bağlam fallback")
         af_current = st.session_state.get("user_api_football_key", "")
