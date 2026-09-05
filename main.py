@@ -1571,11 +1571,17 @@ def skor_etikete_uyuyor_mu(label, eg, dg):
     return True
 
 
-def skoru_tahmine_uydur(eg, dg, ana_label, ms_mod, alt_label=""):
-    """Tahmini skoru ana ve mümkünse alternatif tahminle birlikte uyumlu seçer."""
+def skoru_tahmine_uydur(eg, dg, ana_label, ms_mod, alt_label="", combo_label=""):
+    """Tahmini skoru ana tahmin ve güçlü kombo ile uyumlu seçer.
+
+    Öncelik sırası: ana + güçlü kombo + alternatif -> ana + güçlü kombo
+    -> ana + alternatif -> yalnızca ana. Böylece örneğin MS1 + KG Yok
+    güçlü kombosunda 2-1 gibi komboyla çelişen bir skor gösterilmez.
+    """
     baz_eg, baz_dg = int(eg), int(dg)
     ana = str(ana_label or "").strip()
     alt = str(alt_label or "").strip()
+    combo = str(combo_label or "").strip()
     ms_mod = str(ms_mod or "")
 
     def ms_cezasi(h, a):
@@ -1587,10 +1593,19 @@ def skoru_tahmine_uydur(eg, dg, ana_label, ms_mod, alt_label=""):
             return 0 if h == a else 1
         return 0
 
-    # Önce ana + alternatif birlikte sağlanmaya çalışılır. Birbirleriyle
-    # çelişiyorlarsa ana tahmin öncelikli tutulur.
-    for etiketler in ([ana, alt], [ana]):
-        aktif = [x for x in etiketler if x]
+    # Güçlü kombo ekranda gösteriliyorsa skor önce onunla da uyuşmalı.
+    # Alternatif tahmin kombo ile çelişirse alternatif bırakılır; ana ve
+    # güçlü kombo korunur.
+    denemeler = []
+    if combo:
+        denemeler.extend(([ana, combo, alt], [ana, combo]))
+    denemeler.extend(([ana, alt], [ana]))
+
+    for etiketler in denemeler:
+        aktif = []
+        for x in etiketler:
+            if x and x not in aktif:
+                aktif.append(x)
         adaylar = []
         for h in range(0, 6):
             for a in range(0, 6):
@@ -3000,7 +3015,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
-    eg, dg = skoru_tahmine_uydur(eg, dg, ana_label, ms_mod, alt_label)
+    eg, dg = skoru_tahmine_uydur(eg, dg, ana_label, ms_mod, alt_label, combo_label)
     gc, gb_cls, gb_lbl = guven_renk(ana_p)
     ornek_durum, ornek_renk = guven_metni(sample, float(tolerans))
 
