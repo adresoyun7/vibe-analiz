@@ -45,9 +45,10 @@ st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 # ==========================================================
 
 # Kullanım:
-# 1) Kullanıcı sidebar'dan kendi ODDS API KEY'ini girebilir.
-# 2) İstersen Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY ekleyebilirsin.
-#    Sidebar'dan girilen key, secrets key'in önüne geçer.
+# Streamlit Cloud > Settings > Secrets içine birden fazla key ekleyebilirsin:
+# THE_ODDS_API_KEYS = ["key1", "key2", "key3"]
+# Aktif key'in kredisi bittiğinde uygulama sıradaki key'e otomatik geçer.
+# Eski ODDS_API_KEY ve sidebar kullanıcı key'i geriye dönük desteklenir.
 
 def get_secret_value(name, default=""):
     try:
@@ -56,11 +57,138 @@ def get_secret_value(name, default=""):
         return default
 
 
-def get_app_api_key():
-    user_key = str(st.session_state.get("user_api_key", "")).strip()
+def get_odds_api_keys():
+    """The Odds API key havuzunu secrets + isteğe bağlı kullanıcı key'inden oluşturur."""
+    keys = []
+
+    # Önerilen kullanım:
+    # THE_ODDS_API_KEYS = ["key1", "key2", "key3", ...]
+    try:
+        raw = get_secret_value("THE_ODDS_API_KEYS", [])
+        if isinstance(raw, str):
+            raw = [x.strip() for x in raw.split(",") if x.strip()]
+        if isinstance(raw, (list, tuple)):
+            keys.extend(str(x).strip() for x in raw if str(x).strip())
+    except Exception:
+        pass
+
+    # Eski tek-key ayarı da çalışmaya devam etsin.
+    legacy = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
+    if legacy:
+        keys.append(legacy)
+
+    # İstenirse sidebar'daki kullanıcı key'i en sona yedek olarak kullanılabilir.
+    user_key = str(st.session_state.get("user_api_key", "") or "").strip()
     if user_key:
-        return user_key
-    return str(get_secret_value("ODDS_API_KEY", "")).strip()
+        keys.append(user_key)
+
+    # Tekrarları sırayı bozmadan temizle.
+    temiz = []
+    gorulen = set()
+    for key in keys:
+        if key and key not in gorulen:
+            gorulen.add(key)
+            temiz.append(key)
+    return temiz
+
+
+def get_app_api_key():
+    """Mevcut aktif The Odds API key'ini döndürür."""
+    keys = get_odds_api_keys()
+    if not keys:
+        return ""
+    idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(keys)
+    st.session_state["odds_api_key_index"] = idx
+    return keys[idx]
+
+
+def _odds_api_kredi_bitti(resp):
+    """The Odds API yanıtında kredi/limit tükenmesini algılar."""
+    try:
+        remaining = resp.headers.get("x-requests-remaining")
+        if remaining is not None and int(float(remaining)) <= 0:
+            return True
+    except Exception:
+        pass
+
+    try:
+        body = (resp.text or "").upper()
+    except Exception:
+        body = ""
+
+    if any(x in body for x in (
+        "OUT_OF_USAGE_CREDITS",
+        "USAGE_CREDITS",
+        "NO CREDITS",
+        "QUOTA EXCEEDED",
+    )):
+        return True
+
+    # 429 kota/rate-limit cevabında da sıradaki key denenir.
+    return getattr(resp, "status_code", None) in (402, 429)
+
+
+def odds_api_request(url, params=None, timeout=15):
+    """
+    The Odds API isteğini key havuzuyla yapar.
+    Aktif key'in kredisi biterse aynı isteği sıradaki key ile otomatik tekrarlar.
+    """
+    keys = get_odds_api_keys()
+    if not keys:
+        raise RuntimeError("The Odds API key havuzu boş.")
+
+    start_idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(keys)
+    base_params = dict(params or {})
+    base_params.pop("apiKey", None)
+
+    last_response = None
+    last_exception = None
+
+    for offset in range(len(keys)):
+        idx = (start_idx + offset) % len(keys)
+        key = keys[idx]
+        req_params = dict(base_params)
+        req_params["apiKey"] = key
+
+        try:
+            r = requests.get(url, params=req_params, timeout=timeout)
+            last_response = r
+
+            # Kota bilgisini aktif istekten kaydet.
+            try:
+                st.session_state["odds_api_quota"] = {
+                    "remaining": r.headers.get("x-requests-remaining"),
+                    "used": r.headers.get("x-requests-used"),
+                    "last": r.headers.get("x-requests-last"),
+                    "updated_at": time.time(),
+                    "key_index": idx + 1,
+                    "key_count": len(keys),
+                }
+            except Exception:
+                pass
+
+            if _odds_api_kredi_bitti(r):
+                # Sonraki key'i aktif yap ve aynı isteği onunla tekrar dene.
+                st.session_state["odds_api_key_index"] = (idx + 1) % len(keys)
+                continue
+
+            # 401 geçersiz key ise de sıradakine geç.
+            if r.status_code == 401:
+                st.session_state["odds_api_key_index"] = (idx + 1) % len(keys)
+                continue
+
+            st.session_state["odds_api_key_index"] = idx
+            return r
+
+        except Exception as exc:
+            last_exception = exc
+            continue
+
+    if last_response is not None:
+        return last_response
+    if last_exception is not None:
+        raise last_exception
+    raise RuntimeError("The Odds API key havuzundaki hiçbir anahtar kullanılamıyor.")
 
 
 def get_api_football_key():
@@ -1319,9 +1447,9 @@ def futbol_veri_motoru(sezonlar):
 @st.cache_data(ttl=1800, show_spinner=False)
 def odds_spor_katalogu(key):
     try:
-        r = requests.get(
+        r = odds_api_request(
             "https://api.the-odds-api.com/v4/sports/",
-            params={"apiKey": key, "all": "true"}, timeout=12,
+            params={"all": "true"}, timeout=12,
         )
         return r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
     except Exception:
@@ -1355,10 +1483,9 @@ def bulten_cek(key, kodlar, t):
         if not k:
             continue
         try:
-            r = requests.get(
+            r = odds_api_request(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
                 params={
-                    "apiKey": key,
                     "regions": "eu",
                     "markets": "h2h,totals",
                     "oddsFormat": "decimal",
@@ -4692,15 +4819,8 @@ def tahmin_sonuclarini_guncelle(api_key):
     for lig in ligler:
         try:
             skor_url = f"https://api.the-odds-api.com/v4/sports/{lig}/scores/"
-            skor_param = {"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}
-            r = requests.get(skor_url, params=skor_param, timeout=15)
-            # Oturumda kalmış anahtar geçersizse ve uygulamada farklı bir secret
-            # anahtar varsa sonuç takibini onunla bir kez daha dene.
-            if r.status_code == 401:
-                yedek_key = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
-                if yedek_key and yedek_key != str(api_key).strip():
-                    skor_param["apiKey"] = yedek_key
-                    r = requests.get(skor_url, params=skor_param, timeout=15)
+            skor_param = {"daysFrom": 3, "dateFormat": "iso"}
+            r = odds_api_request(skor_url, params=skor_param, timeout=15)
             if r.status_code == 200 and isinstance(r.json(), list):
                 skorlar.extend(r.json())
             elif r.status_code == 401:
@@ -4826,9 +4946,9 @@ def canli_analizleri_getir(api_key):
     skorlar, hatalar = [], []
     for lig in ligler:
         try:
-            r = requests.get(
+            r = odds_api_request(
                 f"https://api.the-odds-api.com/v4/sports/{lig}/scores/",
-                params={"apiKey": api_key, "daysFrom": 1, "dateFormat": "iso"},
+                params={"daysFrom": 1, "dateFormat": "iso"},
                 timeout=15,
             )
             if r.status_code == 200 and isinstance(r.json(), list):
