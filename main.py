@@ -1474,6 +1474,7 @@ def bulten_cek(key, kodlar, t):
         "date_matches": 0,
         "selected_date": str(t),
         "leagues": list(kodlar),
+        "samples": [],
     }
 
     for secili_kod in kodlar:
@@ -1519,7 +1520,27 @@ def bulten_cek(key, kodlar, t):
 
             for m in data:
                 try:
-                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                    _raw_time = str(m["commence_time"])
+                    # The Odds API commence_time UTC'dir. +3 sabit eklemek yerine
+                    # timezone-aware olarak Europe/Istanbul'a çeviriyoruz.
+                    try:
+                        from zoneinfo import ZoneInfo
+                        _utc_dt = datetime.fromisoformat(_raw_time.replace("Z", "+00:00"))
+                        tm = _utc_dt.astimezone(ZoneInfo("Europe/Istanbul")).replace(tzinfo=None)
+                    except Exception:
+                        tm = datetime.strptime(_raw_time, "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+
+                    _dbg_samples = st.session_state["odds_api_debug"].setdefault("samples", [])
+                    if len(_dbg_samples) < 12:
+                        _dbg_samples.append({
+                            "lig": str(m.get("sport_title") or k),
+                            "ev": str(m.get("home_team", "")),
+                            "dep": str(m.get("away_team", "")),
+                            "api_utc": _raw_time,
+                            "turkiye": tm.strftime("%Y-%m-%d %H:%M"),
+                            "turkiye_tarih": tm.date().isoformat(),
+                            "eslesti": bool(tm.date() == t),
+                        })
                 except Exception:
                     continue
 
@@ -7014,6 +7035,17 @@ with st.sidebar:
                 f"Seçili tarihte: {_dbg.get('date_matches', 0)} · "
                 f"Tarih: {_dbg.get('selected_date', '—')}"
             )
+
+            _samples = _dbg.get("samples", []) or []
+            if _samples:
+                with st.expander("🕒 API tarih debug", expanded=False):
+                    for _s in _samples:
+                        _ok = "✅" if _s.get("eslesti") else "❌"
+                        st.caption(
+                            f"{_ok} {_s.get('ev','')} - {_s.get('dep','')} · "
+                            f"API UTC: {_s.get('api_utc','—')} · "
+                            f"TR: {_s.get('turkiye','—')}"
+                        )
 
         st.markdown("##### ⚽ API-Football · bağlam fallback")
         af_current = st.session_state.get("user_api_football_key", "")
