@@ -1545,56 +1545,64 @@ def pct100(v):
         return 0
 
 
-def skoru_tahmine_uydur(eg, dg, ana_label, ms_mod):
-    ana = str(ana_label)
-    ms_mod = str(ms_mod)
+def skor_etikete_uyuyor_mu(label, eg, dg):
+    """Bir skorun tahmin etiketiyle çelişip çelişmediğini kontrol eder."""
+    label = str(label or "").strip()
+    if not label:
+        return True
+    if "+" in label:
+        return all(skor_etikete_uyuyor_mu(parca.strip(), eg, dg) for parca in label.split("+"))
 
-    # Öncelik ana tahmin: Alt / Üst / KG.
-    # Böylece ana tahmin 2.5 Alt iken skor 1-2 gibi çelişkili çıkmaz.
-    if "2.5 Alt" in ana:
+    toplam = int(eg) + int(dg)
+    if label in {"MS 1", "MS1"}:
+        return eg > dg
+    if label in {"MS 2", "MS2"}:
+        return dg > eg
+    if label in {"Beraberlik", "MS X", "MSX"}:
+        return eg == dg
+    if label == "2.5 Alt":
+        return toplam <= 2
+    if label == "2.5 Üst":
+        return toplam >= 3
+    if label == "KG Var":
+        return eg > 0 and dg > 0
+    if label == "KG Yok":
+        return eg == 0 or dg == 0
+    return True
+
+
+def skoru_tahmine_uydur(eg, dg, ana_label, ms_mod, alt_label=""):
+    """Tahmini skoru ana ve mümkünse alternatif tahminle birlikte uyumlu seçer."""
+    baz_eg, baz_dg = int(eg), int(dg)
+    ana = str(ana_label or "").strip()
+    alt = str(alt_label or "").strip()
+    ms_mod = str(ms_mod or "")
+
+    def ms_cezasi(h, a):
         if ms_mod == "H":
-            return 1, 0
-        elif ms_mod == "A":
-            return 0, 1
-        else:
-            return 1, 1
+            return 0 if h > a else 2
+        if ms_mod == "A":
+            return 0 if a > h else 2
+        if ms_mod == "D":
+            return 0 if h == a else 1
+        return 0
 
-    if "2.5 Üst" in ana:
-        if ms_mod == "H":
-            return 2, 1
-        elif ms_mod == "A":
-            return 1, 2
-        else:
-            return 2, 2
+    # Önce ana + alternatif birlikte sağlanmaya çalışılır. Birbirleriyle
+    # çelişiyorlarsa ana tahmin öncelikli tutulur.
+    for etiketler in ([ana, alt], [ana]):
+        aktif = [x for x in etiketler if x]
+        adaylar = []
+        for h in range(0, 6):
+            for a in range(0, 6):
+                if all(skor_etikete_uyuyor_mu(lbl, h, a) for lbl in aktif):
+                    mesafe = abs(h - baz_eg) + abs(a - baz_dg)
+                    toplam_fark = abs((h + a) - (baz_eg + baz_dg))
+                    adaylar.append((mesafe, ms_cezasi(h, a), toplam_fark, h + a, h, a))
+        if adaylar:
+            adaylar.sort()
+            return adaylar[0][-2], adaylar[0][-1]
 
-    if ana == "KG Yok":
-        if ms_mod == "H":
-            return 2, 0
-        elif ms_mod == "A":
-            return 0, 2
-        else:
-            return 0, 0
-
-    if ana == "KG Var":
-        if ms_mod == "H":
-            return 2, 1
-        elif ms_mod == "A":
-            return 1, 2
-        else:
-            return 1, 1
-
-    eg = int(eg)
-    dg = int(dg)
-
-    if ana == "MS 1" and eg <= dg:
-        eg = dg + 1
-    elif ana == "MS 2" and dg <= eg:
-        dg = eg + 1
-    elif ana == "Beraberlik":
-        mx = max(eg, dg, 1)
-        eg = dg = mx
-
-    return eg, dg
+    return baz_eg, baz_dg
 
 
 def ai_kart_yorumlari(t, m):
@@ -1831,6 +1839,13 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             oran_tahmini = True
 
         kombinasyon_secimi = "+" in secim_label
+
+        # Temkinli profil tekli marketler içindir. 2.5 Alt + KG Yok gibi
+        # kombinasyonlar güveni yüksek olsa bile Temkinli aday/kuponuna girmesin.
+        # Kombinasyonlar Dengeli'de kriterleri sağlarsa ve özellikle Yüksek Oran'da
+        # değerlendirilmeye devam eder.
+        if profil == "Temkinli" and kombinasyon_secimi:
+            continue
 
         if guven < cfg["min_guven"]:
             continue
@@ -2985,7 +3000,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
-    eg, dg = skoru_tahmine_uydur(eg, dg, ana_label, ms_mod)
+    eg, dg = skoru_tahmine_uydur(eg, dg, ana_label, ms_mod, alt_label)
     gc, gb_cls, gb_lbl = guven_renk(ana_p)
     ornek_durum, ornek_renk = guven_metni(sample, float(tolerans))
 
@@ -8224,13 +8239,24 @@ else:
                 use_container_width=True, type="primary",
             )
 
-        liste_col1, liste_col2 = st.columns([3.2, 1.15], gap="small")
+        liste_col1, liste_col2, liste_col3 = st.columns([2.05, 1.15, 1.15], gap="small")
         with liste_col2:
             tum_adaylari_goster_btn = st.button(
                 "Tüm aday listeleri", key="tum_profil_adaylari_btn",
                 use_container_width=True,
                 help="Temkinli, Dengeli ve Yüksek Oran için uygun olan tüm seçimleri ayrı listelerde gösterir.",
             )
+        with liste_col3:
+            adaylari_temizle_btn = st.button(
+                "Aday listelerini temizle", key="tum_profil_adaylari_temizle_btn",
+                use_container_width=True,
+                disabled=not isinstance(st.session_state.get("tum_profil_aday_listeleri"), dict),
+                help="Ekrandaki Temkinli, Dengeli ve Yüksek Oran aday listelerini kapatır/temizler.",
+            )
+
+        if adaylari_temizle_btn:
+            st.session_state.pop("tum_profil_aday_listeleri", None)
+            st.rerun()
 
         if tum_adaylari_goster_btn:
             profil_aday_listeleri = {}
