@@ -2541,64 +2541,30 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             + baglam_ayari
         )
 
+        aday = {
+            "m": m,
+            "t": t,
+            "guven": guven,
+            "stabil": stabil,
+            "stabil_skor": stabil_skor,
+            "ornek": ornek,
+            "gunun_puani": gunun_puani,
+            "baglam": baglam,
+            "baglam_ayari": baglam_ayari,
+            "kontrollu_gevsetme": bool(_sadece_gevsek),
+        }
         if _sadece_gevsek:
-
-            {
-            "m": m,
-            "t": t,
-            "guven": guven,
-            "stabil": stabil,
-            "stabil_skor": stabil_skor,
-            "ornek": ornek,
-            "gunun_puani": gunun_puani,
-            "baglam": baglam,
-            "baglam_ayari": baglam_ayari,
-        }["kontrollu_gevsetme"] = True
-
-            kontrollu_gevsek_adaylar.append({
-            "m": m,
-            "t": t,
-            "guven": guven,
-            "stabil": stabil,
-            "stabil_skor": stabil_skor,
-            "ornek": ornek,
-            "gunun_puani": gunun_puani,
-            "baglam": baglam,
-            "baglam_ayari": baglam_ayari,
-        })
-
+            kontrollu_gevsek_adaylar.append(aday)
         else:
+            adaylar.append(aday)
 
-            {
-            "m": m,
-            "t": t,
-            "guven": guven,
-            "stabil": stabil,
-            "stabil_skor": stabil_skor,
-            "ornek": ornek,
-            "gunun_puani": gunun_puani,
-            "baglam": baglam,
-            "baglam_ayari": baglam_ayari,
-        }["kontrollu_gevsetme"] = False
-
-            adaylar.append({
-            "m": m,
-            "t": t,
-            "guven": guven,
-            "stabil": stabil,
-            "stabil_skor": stabil_skor,
-            "ornek": ornek,
-            "gunun_puani": gunun_puani,
-            "baglam": baglam,
-            "baglam_ayari": baglam_ayari,
-        })
     # Sıkı kriterlerle en az iki farklı maç çıkmazsa yalnızca güvenli sınırdaki
     # adaylardan eksik seçim tamamlanır. Örnek/H2H/negatif bağlam kırmızı
     # bayrakları yukarıdaki filtrelerde aynen korunur.
-    _strict_maclar = {
-        str(a.get("match_id") or a.get("id") or f'{a.get("home_team","")}|{a.get("away_team","")}')
-        for a in adaylar
-    }
+    # Aday dict'inin kökünde match_id/home_team yok; maç bilgisi a["m"] içinde.
+    # Önceki sürüm bu nedenle bütün adayları "|" anahtarına düşürüp tek maç
+    # sanabiliyordu. Gerçek maç anahtarını kullan.
+    _strict_maclar = {mac_key(a.get("m", {})) for a in adaylar}
     if len(_strict_maclar) < 2 and kontrollu_gevsek_adaylar:
         kontrollu_gevsek_adaylar.sort(
             key=lambda x: (
@@ -2610,7 +2576,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             reverse=True,
         )
         for _ek in kontrollu_gevsek_adaylar:
-            _mid = str(_ek.get("match_id") or _ek.get("id") or f'{_ek.get("home_team","")}|{_ek.get("away_team","")}')
+            _mid = mac_key(_ek.get("m", {}))
             if _mid in _strict_maclar:
                 continue
             adaylar.append(_ek)
@@ -2649,6 +2615,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "gunun_puani": round(float(aday["gunun_puani"]), 1),
             "baglam_ayari": round(float(aday["baglam_ayari"]), 2),
             "baglam": aday.get("baglam", {}),
+            "kontrollu_gevsetme": bool(aday.get("kontrollu_gevsetme", False)),
             "otomatik": True,
             "profil": "Günün Kuponu",
             "sport_key": m.get("sport_key", ""),
