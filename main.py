@@ -4508,6 +4508,11 @@ def tahmin_logunu_yaz(kayitlar):
         return False
 
 
+def sonuc_takibini_sifirla():
+    """Yalnızca Sonuç Takibi kayıtlarını temizler; API anahtarları ve kupon geçmişi korunur."""
+    return tahmin_logunu_yaz([])
+
+
 def tahmin_loguna_baglam_yaz(m, label, baglam):
     """Hesaplanan bağlamı, aynı maç+tahmin kaydına sonuç analizi için snapshot olarak ekler."""
     try:
@@ -6872,6 +6877,11 @@ with st.sidebar:
                 st.session_state.last_bulten_df = yenilenen_bulten
             st.success(f"Oranlar yenilendi · {len(yenilenen_bulten)} maç")
 
+    # Sonuç Takibi resetinden sonra widget oluşturulmadan önce Maç Analizi'ne dön.
+    # Böylece yeni kodla analiz otomatik olarak yeniden çalıştırılabilir.
+    if st.session_state.pop("sonuc_reset_hedef_mac_analizi", False):
+        st.session_state["sayfa_modu"] = "Maç Analizi"
+
     sayfa_modu = st.radio(
         "Görünüm",
         ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
@@ -7744,6 +7754,37 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     )
     yenile = sonuc_yenile_btn
     st.caption("Skor servisi son üç günü getirir; sonuçları en az üç günde bir üstteki SONUÇLARI YENİLE düğmesiyle kontrol et.")
+
+    reset_sol, reset_sag = st.columns([3, 1])
+    with reset_sag:
+        if st.button(
+            "🗑️ SONUÇ TAKİBİNİ SIFIRLA",
+            use_container_width=True,
+            key="sonuc_takibini_sifirla_btn",
+            help="Eski Sonuç Takibi kayıtlarını temizler ve mevcut ayarlarla analizi yeni kod üzerinden yeniden çalıştırır.",
+        ):
+            if sonuc_takibini_sifirla():
+                # Eski analiz çıktıları yeni Sonuç Takibi'ne tekrar yazılmasın.
+                for _key in (
+                    "final_list",
+                    "top10_list",
+                    "top50_list",
+                    "tum_profil_aday_listeleri",
+                ):
+                    st.session_state.pop(_key, None)
+
+                # API key, lig/tarih/sezon seçimleri ve kupon geçmişi korunur.
+                # Bir sonraki rerun'da Maç Analizi'ne geçip ANALİZİ BAŞLAT akışını
+                # otomatik tetikle.
+                st.session_state["sonuc_reset_hedef_mac_analizi"] = True
+                st.session_state["sonuc_reset_otomatik_analiz"] = True
+                st.session_state["sonuc_reset_bilgi"] = (
+                    "Sonuç Takibi sıfırlandı. Tahminler yeni kodla yeniden oluşturuluyor."
+                )
+                st.rerun()
+            else:
+                st.error("Sonuç Takibi sıfırlanamadı. JSON dosyasına yazma iznini kontrol et.")
+
     if yenile:
         takip_key = get_app_api_key()
         if not takip_key:
@@ -8138,6 +8179,14 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     legal_footer()
     st.stop()
 
+
+# Sonuç Takibi sıfırlandıysa, eski final_list'i kullanmak yerine aynı analiz
+# motorunu mevcut ayarlarla baştan çalıştır.
+if st.session_state.pop("sonuc_reset_otomatik_analiz", False):
+    analiz_btn = True
+    _reset_bilgi = st.session_state.pop("sonuc_reset_bilgi", "")
+    if _reset_bilgi:
+        st.info(_reset_bilgi)
 
 if analiz_btn:
     if not API_KEY or not secili_kodlar:
