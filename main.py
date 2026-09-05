@@ -45,10 +45,9 @@ st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 # ==========================================================
 
 # Kullanım:
-# Streamlit Cloud > Settings > Secrets içine birden fazla key ekleyebilirsin:
-# THE_ODDS_API_KEYS = ["key1", "key2", "key3"]
-# Aktif key'in kredisi bittiğinde uygulama sıradaki key'e otomatik geçer.
-# Eski ODDS_API_KEY ve sidebar kullanıcı key'i geriye dönük desteklenir.
+# 1) Kullanıcı sidebar'dan kendi ODDS API KEY'ini girebilir.
+# 2) İstersen Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY ekleyebilirsin.
+#    Sidebar'dan girilen key, secrets key'in önüne geçer.
 
 def get_secret_value(name, default=""):
     try:
@@ -57,142 +56,11 @@ def get_secret_value(name, default=""):
         return default
 
 
-def get_odds_api_keys():
-    """The Odds API key havuzunu secrets + isteğe bağlı kullanıcı key'inden oluşturur."""
-    keys = []
-
-    # Önerilen kullanım:
-    # THE_ODDS_API_KEYS = ["key1", "key2", "key3", ...]
-    try:
-        raw = get_secret_value("THE_ODDS_API_KEYS", [])
-        if isinstance(raw, str):
-            raw = [x.strip() for x in raw.split(",") if x.strip()]
-        # Streamlit secrets TOML dizileri list-benzeri nesne döndürebilir.
-        if raw and not isinstance(raw, str):
-            try:
-                keys.extend(str(x).strip() for x in list(raw) if str(x).strip())
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Eski tek-key ayarı da çalışmaya devam etsin.
-    legacy = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
-    if legacy:
-        keys.append(legacy)
-
-    # İstenirse sidebar'daki kullanıcı key'i en sona yedek olarak kullanılabilir.
-    user_key = str(st.session_state.get("user_api_key", "") or "").strip()
-    if user_key:
-        keys.append(user_key)
-
-    # Tekrarları sırayı bozmadan temizle.
-    temiz = []
-    gorulen = set()
-    for key in keys:
-        if key and key not in gorulen:
-            gorulen.add(key)
-            temiz.append(key)
-    return temiz
-
-
 def get_app_api_key():
-    """Mevcut aktif The Odds API key'ini döndürür."""
-    keys = get_odds_api_keys()
-    if not keys:
-        return ""
-    idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(keys)
-    st.session_state["odds_api_key_index"] = idx
-    return keys[idx]
-
-
-def _odds_api_kredi_bitti(resp):
-    """The Odds API yanıtında kredi/limit tükenmesini algılar."""
-    try:
-        remaining = resp.headers.get("x-requests-remaining")
-        if remaining is not None and int(float(remaining)) <= 0:
-            return True
-    except Exception:
-        pass
-
-    try:
-        body = (resp.text or "").upper()
-    except Exception:
-        body = ""
-
-    if any(x in body for x in (
-        "OUT_OF_USAGE_CREDITS",
-        "USAGE_CREDITS",
-        "NO CREDITS",
-        "QUOTA EXCEEDED",
-    )):
-        return True
-
-    # 429 kota/rate-limit cevabında da sıradaki key denenir.
-    return getattr(resp, "status_code", None) in (402, 429)
-
-
-def odds_api_request(url, params=None, timeout=15):
-    """
-    The Odds API isteğini key havuzuyla yapar.
-    Aktif key'in kredisi biterse aynı isteği sıradaki key ile otomatik tekrarlar.
-    """
-    keys = get_odds_api_keys()
-    if not keys:
-        raise RuntimeError("The Odds API key havuzu boş.")
-
-    start_idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(keys)
-    base_params = dict(params or {})
-    base_params.pop("apiKey", None)
-
-    last_response = None
-    last_exception = None
-
-    for offset in range(len(keys)):
-        idx = (start_idx + offset) % len(keys)
-        key = keys[idx]
-        req_params = dict(base_params)
-        req_params["apiKey"] = key
-
-        try:
-            r = requests.get(url, params=req_params, timeout=timeout)
-            last_response = r
-
-            # Kota bilgisini aktif istekten kaydet.
-            try:
-                st.session_state["odds_api_quota"] = {
-                    "remaining": r.headers.get("x-requests-remaining"),
-                    "used": r.headers.get("x-requests-used"),
-                    "last": r.headers.get("x-requests-last"),
-                    "updated_at": time.time(),
-                    "key_index": idx + 1,
-                    "key_count": len(keys),
-                }
-            except Exception:
-                pass
-
-            if _odds_api_kredi_bitti(r):
-                # Sonraki key'i aktif yap ve aynı isteği onunla tekrar dene.
-                st.session_state["odds_api_key_index"] = (idx + 1) % len(keys)
-                continue
-
-            # 401 geçersiz key ise de sıradakine geç.
-            if r.status_code == 401:
-                st.session_state["odds_api_key_index"] = (idx + 1) % len(keys)
-                continue
-
-            st.session_state["odds_api_key_index"] = idx
-            return r
-
-        except Exception as exc:
-            last_exception = exc
-            continue
-
-    if last_response is not None:
-        return last_response
-    if last_exception is not None:
-        raise last_exception
-    raise RuntimeError("The Odds API key havuzundaki hiçbir anahtar kullanılamıyor.")
+    user_key = str(st.session_state.get("user_api_key", "")).strip()
+    if user_key:
+        return user_key
+    return str(get_secret_value("ODDS_API_KEY", "")).strip()
 
 
 def get_api_football_key():
@@ -209,22 +77,34 @@ def get_api_football_key():
 
 def api_key_panel():
     with st.sidebar:
-        st.markdown("### 🔑 The Odds API")
+        st.markdown("### 🔑 API Key Girişi")
 
-        _odds_keys = get_odds_api_keys()
-        if _odds_keys:
-            _idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(_odds_keys)
-            st.success(f"Key havuzu aktif ✅  •  {_idx + 1}/{len(_odds_keys)}")
-            _q = st.session_state.get("odds_api_quota", {}) or {}
-            if _q.get("remaining") is not None:
-                st.caption(
-                    f"Kalan kredi: {_q.get('remaining')}  ·  "
-                    f"Kullanılan: {_q.get('used', '—')}"
-                )
-            else:
-                st.caption("Kredi bilgisi ilk başarılı API isteğinden sonra görünür.")
+        current_key = st.session_state.get("user_api_key", "")
+        api_key_input = st.text_input(
+            "ODDS API KEY",
+            value=current_key,
+            placeholder="API key gir...",
+            type="password",
+            key="api_key_input",
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Kaydet", use_container_width=True, key="save_api_key_btn"):
+                st.session_state["user_api_key"] = api_key_input.strip()
+                st.success("API Key kaydedildi ✅")
+                st.rerun()
+
+        with c2:
+            if st.button("Temizle", use_container_width=True, key="clear_api_key_btn"):
+                st.session_state.pop("user_api_key", None)
+                st.success("API Key temizlendi")
+                st.rerun()
+
+        if get_app_api_key():
+            st.success("Odds API key aktif ✅")
         else:
-            st.error("THE_ODDS_API_KEYS bulunamadı. Streamlit Secrets kaydını kontrol et.")
+            st.warning("Odds API key yok. Kayıtlı bülten varsa açılır; yeni veri çekmek için API key gerekir.")
 
         st.markdown("##### ⚽ API-Football (bağlam fallback)")
         af_current = st.session_state.get("user_api_football_key", "")
@@ -1439,9 +1319,9 @@ def futbol_veri_motoru(sezonlar):
 @st.cache_data(ttl=1800, show_spinner=False)
 def odds_spor_katalogu(key):
     try:
-        r = odds_api_request(
+        r = requests.get(
             "https://api.the-odds-api.com/v4/sports/",
-            params={"all": "true"}, timeout=12,
+            params={"apiKey": key, "all": "true"}, timeout=12,
         )
         return r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
     except Exception:
@@ -1469,22 +1349,16 @@ def bulten_cek(key, kodlar, t):
         st.error("Maç bültenini çekmek için ODDS API key gerekli.")
         return pd.DataFrame()
     res = []
-    st.session_state["odds_api_debug"] = {
-        "raw_matches": 0,
-        "date_matches": 0,
-        "selected_date": str(t),
-        "leagues": list(kodlar),
-        "samples": [],
-    }
 
     for secili_kod in kodlar:
         k = odds_lig_kodu_coz(key, secili_kod)
         if not k:
             continue
         try:
-            r = odds_api_request(
+            r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
                 params={
+                    "apiKey": key,
                     "regions": "eu",
                     "markets": "h2h,totals",
                     "oddsFormat": "decimal",
@@ -1516,38 +1390,14 @@ def bulten_cek(key, kodlar, t):
             if not isinstance(data, list):
                 continue
 
-            st.session_state["odds_api_debug"]["raw_matches"] += len(data)
-
             for m in data:
                 try:
-                    _raw_time = str(m["commence_time"])
-                    # The Odds API commence_time UTC'dir. +3 sabit eklemek yerine
-                    # timezone-aware olarak Europe/Istanbul'a çeviriyoruz.
-                    try:
-                        from zoneinfo import ZoneInfo
-                        _utc_dt = datetime.fromisoformat(_raw_time.replace("Z", "+00:00"))
-                        tm = _utc_dt.astimezone(ZoneInfo("Europe/Istanbul")).replace(tzinfo=None)
-                    except Exception:
-                        tm = datetime.strptime(_raw_time, "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
-
-                    _dbg_samples = st.session_state["odds_api_debug"].setdefault("samples", [])
-                    if len(_dbg_samples) < 12:
-                        _dbg_samples.append({
-                            "lig": str(m.get("sport_title") or k),
-                            "ev": str(m.get("home_team", "")),
-                            "dep": str(m.get("away_team", "")),
-                            "api_utc": _raw_time,
-                            "turkiye": tm.strftime("%Y-%m-%d %H:%M"),
-                            "turkiye_tarih": tm.date().isoformat(),
-                            "eslesti": bool(tm.date() == t),
-                        })
+                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
                 except Exception:
                     continue
 
                 if tm.date() != t:
                     continue
-
-                st.session_state["odds_api_debug"]["date_matches"] += 1
 
                 bookies = m.get("bookmakers", [])
                 if not bookies:
@@ -4842,8 +4692,15 @@ def tahmin_sonuclarini_guncelle(api_key):
     for lig in ligler:
         try:
             skor_url = f"https://api.the-odds-api.com/v4/sports/{lig}/scores/"
-            skor_param = {"daysFrom": 3, "dateFormat": "iso"}
-            r = odds_api_request(skor_url, params=skor_param, timeout=15)
+            skor_param = {"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}
+            r = requests.get(skor_url, params=skor_param, timeout=15)
+            # Oturumda kalmış anahtar geçersizse ve uygulamada farklı bir secret
+            # anahtar varsa sonuç takibini onunla bir kez daha dene.
+            if r.status_code == 401:
+                yedek_key = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
+                if yedek_key and yedek_key != str(api_key).strip():
+                    skor_param["apiKey"] = yedek_key
+                    r = requests.get(skor_url, params=skor_param, timeout=15)
             if r.status_code == 200 and isinstance(r.json(), list):
                 skorlar.extend(r.json())
             elif r.status_code == 401:
@@ -4969,9 +4826,9 @@ def canli_analizleri_getir(api_key):
     skorlar, hatalar = [], []
     for lig in ligler:
         try:
-            r = odds_api_request(
+            r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{lig}/scores/",
-                params={"daysFrom": 1, "dateFormat": "iso"},
+                params={"apiKey": api_key, "daysFrom": 1, "dateFormat": "iso"},
                 timeout=15,
             )
             if r.status_code == 200 and isinstance(r.json(), list):
@@ -6991,61 +6848,23 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     with st.expander("🔑 API Key", expanded=False):
-        _odds_keys = get_odds_api_keys()
-        if _odds_keys:
-            _idx = int(st.session_state.get("odds_api_key_index", 0) or 0) % len(_odds_keys)
-            st.success(f"The Odds API havuzu aktif ✅ · Key {_idx + 1}/{len(_odds_keys)}")
-            _q = st.session_state.get("odds_api_quota", {}) or {}
-            if _q.get("remaining") is not None:
-                st.caption(f"Kalan kredi: {_q.get('remaining')} · Kullanılan: {_q.get('used', '—')}")
-            else:
-                st.caption("Kredi bilgisi ilk API isteğinden sonra görünür.")
-
-            if st.button("🧪 Key havuzunu test et", use_container_width=True, key="test_odds_key_pool"):
-                _sonuclar = []
-                for _i, _k in enumerate(_odds_keys, 1):
-                    try:
-                        _r = requests.get(
-                            "https://api.the-odds-api.com/v4/sports/",
-                            params={"apiKey": _k},
-                            timeout=12,
-                        )
-                        _rem = _r.headers.get("x-requests-remaining", "—")
-                        _used = _r.headers.get("x-requests-used", "—")
-                        _sonuclar.append((_i, _r.status_code, _rem, _used))
-                    except Exception as _e:
-                        _sonuclar.append((_i, "BAĞLANTI", "—", str(_e)[:80]))
-
-                for _i, _status, _rem, _used in _sonuclar:
-                    if _status == 200:
-                        st.success(f"Key {_i}: Çalışıyor · kalan {_rem} · kullanılan {_used}")
-                    else:
-                        st.error(f"Key {_i}: HTTP {_status} · kalan {_rem} · {_used}")
+        current_key = st.session_state.get("user_api_key", "")
+        api_key_input = st.text_input("ODDS API KEY", value=current_key, placeholder="API key gir...", type="password", key="api_key_input_sidebar_clean")
+        a1, a2 = st.columns(2)
+        with a1:
+            if st.button("Kaydet", use_container_width=True, key="save_api_key_sidebar_clean"):
+                st.session_state["user_api_key"] = api_key_input.strip()
+                st.success("API Key kaydedildi ✅")
+                st.rerun()
+        with a2:
+            if st.button("Temizle", use_container_width=True, key="clear_api_key_sidebar_clean"):
+                st.session_state.pop("user_api_key", None)
+                st.success("API Key temizlendi")
+                st.rerun()
+        if get_app_api_key():
+            st.success("Odds API key aktif ✅")
         else:
-            st.error("THE_ODDS_API_KEYS okunamadı. Streamlit Secrets kaydını kontrol et.")
-
-        _last_odds_error = st.session_state.get("odds_api_last_error")
-        if _last_odds_error:
-            st.error(f"Son bülten hatası: {_last_odds_error}")
-
-        _dbg = st.session_state.get("odds_api_debug", {}) or {}
-        if _dbg:
-            st.caption(
-                f"API ham maç: {_dbg.get('raw_matches', 0)} · "
-                f"Seçili tarihte: {_dbg.get('date_matches', 0)} · "
-                f"Tarih: {_dbg.get('selected_date', '—')}"
-            )
-
-            _samples = _dbg.get("samples", []) or []
-            if _samples:
-                with st.expander("🕒 API tarih debug", expanded=False):
-                    for _s in _samples:
-                        _ok = "✅" if _s.get("eslesti") else "❌"
-                        st.caption(
-                            f"{_ok} {_s.get('ev','')} - {_s.get('dep','')} · "
-                            f"API UTC: {_s.get('api_utc','—')} · "
-                            f"TR: {_s.get('turkiye','—')}"
-                        )
+            st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için Odds API key gerekir.")
 
         st.markdown("##### ⚽ API-Football · bağlam fallback")
         af_current = st.session_state.get("user_api_football_key", "")
