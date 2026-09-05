@@ -1956,13 +1956,12 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
     return secilenler if len(secilenler) >= minimum_secim else []
 
 
-def gunun_en_guvenli_kuponunu_olustur(final_list, maks=5, min_guven=65):
-    """Günün en güvenilir seçimlerinden tek kupon üretir.
+def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72):
+    """Kalite eşiğini geçen seçimlerden tek bir Günün Kuponu üretir.
 
-    - Tüm güçlü marketleri değerlendirir.
-    - Aynı maçtan yalnızca bir seçim alır.
-    - Öncelik: güven > kararlılık > stabilite skoru > örnek sayısı.
-    - En fazla ``maks`` seçim döndürür.
+    Amaç kuponu 5-6 maça doldurmak değil, gerçekten güçlü seçimlerde durmaktır.
+    Aynı maçtan yalnızca bir seçim alınır. 2-6 seçim üretilebilir.
+    Güven kadar 0.00-0.10 taramasındaki kararlılık da dikkate alınır.
     """
     simdi = datetime.now()
     adaylar = []
@@ -1975,28 +1974,49 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=5, min_guven=65):
         if t.get("belirsiz") or not t.get("oynanabilir", True):
             continue
 
-        guven = int(t.get("ana_p", 0) or 0)
+        guven = min(100, int(t.get("ana_p", 0) or 0))
         ornek = int(t.get("ornek", 0) or 0)
         tolerans = float(t.get("kullanilan_tolerans", 0.08) or 0.08)
         stabil = int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0)
-        if guven < int(min_guven):
+        stabil_skor = float(t.get("top10_stabilite_skoru", item.get("top10_stabilite_skoru", 0)) or 0)
+        min_ornek_gerekli = max(5, dinamik_min_mac(tolerans))
+
+        if guven < int(min_guven) or ornek < min_ornek_gerekli or stabil < 3:
             continue
-        if ornek < max(5, dinamik_min_mac(tolerans)):
+
+        # Dinamik kalite kapısı. Yüksek güven, daha düşük kararlılığı bir ölçüde
+        # telafi edebilir; güven düştükçe daha fazla hassasiyet noktasında aynı
+        # marketin kararlı kalmasını isteriz. Böylece kupon 5-6 maça zorla dolmaz.
+        kalite_gecer = (
+            (guven >= 92 and stabil >= 3)
+            or (guven >= 86 and stabil >= 4)
+            or (guven >= 80 and stabil >= 6)
+            or (guven >= 76 and stabil >= 8)
+        )
+        if not kalite_gecer:
             continue
-        if stabil < 1:
-            continue
+
+        # Sıralamada güven ana unsur; kararlılık ciddi ağırlık taşır.
+        # Örnek sayısı ve mevcut stabilite skoru eşitlik/ince ayar için kullanılır.
+        gunun_puani = (
+            guven
+            + stabil * 1.8
+            + min(ornek, 40) * 0.12
+            + min(max(stabil_skor, 0.0), 200.0) * 0.015
+        )
 
         adaylar.append({
             "m": m,
             "t": t,
             "guven": guven,
             "stabil": stabil,
-            "stabil_skor": float(t.get("top10_stabilite_skoru", item.get("top10_stabilite_skoru", 0)) or 0),
+            "stabil_skor": stabil_skor,
             "ornek": ornek,
+            "gunun_puani": gunun_puani,
         })
 
     adaylar.sort(
-        key=lambda x: (x["guven"], x["stabil"], x["stabil_skor"], x["ornek"]),
+        key=lambda x: (x["gunun_puani"], x["guven"], x["stabil"], x["ornek"]),
         reverse=True,
     )
 
@@ -2022,7 +2042,8 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=5, min_guven=65):
             "oran_tahmini": bool(t.get("top10_market_oran_tahmini", False)),
             "hassasiyet": float(t.get("kullanilan_tolerans", 0.08) or 0.08),
             "hassasiyetler": list(t.get("top10_hassasiyetler", t.get("stability_tols", [])) or []),
-            "hassasiyet_sayisi": int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0),
+            "hassasiyet_sayisi": int(aday["stabil"]),
+            "gunun_puani": round(float(aday["gunun_puani"]), 1),
             "otomatik": True,
             "profil": "Günün Kuponu",
             "sport_key": m.get("sport_key", ""),
@@ -2034,6 +2055,8 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=5, min_guven=65):
         if len(secimler) >= int(maks):
             break
 
+    # Tek maç "kupon" üretmeyelim. Yeterli kalite yoksa kullanıcıya açıkça
+    # kupon bulunamadığını söylemek, zayıf seçim eklemekten daha doğrudur.
     return secimler if len(secimler) >= 2 else []
 
 
@@ -8324,14 +8347,14 @@ else:
         with bilgi_col:
             st.caption(
                 "Her maç 0.00 ile 0.10 arasında 0.01'er hassasiyet adımıyla toplam 11 noktada taranır. "
-                "Günün Kuponu tüm uygun marketler içinden güveni en yüksek seçimleri tek kuponda toplar; aynı maçtan yalnızca bir seçim alır. "
+                "Günün Kuponu güven + kararlılık + örnek kalitesini birlikte değerlendirir; 2-6 maç seçebilir ve sırf kuponu doldurmak için zayıf seçim eklemez. Aynı maçtan yalnızca bir seçim alır. "
                 "Temkinli, Dengeli ve Yüksek Oran profilleri ise kendi kurallarıyla ayrı kuponlar üretir."
             )
         with gunun_col:
             gunun_tek_kupon_btn = st.button(
                 "⭐ Günün kuponu", key="gunun_en_guvenli_tek_kupon_buton",
                 use_container_width=True,
-                help="En güvenilir seçimlerden tek bir kupon oluşturur (en fazla 5 maç).",
+                help="Kalite eşiğini geçen en güvenilir seçimlerden tek kupon oluşturur. 2-6 maç olabilir; sırf doldurmak için seçim eklemez.",
             )
         with olustur_col:
             gunun_kupon_btn = st.button(
@@ -8566,7 +8589,7 @@ else:
                 tum_marketler=True,
             )
             gunun_secimleri = gunun_en_guvenli_kuponunu_olustur(
-                gunun_kaynagi, maks=5, min_guven=65
+                gunun_kaynagi, maks=6, min_guven=72
             )
             if gunun_secimleri:
                 kupon_gecmisine_ekle(gunun_secimleri, "Günün Kuponu", "0.00–0.10 tarama")
@@ -8574,7 +8597,7 @@ else:
                 st.session_state.scroll_to_coupon = True
                 kupon_mesaji = (
                     "success",
-                    f"⭐ Günün Kuponu oluşturuldu: {len(gunun_secimleri)} en güvenilir seçim tek kupona eklendi."
+                    f"⭐ Günün Kuponu oluşturuldu: kalite eşiğini geçen {len(gunun_secimleri)} güçlü seçim tek kupona eklendi."
                 )
             else:
                 kupon_mesaji = (
