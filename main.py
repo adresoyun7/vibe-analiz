@@ -4505,11 +4505,11 @@ def gecmis_ornek_siralama_anahtari(item):
     """Geçmiş Örnekleri: en yüksek İY/MS/2.5/KG yüzdesi önce, eşitse örnek sayısı fazla olan önce."""
     ornekler = item.get("ornekler") if isinstance(item, dict) else None
     if ornekler is None or getattr(ornekler, "empty", True):
-        return (0.0, 0)
+        return (0, 0.0, 0.0, 0)
 
     toplam_ornek = int(len(ornekler))
     if toplam_ornek <= 0:
-        return (0.0, 0)
+        return (0, 0.0, 0.0, 0)
 
     yuzdeler = []
 
@@ -4559,8 +4559,23 @@ def gecmis_ornek_siralama_anahtari(item):
         ornek_bonusu = (toplam_ornek - 5) * (8.0 / 20.0)
 
     guc_puani = en_yuksek_pct + ornek_bonusu
-    # Önce güç puanı; eşitlikte ham yüzde ve ardından örnek sayısı.
-    return (guc_puani, en_yuksek_pct, toplam_ornek)
+
+    # Sıralama katmanı:
+    # - 0.00 hassasiyette 1 örnek normal şekilde yüzde/güç puanına göre sıralanır.
+    # - 0.01+ hassasiyette yalnızca 1 örnekli maçlar, tüm 2+ örnekli maçların
+    #   altında; 0 örnekli maçların ise hemen üstünde tutulur.
+    try:
+        aktif_hassasiyet = float(TOLERANS or 0.0)
+    except Exception:
+        aktif_hassasiyet = 0.0
+
+    if toplam_ornek == 1 and abs(aktif_hassasiyet) >= 1e-9:
+        siralama_katmani = 1
+    else:
+        siralama_katmani = 2
+
+    # Önce katman; sonra güç puanı, ham yüzde ve örnek sayısı.
+    return (siralama_katmani, guc_puani, en_yuksek_pct, toplam_ornek)
 
 
 
