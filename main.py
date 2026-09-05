@@ -3483,48 +3483,80 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         goal_bias = 1.03
         combo_bias = 1.08
 
-    ou25_best_raw = max(ms25_raw, 1 - ms25_raw)
-    kg_best_raw = max(kg_raw, 1 - kg_raw)
+    # Karşıt marketler önce kendi aileleri içinde yarıştırılır. Böylece örneğin
+    # KG Yok %72 iken KG Var %63 resmî ana tahmin olarak kalamaz.
+    def _adj(raw, bias, label):
+        return min(float(raw) * guven_carpani * bias * form_market_carpani(label, form_profili), 0.99)
 
-    ms_label = ms_side
-    ou_label = "2.5 Üst" if ms25_raw >= 0.5 else "2.5 Alt"
-    kg_label = "KG Var" if kg_raw >= 0.5 else "KG Yok"
+    ms_taraflar = [
+        {"label": "MS 1", "raw_prob": ms1_raw, "conf_prob": _adj(ms1_raw, ms_bias, "MS 1"), "market": "ms", "mod": "H"},
+        {"label": "Beraberlik", "raw_prob": msx_raw, "conf_prob": _adj(msx_raw, ms_bias, "Beraberlik"), "market": "ms", "mod": "D"},
+        {"label": "MS 2", "raw_prob": ms2_raw, "conf_prob": _adj(ms2_raw, ms_bias, "MS 2"), "market": "ms", "mod": "A"},
+    ]
+    ou_taraflar = [
+        {"label": "2.5 Üst", "raw_prob": ms25_raw, "conf_prob": _adj(ms25_raw, goal_bias, "2.5 Üst"), "market": "ou25"},
+        {"label": "2.5 Alt", "raw_prob": 1-ms25_raw, "conf_prob": _adj(1-ms25_raw, goal_bias, "2.5 Alt"), "market": "ou25"},
+    ]
+    kg_taraflar = [
+        {"label": "KG Var", "raw_prob": kg_raw, "conf_prob": _adj(kg_raw, goal_bias, "KG Var"), "market": "kg"},
+        {"label": "KG Yok", "raw_prob": 1-kg_raw, "conf_prob": _adj(1-kg_raw, goal_bias, "KG Yok"), "market": "kg"},
+    ]
 
-    ms_form_factor = form_market_carpani(ms_label, form_profili)
-    ou_form_factor = form_market_carpani(ou_label, form_profili)
-    kg_form_factor = form_market_carpani(kg_label, form_profili)
+    def _aile_kazanani(taraflar):
+        sirali = sorted(taraflar, key=lambda x: (x["conf_prob"], x["raw_prob"]), reverse=True)
+        kazanan = dict(sirali[0])
+        fark = float(sirali[0]["conf_prob"]) - float(sirali[1]["conf_prob"])
+        kazanan["aile_farki"] = fark
+        # Karşıt iki taraf %4 güven puanından daha yakınsa bu aile kararsızdır.
+        kazanan["aile_belirsiz"] = fark < 0.04
+        return kazanan
 
-    ms_prob = min(ms_raw * guven_carpani * ms_bias * ms_form_factor, 0.99)
-    ou25_prob = min(ou25_best_raw * guven_carpani * goal_bias * ou_form_factor, 0.99)
-    kg_prob = min(kg_best_raw * guven_carpani * goal_bias * kg_form_factor, 0.99)
+    ms_best = _aile_kazanani(ms_taraflar)
+    ou_best = _aile_kazanani(ou_taraflar)
+    kg_best = _aile_kazanani(kg_taraflar)
+
+    # Skor yönü ve yardımcı MS alanları da düzeltilmiş MS ailesinin kazananını izlesin.
+    ms_label = ms_best["label"]
+    ms_side = ms_label
+    ms_mod = ms_best.get("mod", ms_mod)
+    ms_raw = ms_best["raw_prob"]
+    ou_label = ou_best["label"]
+    kg_label = kg_best["label"]
+    ou25_best_raw = ou_best["raw_prob"]
+    kg_best_raw = kg_best["raw_prob"]
+    ms_prob = ms_best["conf_prob"]
+    ou25_prob = ou_best["conf_prob"]
+    kg_prob = kg_best["conf_prob"]
 
     # belirsiz maç tespiti
     ms_sorted = sorted([ms1_raw, msx_raw, ms2_raw], reverse=True)
     belirsiz = (max(ms1_raw, msx_raw, ms2_raw) < 0.42 and (ms_sorted[0] - ms_sorted[1]) < 0.06) or (abs(ms1_raw - ms2_raw) < 0.05 and abs(ms1_raw - msx_raw) < 0.05)
 
-    cands = [
-        {"label": ms_label, "raw_prob": ms_raw, "conf_prob": ms_prob, "market": "ms"},
-        {"label": ou_label, "raw_prob": ou25_best_raw, "conf_prob": ou25_prob, "market": "ou25"},
-        {"label": kg_label, "raw_prob": kg_best_raw, "conf_prob": kg_prob, "market": "kg"},
-    ]
-
-    # Form aktifken market seçimi, ham olasılıktan çok düzeltilmiş güvene göre yapılır.
-    # Etki ±%5 ile sınırlı olduğu için oran-tarih modeli ana belirleyici olmaya devam eder.
-    best = max(cands, key=lambda x: (x["conf_prob"], x["raw_prob"]))
+    cands = [ms_best, ou_best, kg_best]
+    net_cands = [c for c in cands if not c.get("aile_belirsiz")]
+    # Mümkünse karşıt tarafları birbirine çok yakın olan market ailesini ana tahmin yapma.
+    secim_havuzu = net_cands or cands
+    best = max(secim_havuzu, key=lambda x: (x["conf_prob"], x["raw_prob"]))
     best_conf, fake_drop = fake_confidence_duzelt(best["conf_prob"], sample, float(tolerans))
 
     ana_label = best["label"]
     ana_p = int(round(best_conf * 100))
     ana_raw_p = int(round(best["raw_prob"] * 100))
 
-    others = [c for c in cands if c["label"] != ana_label]
-    alt = max(others, key=lambda x: (x["conf_prob"], x["raw_prob"])) if others else cands[1]
-    alt_conf, _ = fake_confidence_duzelt(alt["conf_prob"], sample, float(tolerans))
-    alt_label = alt["label"]
-    alt_p = int(round(alt_conf * 100))
+    # Alternatif MUTLAKA başka market ailesinden gelir. Ana KG Var ise KG Yok,
+    # ana 2.5 Üst ise 2.5 Alt alternatif olamaz.
+    others = [c for c in cands if c["market"] != best["market"] and not c.get("aile_belirsiz")]
+    if not others:
+        others = [c for c in cands if c["market"] != best["market"]]
+    if others:
+        alt = max(others, key=lambda x: (x["conf_prob"], x["raw_prob"]))
+        alt_conf, _ = fake_confidence_duzelt(alt["conf_prob"], sample, float(tolerans))
+        alt_label = alt["label"]
+        alt_p = int(round(alt_conf * 100))
+    else:
+        alt_label, alt_p = "", 0
 
-    # İkinci en güçlü market yalnızca güveni %60'ın ÜSTÜNDEYSE alternatiftir.
-    # Ana ve alternatif aynı maç kaydında tutulur; iki ayrı tahmin satırı oluşturulmaz.
+    # İkinci en güçlü farklı market yalnızca güveni %60'ın ÜSTÜNDEYSE alternatiftir.
     if alt_p <= 60:
         alt_label = ""
         alt_p = 0
@@ -4381,8 +4413,19 @@ def _tahmin_kaydi_sirasi(kayit):
     return puan, guven, ornek, -hassasiyet
 
 
+def _tahmin_market_ailesi(label):
+    l = str(label or "").strip()
+    if l in {"KG Var", "KG Yok"}:
+        return "kg"
+    if l in {"2.5 Üst", "2.5 Alt"}:
+        return "ou25"
+    if l in {"MS 1", "MS1", "Beraberlik", "MS X", "MSX", "MS 2", "MS2"}:
+        return "ms"
+    return l
+
+
 def _en_iyi_alternatif(ana_label, kayitlar):
-    """Aynı maçın tüm kayıtlarından ana marketten farklı en güçlü %60+ seçimi bulur."""
+    """Aynı maçın kayıtlarından farklı market ailesindeki en güçlü %60+ alternatifi bulur."""
     adaylar = []
     for kayit in kayitlar or []:
         for etiket_alani, guven_alani, oran_alani in [
@@ -4394,7 +4437,12 @@ def _en_iyi_alternatif(ana_label, kayitlar):
                 guven = float(kayit.get(guven_alani, 0) or 0)
             except Exception:
                 guven = 0.0
-            if not etiket or etiket == str(ana_label) or guven <= 60:
+            if (
+                not etiket
+                or etiket == str(ana_label)
+                or _tahmin_market_ailesi(etiket) == _tahmin_market_ailesi(ana_label)
+                or guven <= 60
+            ):
                 continue
             adaylar.append((guven, etiket, kayit.get(oran_alani)))
     if not adaylar:
