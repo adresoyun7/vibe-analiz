@@ -1775,7 +1775,7 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
     ]
 
 
-def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=None, haric_secimler=None):
+def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=None, haric_secimler=None, aday_listesi_modu=False):
     """Hassasiyet uzlaşması bulunan analizlerden kupon taslağı üretir."""
     ayarlar = {
         "Temkinli": {"min_guven": 66, "taban": 2, "maks": 3, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
@@ -1922,7 +1922,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             break
 
     # Kupon sayılabilmesi için en az iki bağımsız seçim gerekir.
-    minimum_secim = 1 if profil == "Yüksek Oran" else 2
+    minimum_secim = 1 if (aday_listesi_modu or profil == "Yüksek Oran") else 2
     return secilenler if len(secilenler) >= minimum_secim else []
 
 
@@ -3064,7 +3064,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     score = round(score, 1)
 
 
-    return {
+    sonuc = {
         "ana_label": ana_label,
         "ana_p": ana_p,
         "playable_score": playable_score,
@@ -3147,7 +3147,25 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "stability_late_tols": [],
         "stability_early_text": "",
         "stability_late_text": "",
-    }, b.sort_values("Date", ascending=False)
+    }
+
+    # Kullanıcıya gösterilen / aday sıralamasında kullanılan güven yüzdeleri
+    # hiçbir koşulda %100'ü aşmasın. Puan/score alanları bundan bağımsız kalır.
+    guven_alanlari = {
+        "ana_p", "ana_raw_p", "alt_p", "kg_p", "combo_p", "combo_raw_p",
+        "canli_p", "ms_p", "ms1_p", "msx_p", "ms2_p", "ms25_p",
+        "ms25a_p", "ms15_p", "ms35_p", "kg_var_p", "kg_yok_p",
+        "iy05_p", "iy05a_p", "iy15_p", "iy1_p", "iyx_p", "iy2_p", "htft_p",
+    }
+    for alan in guven_alanlari:
+        if alan not in sonuc:
+            continue
+        try:
+            sonuc[alan] = max(0, min(100, int(round(float(sonuc[alan] or 0)))))
+        except Exception:
+            pass
+
+    return sonuc, b.sort_values("Date", ascending=False)
 
 
 
@@ -4027,7 +4045,7 @@ def kupon_marketi_uygun(label):
 
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                          sadece_ayni_lig=False, kupon_modu=False,
-                         kupon_profili=None):
+                         kupon_profili=None, tum_marketler=False):
     """
     Top10 / Top50 özel liste üretici.
 
@@ -4137,6 +4155,7 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
             continue
 
         en_iyi = None
+        mac_adaylari = []
 
         for _, grup in market_gruplari.items():
             kayitlar = grup["kayitlar"]
@@ -4240,10 +4259,16 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
             }
             aday["m"]["durum"] = mac_canli_durumu(aday["m"].get("zaman"))
 
-            if en_iyi is None or aday["top10_skor"] > en_iyi["top10_skor"]:
+            if tum_marketler:
+                # "Tüm aday listeleri" görünümünde maçın yalnızca tek marketini
+                # seçme; profil koşullarını geçebilecek bütün güçlü marketleri taşı.
+                mac_adaylari.append(aday)
+            elif en_iyi is None or aday["top10_skor"] > en_iyi["top10_skor"]:
                 en_iyi = aday
 
-        if en_iyi:
+        if tum_marketler:
+            adaylar.extend(mac_adaylari)
+        elif en_iyi:
             adaylar.append(en_iyi)
 
     adaylar.sort(
@@ -4255,6 +4280,13 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
         ),
         reverse=True,
     )
+
+    # Tüm profil adayları görünümünde çeşitlilik kotası uygulama.
+    # Amaç maçın profil kriterini karşılayan bütün marketlerini kullanıcıya göstermek.
+    if tum_marketler:
+        if limit is None or int(limit or 0) <= 0:
+            return adaylar
+        return adaylar[:int(limit)]
 
     # Top 10 sadece MS1/MS2 dolmasın diye küçük çeşitlilik kuralı.
     # Top50 için limit yüksek olduğundan aynı kural listeyi boğmaz.
@@ -8207,16 +8239,18 @@ else:
                     st.session_state.get("last_gecmis_df"),
                     st.session_state.get("last_bulten_df"),
                     min_ornek=min_ornek,
-                    limit=50,
+                    limit=500,
                     sadece_ayni_lig=sadece_ayni_lig,
                     kupon_modu=True,
                     kupon_profili=profil_adi,
+                    tum_marketler=True,
                 )
                 kullanilan = set()
                 tum_secimler = []
                 while True:
                     parca = gunun_kuponunu_olustur(
-                        kupon_kaynagi, profil_adi, haric_secimler=kullanilan
+                        kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
+                        aday_listesi_modu=True,
                     )
                     if not parca:
                         break
@@ -8240,8 +8274,8 @@ else:
         if isinstance(profil_aday_listeleri, dict):
             st.markdown("#### 📋 Tüm profil adayları")
             st.caption(
-                "Bunlar otomatik kupona girebilecek tüm uygun seçimlerdir. "
-                "Kuponlarla aynı renkli kart görünümündedir; Detay ile maç analizini açabilir, ＋ ile Kendi Kuponum'a ekleyebilirsin."
+                "Bunlar profil kriterlerini karşılayan tüm uygun marketlerdir. Aynı maçın birden fazla güçlü marketi burada görünebilir. "
+                "Otomatik kupon oluştururken ise aynı maçtan yine yalnızca tek seçim alınır. Detay ile maç analizini açabilir, ＋ ile Kendi Kuponum'a ekleyebilirsin."
             )
 
             profil_renkleri_aday = {
