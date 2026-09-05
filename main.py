@@ -2470,6 +2470,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
     """
     simdi = datetime.now()
     adaylar = []
+    kontrollu_gevsek_adaylar = []
 
     for item in final_list or []:
         m, t = item.get("m", {}), item.get("t", {})
@@ -2520,7 +2521,14 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             or (guven >= 80 and stabil >= 6)
             or (guven >= 76 and stabil >= 8)
         )
-        if not kalite_gecer:
+        kontrollu_gevsek_gecer = (
+            (guven >= 88 and stabil >= 3)
+            or (guven >= 83 and stabil >= 4)
+            or (guven >= 78 and stabil >= 5)
+            or (guven >= 74 and stabil >= 7)
+        )
+        _sadece_gevsek = (not kalite_gecer) and kontrollu_gevsek_gecer
+        if (not kalite_gecer) and (not kontrollu_gevsek_gecer):
             continue
 
         # Sıralamada güven ana unsur; kararlılık ciddi ağırlık taşır.
@@ -2533,7 +2541,21 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             + baglam_ayari
         )
 
-        adaylar.append({
+        if _sadece_gevsek:
+
+            {
+            "m": m,
+            "t": t,
+            "guven": guven,
+            "stabil": stabil,
+            "stabil_skor": stabil_skor,
+            "ornek": ornek,
+            "gunun_puani": gunun_puani,
+            "baglam": baglam,
+            "baglam_ayari": baglam_ayari,
+        }["kontrollu_gevsetme"] = True
+
+            kontrollu_gevsek_adaylar.append({
             "m": m,
             "t": t,
             "guven": guven,
@@ -2544,6 +2566,57 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "baglam": baglam,
             "baglam_ayari": baglam_ayari,
         })
+
+        else:
+
+            {
+            "m": m,
+            "t": t,
+            "guven": guven,
+            "stabil": stabil,
+            "stabil_skor": stabil_skor,
+            "ornek": ornek,
+            "gunun_puani": gunun_puani,
+            "baglam": baglam,
+            "baglam_ayari": baglam_ayari,
+        }["kontrollu_gevsetme"] = False
+
+            adaylar.append({
+            "m": m,
+            "t": t,
+            "guven": guven,
+            "stabil": stabil,
+            "stabil_skor": stabil_skor,
+            "ornek": ornek,
+            "gunun_puani": gunun_puani,
+            "baglam": baglam,
+            "baglam_ayari": baglam_ayari,
+        })
+    # Sıkı kriterlerle en az iki farklı maç çıkmazsa yalnızca güvenli sınırdaki
+    # adaylardan eksik seçim tamamlanır. Örnek/H2H/negatif bağlam kırmızı
+    # bayrakları yukarıdaki filtrelerde aynen korunur.
+    _strict_maclar = {
+        str(a.get("match_id") or a.get("id") or f'{a.get("home_team","")}|{a.get("away_team","")}')
+        for a in adaylar
+    }
+    if len(_strict_maclar) < 2 and kontrollu_gevsek_adaylar:
+        kontrollu_gevsek_adaylar.sort(
+            key=lambda x: (
+                float(x.get("gunun_puani", 0) or 0),
+                float(x.get("guven", 0) or 0),
+                int(x.get("stabil", 0) or 0),
+                int(x.get("ornek", 0) or 0),
+            ),
+            reverse=True,
+        )
+        for _ek in kontrollu_gevsek_adaylar:
+            _mid = str(_ek.get("match_id") or _ek.get("id") or f'{_ek.get("home_team","")}|{_ek.get("away_team","")}')
+            if _mid in _strict_maclar:
+                continue
+            adaylar.append(_ek)
+            _strict_maclar.add(_mid)
+            if len(_strict_maclar) >= 2:
+                break
 
     adaylar.sort(
         key=lambda x: (x["gunun_puani"], x["guven"], x["stabil"], x["ornek"]),
