@@ -8239,51 +8239,152 @@ else:
         profil_aday_listeleri = st.session_state.get("tum_profil_aday_listeleri")
         if isinstance(profil_aday_listeleri, dict):
             st.markdown("#### 📋 Tüm profil adayları")
-            st.caption("Bunlar otomatik kupona girebilecek tüm uygun seçimlerdir. İstediğini + ile Kendi Kuponum'a ekleyebilirsin.")
-            aday_cols = st.columns(3, gap="small")
-            profil_renk = {
-                "Temkinli": ("🟢", "#36d98b"),
-                "Dengeli": ("🔵", "#60a5fa"),
-                "Yüksek Oran": ("🟠", "#f59e0b"),
+            st.caption(
+                "Bunlar otomatik kupona girebilecek tüm uygun seçimlerdir. "
+                "Kuponlarla aynı renkli kart görünümündedir; Detay ile maç analizini açabilir, ＋ ile Kendi Kuponum'a ekleyebilirsin."
+            )
+
+            profil_renkleri_aday = {
+                "Temkinli": ("#123d2d", "#36d98b", "🟢"),
+                "Dengeli": ("#12345b", "#60a5fa", "🔵"),
+                "Yüksek Oran": ("#4a2b12", "#f59e0b", "🟠"),
             }
+            aday_cols = st.columns(3, gap="small")
+
             for aday_col, profil_adi in zip(aday_cols, ["Temkinli", "Dengeli", "Yüksek Oran"]):
                 with aday_col:
-                    ikon, vurgu = profil_renk[profil_adi]
+                    arka, vurgu, ikon = profil_renkleri_aday[profil_adi]
                     secimler = profil_aday_listeleri.get(profil_adi, []) or []
-                    st.markdown(f"**{ikon} {profil_adi} — {len(secimler)} seçim**")
+
+                    st.markdown(
+                        f"""
+                        <div style="background:{arka};border:1px solid {vurgu};border-radius:12px;
+                                    padding:10px 12px;margin-bottom:10px;text-align:center;
+                                    color:#f8fafc;-webkit-text-fill-color:#f8fafc;font-size:1rem;
+                                    font-weight:900;opacity:1">
+                            {ikon} {escape(profil_adi)} · {len(secimler)} aday
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
                     if not secimler:
                         st.info("Uygun aday yok.")
+                        continue
+
                     for aday_i, secim in enumerate(secimler):
-                        oran_txt = ""
-                        if secim.get("oran") is not None:
+                        destekler = secim.get("hassasiyetler", []) or []
+                        try:
+                            destek_yazi = ", ".join(f"{float(x):.2f}" for x in destekler)
+                        except Exception:
+                            destek_yazi = ", ".join(str(x) for x in destekler)
+
+                        hassasiyet_alt = ""
+                        if destekler:
                             try:
-                                oran_txt = f" · Oran {float(secim.get('oran')):.2f}"
+                                secilen_tol = float(secim.get("hassasiyet", 0) or 0)
+                                hassasiyet_alt = (
+                                    f'<div style="font-size:.70rem;color:#a7f3d0;margin-top:3px">'
+                                    f'Seçilen: {secilen_tol:.2f} · Kararlı: '
+                                    f'{escape(destek_yazi)} ({len(destekler)}/11)</div>'
+                                )
                             except Exception:
                                 pass
-                        st.markdown(
-                            f"**{escape(str(secim.get('ev','')))} – {escape(str(secim.get('dep','')))}**  \n"
-                            f"{escape(str(secim.get('tahmin','-')))} · Güven %{int(secim.get('guven',0) or 0)}{oran_txt}"
+
+                        oran_yazi = ""
+                        if secim.get("oran") is not None:
+                            try:
+                                oran_yazi = f" · Oran {float(secim.get('oran')):.2f}"
+                            except Exception:
+                                pass
+
+                        aday_key = (
+                            f"profil_aday_kart_{profil_adi.replace(' ', '_')}_"
+                            f"{aday_i}_{abs(hash(str(secim.get('zaman_iso',''))))}"
                         )
-                        if st.button(
-                            "+ Kendi Kuponum",
-                            key=f"profil_aday_ekle_{profil_adi}_{aday_i}_{abs(hash(str(secim.get('zaman_iso',''))))}",
-                            use_container_width=True,
-                        ):
-                            coupon_item = dict(secim)
-                            coupon_item["profil"] = "Kendi Kuponum"
-                            coupon_item["otomatik"] = False
-                            mevcutlar = {
-                                (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
-                                for x in st.session_state.kupona if isinstance(x, dict)
-                            }
-                            imza = (coupon_item.get("ev", ""), coupon_item.get("dep", ""), coupon_item.get("tahmin", ""))
-                            if imza not in mevcutlar:
-                                st.session_state.kupona.append(coupon_item)
-                                st.session_state.coupon_popup_open = True
-                                st.session_state.scroll_to_coupon = True
-                                st.rerun()
-                            else:
-                                st.toast("Bu seçim zaten Kendi Kuponum'da.")
+                        st.markdown(
+                            f"""
+                            <style>
+                            .st-key-{aday_key} {{
+                                background: {arka};
+                                border: 1px solid rgba(255,255,255,.16);
+                                border-radius: 12px;
+                                padding: 10px 12px 9px 14px;
+                                margin: 0 0 12px 0;
+                            }}
+                            .st-key-{aday_key} [data-testid="stHorizontalBlock"] {{
+                                align-items: center;
+                            }}
+                            .st-key-{aday_key} .stButton > button {{
+                                min-height: 42px;
+                                margin: 0;
+                            }}
+                            </style>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                        with st.container(key=aday_key, border=False):
+                            bilgi_col, detay_col, ekle_col = st.columns([6.4, 2.3, 1.3], gap="small")
+
+                            with bilgi_col:
+                                st.markdown(
+                                    f"""
+                                    <div style="color:#f8fafc;padding:2px 0">
+                                      <b style="font-size:.94rem">
+                                        {escape(str(secim.get('ev','')))} – {escape(str(secim.get('dep','')))}
+                                      </b>
+                                      <div style="font-size:.80rem;color:#dbeafe;margin-top:5px">
+                                        {escape(str(secim.get('tahmin','-')))} · Güven %{int(secim.get('guven',0) or 0)}{escape(oran_yazi)}
+                                      </div>
+                                      {hassasiyet_alt}
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
+
+                            with detay_col:
+                                if st.button(
+                                    "Detay",
+                                    key=f"profil_aday_detay_{profil_adi}_{aday_i}_{abs(hash(str(secim.get('zaman_iso',''))))}",
+                                    use_container_width=True,
+                                ):
+                                    detay_item = kupon_seciminden_detay_itemi(
+                                        secim, sadece_ayni_lig=sadece_ayni_lig
+                                    )
+                                    if detay_item is None:
+                                        st.warning("Bu aday için detay verisi yeniden oluşturulamadı.")
+                                    else:
+                                        st.session_state.detay_item = detay_item
+                                        st.session_state.detay_idx = None
+                                        st.rerun()
+
+                            with ekle_col:
+                                if st.button(
+                                    "＋",
+                                    key=f"profil_aday_ekle_{profil_adi}_{aday_i}_{abs(hash(str(secim.get('zaman_iso',''))))}",
+                                    use_container_width=True,
+                                    help="Kendi Kuponuma ekle",
+                                ):
+                                    coupon_item = dict(secim)
+                                    coupon_item["profil"] = "Kendi Kuponum"
+                                    coupon_item["otomatik"] = False
+                                    mevcutlar = {
+                                        (x.get("ev", ""), x.get("dep", ""), x.get("tahmin", ""))
+                                        for x in st.session_state.kupona if isinstance(x, dict)
+                                    }
+                                    imza = (
+                                        coupon_item.get("ev", ""),
+                                        coupon_item.get("dep", ""),
+                                        coupon_item.get("tahmin", ""),
+                                    )
+                                    if imza not in mevcutlar:
+                                        st.session_state.kupona.append(coupon_item)
+                                        st.session_state.coupon_popup_open = True
+                                        st.session_state.scroll_to_coupon = True
+                                        st.rerun()
+                                    else:
+                                        st.toast("Bu seçim zaten Kendi Kuponum'da.")
 
         if gunun_kupon_btn:
             olusan_profiller = []
