@@ -6158,7 +6158,25 @@ if gecmis_btn:
                     sadece_ayni_lig=sadece_ayni_lig,
                     limit=gecmis_limit,
                 )
-                inceleme.append({"m": gi_mac.to_dict(), "ornekler": ornekler})
+                # Satır başlığında aynı lig / toplam örnek sayısını gösterebilmek için
+                # toplam örnek sayısını ayrıca sakla. Aynı lig filtresi kapalıysa
+                # mevcut sonuç zaten toplam örnek listesidir; ekstra hesap yapma.
+                if sadece_ayni_lig:
+                    tum_ornekler = gecmis_ornekleri_bul(
+                        gi_gecmis,
+                        gi_mac,
+                        TOLERANS,
+                        sadece_ayni_lig=False,
+                        limit=gecmis_limit,
+                    )
+                    tum_ornek_sayisi = int(len(tum_ornekler))
+                else:
+                    tum_ornek_sayisi = int(len(ornekler))
+                inceleme.append({
+                    "m": gi_mac.to_dict(),
+                    "ornekler": ornekler,
+                    "tum_ornek_sayisi": tum_ornek_sayisi,
+                })
             # Geçmiş Örnekleri sıralaması:
             # 1) Toplam örnek sayısı çoktan aza
             # 1) İY, MS, 2.5 veya KG içinde en güçlü tekrar çoktan aza
@@ -6217,28 +6235,12 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         if "gecmis_oranlari_goster" not in st.session_state:
             st.session_state["gecmis_oranlari_goster"] = True
 
-        # "Sadece aynı ligler" açıkken, aynı lig filtresinde en az bir geçmiş
-        # örneği kalan maç sayısını toplam güncel maç sayısıyla birlikte göster.
-        # Örn: Sadece aynı ligler 7/10
-        gecmis_ayni_lig_acik = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
-        ayni_lig_dolu_mac = sum(
-            1 for item in inceleme
-            if isinstance(item, dict)
-            and isinstance(item.get("ornekler"), pd.DataFrame)
-            and not item.get("ornekler").empty
-        ) if gecmis_ayni_lig_acik else 0
-        ayni_lig_toggle_label = (
-            f"Sadece aynı ligler {ayni_lig_dolu_mac}/{len(inceleme)}"
-            if gecmis_ayni_lig_acik
-            else "Sadece aynı ligler"
-        )
-
-        ust_bos, ust_ayni, ust_oran = st.columns([6.0, 1.65, 1.25], gap="small")
+        ust_bos, ust_ayni, ust_oran = st.columns([6.2, 1.45, 1.25], gap="small")
         with ust_ayni:
             gecmis_ayni_lig = st.toggle(
-                ayni_lig_toggle_label,
+                "Sadece aynı ligler",
                 key="gecmis_sadece_ayni_lig_toggle",
-                help="Açıkken geçmiş örnekler yalnızca güncel maçın kendi liginden alınır. Sayaç, aynı lig filtresinde geçmiş örneği bulunan maç / toplam maç sayısını gösterir.",
+                help="Açıkken geçmiş örnekler yalnızca güncel maçın kendi liginden alınır. Her maç satırında aynı lig / toplam örnek sayısı gösterilir.",
             )
         with ust_oran:
             gecmis_oranlari_goster = st.toggle(
@@ -6270,7 +6272,24 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     sadece_ayni_lig=bool(gecmis_ayni_lig),
                     limit=gecmis_limit,
                 )
-                yeniden.append({"m": gi_mac_dict, "ornekler": yeni_ornekler})
+                # Toggle açıkken satırda "aynı lig / toplam" gösterebilmek için
+                # toplam örnek sayısını filtresiz olarak ayrıca hesapla.
+                if bool(gecmis_ayni_lig):
+                    tum_ornekler = gecmis_ornekleri_bul(
+                        gi_gecmis_yeniden,
+                        gi_mac_series,
+                        TOLERANS,
+                        sadece_ayni_lig=False,
+                        limit=gecmis_limit,
+                    )
+                    tum_ornek_sayisi = int(len(tum_ornekler))
+                else:
+                    tum_ornek_sayisi = int(len(yeni_ornekler))
+                yeniden.append({
+                    "m": gi_mac_dict,
+                    "ornekler": yeni_ornekler,
+                    "tum_ornek_sayisi": tum_ornek_sayisi,
+                })
             yeniden.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = yeniden
             st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_ayni_lig)
@@ -6522,9 +6541,16 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     f" · Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f}"
                     if gecmis_oranlari_goster else ""
                 )
+                # Sadece aynı ligler açıkken sayı maç satırında gösterilir:
+                # örn. 7/25 örnek = 7 aynı lig örneği / 25 toplam benzer örnek.
+                if bool(gecmis_ayni_lig):
+                    tum_ornek_sayisi = int(item.get("tum_ornek_sayisi", len(ornekler)) or 0)
+                    ornek_baslik = f"{len(ornekler)}/{tum_ornek_sayisi} örnek"
+                else:
+                    ornek_baslik = f"{len(ornekler)} örnek"
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat}"
-                    f"{oran_baslik} · {len(ornekler)} örnek",
+                    f"{oran_baslik} · {ornek_baslik}",
                     expanded=tam_ekran_aktif,
                 ):
                     if ornekler.empty:
