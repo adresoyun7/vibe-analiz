@@ -63,6 +63,18 @@ def get_app_api_key():
     return str(get_secret_value("ODDS_API_KEY", "")).strip()
 
 
+def get_api_football_key():
+    """API-Football anahtarı. Sidebar girişi secrets değerinin önüne geçer."""
+    user_key = str(st.session_state.get("user_api_football_key", "")).strip()
+    if user_key:
+        return user_key
+    for secret_name in ("API_FOOTBALL_KEY", "APIFOOTBALL_KEY", "API_FOOTBALL_API_KEY"):
+        val = str(get_secret_value(secret_name, "") or "").strip()
+        if val:
+            return val
+    return ""
+
+
 def api_key_panel():
     with st.sidebar:
         st.markdown("### 🔑 API Key Girişi")
@@ -90,9 +102,33 @@ def api_key_panel():
                 st.rerun()
 
         if get_app_api_key():
-            st.success("API key aktif ✅")
+            st.success("Odds API key aktif ✅")
         else:
-            st.warning("API key yok. Kayıtlı bülten varsa açılır; yeni veri çekmek için API key gerekir.")
+            st.warning("Odds API key yok. Kayıtlı bülten varsa açılır; yeni veri çekmek için API key gerekir.")
+
+        st.markdown("##### ⚽ API-Football (bağlam fallback)")
+        af_current = st.session_state.get("user_api_football_key", "")
+        af_input = st.text_input(
+            "API-FOOTBALL KEY",
+            value=af_current,
+            placeholder="H2H / son form fallback için...",
+            type="password",
+            key="api_football_key_input",
+        )
+        af1, af2 = st.columns(2)
+        with af1:
+            if st.button("AF Kaydet", use_container_width=True, key="save_api_football_key_btn"):
+                st.session_state["user_api_football_key"] = af_input.strip()
+                st.success("API-Football key kaydedildi ✅")
+                st.rerun()
+        with af2:
+            if st.button("AF Temizle", use_container_width=True, key="clear_api_football_key_btn"):
+                st.session_state.pop("user_api_football_key", None)
+                st.rerun()
+        if get_api_football_key():
+            st.caption("API-Football fallback aktif ✅")
+        else:
+            st.caption("API-Football key yok: bağlam yalnızca yerel geçmiş + Odds API ile çalışır.")
 
 
 def require_api_key():
@@ -1938,6 +1974,10 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             "oran_tahmini": oran_tahmini,
             "combo_secim": kombinasyon_secimi,
             "ekstra_uygun": ekstra_uygun,
+            # Kartlarda hangi 0.00-0.10 hassasiyetlerinde aynı marketin
+            # çıktığını kaybetmemek için ara adayda da sakla.
+            "hassasiyetler": list(t.get("top10_hassasiyetler") or t.get("stability_tols") or []),
+            "hassasiyet_sayisi": int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0),
         })
 
     if profil == "Temkinli":
@@ -1983,8 +2023,8 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             "oran": aday["oran"],
             "oran_tahmini": aday["oran_tahmini"],
             "hassasiyet": float(t.get("kullanilan_tolerans", 0.08) or 0.08),
-            "hassasiyetler": list(t.get("top10_hassasiyetler", t.get("stability_tols", [])) or []),
-            "hassasiyet_sayisi": int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0),
+            "hassasiyetler": list(aday.get("hassasiyetler") or t.get("top10_hassasiyetler") or t.get("stability_tols") or []),
+            "hassasiyet_sayisi": int(aday.get("hassasiyet_sayisi") or len(aday.get("hassasiyetler") or []) or 0),
             "otomatik": True,
             "profil": profil,
             # Kupon geçmişinden maç detayını yeniden oluşturabilmek için
@@ -2143,6 +2183,183 @@ def _saha_baglam_destegi(gecmis_df, m, label, limit=5):
     return {"puan": round(puan, 2), "aktif": True, "ev_mac": ev["mac"], "dep_mac": dep["mac"], "ev": ev, "dep": dep}
 
 
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _api_football_team_id_cached(api_key, takim_adi):
+    """API-Football /teams search sonucundan en güvenli takım id'sini seçer."""
+    if not api_key or not takim_adi:
+        return None, "API-Football key/takım yok"
+    try:
+        r = requests.get(
+            "https://v3.football.api-sports.io/teams",
+            headers={"x-apisports-key": api_key},
+            params={"search": str(takim_adi)},
+            timeout=12,
+        )
+        if r.status_code != 200:
+            return None, f"teams HTTP {r.status_code}"
+        data = r.json() or {}
+        rows = data.get("response", []) or []
+        if not rows:
+            # Uzun kulüp adı sonuç vermediyse kanonik tokenlardan kısa arama yap.
+            tokens = _takim_adi_ham_tokenlari(takim_adi)
+            q = " ".join(tokens[-2:]) if tokens else str(takim_adi)
+            if q and q.lower() != str(takim_adi).lower():
+                r = requests.get(
+                    "https://v3.football.api-sports.io/teams",
+                    headers={"x-apisports-key": api_key}, params={"search": q}, timeout=12,
+                )
+                if r.status_code == 200:
+                    rows = (r.json() or {}).get("response", []) or []
+        if not rows:
+            return None, "takım bulunamadı"
+        hedef = takim_adi_norm(takim_adi)
+        adaylar = []
+        for row in rows:
+            team = row.get("team", {}) or {}
+            tid = team.get("id")
+            name = str(team.get("name", "") or "")
+            if not tid or not name:
+                continue
+            norm = takim_adi_norm(name)
+            ratio = SequenceMatcher(None, hedef, norm).ratio() if hedef and norm else 0.0
+            kisa, uzun = sorted((hedef, norm), key=len) if hedef and norm else ("", "")
+            kapsama = len(kisa) / len(uzun) if kisa and kisa in uzun else 0.0
+            adaylar.append((max(ratio, kapsama), int(tid), name))
+        if not adaylar:
+            return None, "takım id yok"
+        adaylar.sort(reverse=True)
+        score, tid, name = adaylar[0]
+        if score < 0.62:
+            return None, f"eşleşme zayıf: {name} ({score:.2f})"
+        return tid, ""
+    except Exception as e:
+        return None, f"teams hata: {type(e).__name__}"
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _api_football_team_fixtures_cached(api_key, team_id, last=14):
+    if not api_key or not team_id:
+        return [], ""
+    try:
+        r = requests.get(
+            "https://v3.football.api-sports.io/fixtures",
+            headers={"x-apisports-key": api_key},
+            params={"team": int(team_id), "last": int(last)},
+            timeout=12,
+        )
+        if r.status_code != 200:
+            return [], f"fixtures HTTP {r.status_code}"
+        return (r.json() or {}).get("response", []) or [], ""
+    except Exception as e:
+        return [], f"fixtures hata: {type(e).__name__}"
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _api_football_h2h_cached(api_key, home_id, away_id, last=7):
+    if not api_key or not home_id or not away_id:
+        return [], ""
+    try:
+        r = requests.get(
+            "https://v3.football.api-sports.io/fixtures/headtohead",
+            headers={"x-apisports-key": api_key},
+            params={"h2h": f"{int(home_id)}-{int(away_id)}", "last": int(last)},
+            timeout=12,
+        )
+        if r.status_code != 200:
+            return [], f"h2h HTTP {r.status_code}"
+        return (r.json() or {}).get("response", []) or [], ""
+    except Exception as e:
+        return [], f"h2h hata: {type(e).__name__}"
+
+
+def _api_fixture_to_history_row(fx):
+    try:
+        fixture = fx.get("fixture", {}) or {}
+        teams = fx.get("teams", {}) or {}
+        goals = fx.get("goals", {}) or {}
+        hg, ag = goals.get("home"), goals.get("away")
+        if hg is None or ag is None:
+            return None
+        home = str((teams.get("home", {}) or {}).get("name", "") or "")
+        away = str((teams.get("away", {}) or {}).get("name", "") or "")
+        dt = pd.to_datetime(fixture.get("date"), errors="coerce", utc=True)
+        if pd.isna(dt) or not home or not away:
+            return None
+        try:
+            dt = dt.tz_convert("Europe/Istanbul").tz_localize(None)
+        except Exception:
+            dt = dt.tz_localize(None) if getattr(dt, "tzinfo", None) else dt
+        return {
+            "Date": pd.Timestamp(dt), "HomeTeam": home, "AwayTeam": away,
+            "FTHG": int(hg), "FTAG": int(ag), "league_code": "API_FOOTBALL",
+            "context_source": "API-Football",
+        }
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _api_football_baglam_rows_cached(api_key, ev, dep, zaman_iso):
+    """Bir maç için son form + saha formu + H2H'yi tamamlayacak satırları döndürür."""
+    if not api_key:
+        return [], {"aktif": False, "hata": "API-Football key yok"}
+    ev_id, e1 = _api_football_team_id_cached(api_key, ev)
+    dep_id, e2 = _api_football_team_id_cached(api_key, dep)
+    if not ev_id or not dep_id:
+        return [], {"aktif": False, "hata": "; ".join(x for x in [e1, e2] if x)}
+
+    ev_fx, e3 = _api_football_team_fixtures_cached(api_key, ev_id, 16)
+    dep_fx, e4 = _api_football_team_fixtures_cached(api_key, dep_id, 16)
+    h2h_fx, e5 = _api_football_h2h_cached(api_key, ev_id, dep_id, 8)
+    hedef_tarih = pd.to_datetime(zaman_iso, errors="coerce")
+    rows, seen = [], set()
+    for fx in list(ev_fx) + list(dep_fx) + list(h2h_fx):
+        row = _api_fixture_to_history_row(fx)
+        if not row:
+            continue
+        if pd.notna(hedef_tarih) and pd.to_datetime(row["Date"], errors="coerce") >= hedef_tarih:
+            continue
+        key = (str(row["Date"]), takim_adi_norm(row["HomeTeam"]), takim_adi_norm(row["AwayTeam"]), row["FTHG"], row["FTAG"])
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    return rows, {
+        "aktif": bool(rows), "ev_id": ev_id, "dep_id": dep_id,
+        "satir": len(rows), "hata": "; ".join(x for x in [e3, e4, e5] if x),
+    }
+
+
+def _baglam_gecmisini_api_ile_tamamla(gecmis_df, m):
+    """Yerel geçmiş yetersizse API-Football satırlarını yalnızca fallback olarak birleştirir."""
+    api_key = get_api_football_key()
+    if not api_key:
+        return gecmis_df, {"aktif": False, "hata": "API-Football key yok"}
+    zaman = m.get("zaman")
+    zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman or "")
+    rows, meta = _api_football_baglam_rows_cached(
+        api_key, str(m.get("ev", "")), str(m.get("dep", "")), zaman_iso
+    )
+    if not rows:
+        return gecmis_df, meta
+    api_df = pd.DataFrame(rows)
+    # Desteklenen liglerde mevcut bağlam fonksiyonlarının league_code filtresi
+    # API-Football fallback satırlarını yanlışlıkla dışlamasın.
+    api_df["league_code"] = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")), "API_FOOTBALL")
+    if gecmis_df is None or getattr(gecmis_df, "empty", True):
+        return api_df, meta
+    cols = sorted(set(gecmis_df.columns).union(api_df.columns))
+    a = gecmis_df.reindex(columns=cols)
+    b = api_df.reindex(columns=cols)
+    merged = pd.concat([a, b], ignore_index=True)
+    if all(c in merged.columns for c in ["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]):
+        merged["_dedupe"] = merged.apply(
+            lambda r: f"{pd.to_datetime(r.get('Date'), errors='coerce')}|{takim_adi_norm(r.get('HomeTeam'))}|{takim_adi_norm(r.get('AwayTeam'))}|{r.get('FTHG')}|{r.get('FTAG')}", axis=1
+        )
+        merged = merged.drop_duplicates("_dedupe", keep="first").drop(columns=["_dedupe"])
+    return merged, meta
+
 def _genel_form_baglam_destegi(gecmis_df, m, label):
     """Son 5 genel formu, mevcut form_market_carpani mantığıyla -3..+3 puana çevirir."""
     if gecmis_df is None or getattr(gecmis_df, "empty", True):
@@ -2177,20 +2394,44 @@ def _piyasa_25_baglam_destegi(m, label):
     return {"puan": round(puan, 2), "aktif": True, "olasilik": round(p*100, 1), "over": over, "under": under}
 
 
-def gunun_baglam_puani(gecmis_df, m, label):
-    """Günün Kuponu için veri katmanlarını küçük artı/eksi puanlara dönüştürür."""
+def gunun_baglam_puani(gecmis_df, m, label, api_fallback=True):
+    """Günün Kuponu bağlamı. Önce yerel veri, eksikse API-Football fallback kullanır."""
     h2h = _h2h_baglam_destegi(gecmis_df, m, label)
     form = _genel_form_baglam_destegi(gecmis_df, m, label)
     saha = _saha_baglam_destegi(gecmis_df, m, label)
+    api_meta = {"aktif": False, "hata": ""}
+    kaynak = "Yerel geçmiş"
+
+    yerel_yetersiz = (
+        int(h2h.get("mac", 0) or 0) < 3
+        or not bool(form.get("aktif"))
+        or not bool(saha.get("aktif"))
+    )
+    if api_fallback and yerel_yetersiz and get_api_football_key():
+        tamamlanmis, api_meta = _baglam_gecmisini_api_ile_tamamla(gecmis_df, m)
+        if api_meta.get("aktif"):
+            h2h2 = _h2h_baglam_destegi(tamamlanmis, m, label)
+            form2 = _genel_form_baglam_destegi(tamamlanmis, m, label)
+            saha2 = _saha_baglam_destegi(tamamlanmis, m, label)
+            # Fallback yalnızca daha dolu veri üretiyorsa onu kullan.
+            if int(h2h2.get("mac", 0) or 0) > int(h2h.get("mac", 0) or 0):
+                h2h = h2h2
+            if form2.get("aktif") and not form.get("aktif"):
+                form = form2
+            elif form2.get("aktif") and form.get("aktif"):
+                form = form2
+            if saha2.get("aktif") and not saha.get("aktif"):
+                saha = saha2
+            elif saha2.get("aktif") and saha.get("aktif"):
+                saha = saha2
+            kaynak = "Yerel + API-Football fallback"
+
     piyasa = _piyasa_25_baglam_destegi(m, label)
-    toplam = float(h2h.get("puan",0)) + float(form.get("puan",0)) + float(saha.get("puan",0)) + float(piyasa.get("puan",0))
+    toplam = float(h2h.get("puan", 0)) + float(form.get("puan", 0)) + float(saha.get("puan", 0)) + float(piyasa.get("puan", 0))
     toplam = max(-7.5, min(7.5, toplam))
     return {
-        "toplam": round(toplam, 2),
-        "h2h": h2h,
-        "form": form,
-        "saha": saha,
-        "piyasa25": piyasa,
+        "toplam": round(toplam, 2), "h2h": h2h, "form": form, "saha": saha,
+        "piyasa25": piyasa, "kaynak": kaynak, "api_fallback": api_meta,
     }
 
 def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_df=None):
@@ -2304,6 +2545,12 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "o25_under": m.get("o25_under"),
             "totals_bookmaker_key": m.get("totals_bookmaker_key", ""),
         })
+        # Sonuç Takibi bağlam performansını ölçebilsin diye seçim anındaki
+        # bağlamı tahmin kaydına snapshot olarak yaz. Gelecekte yeniden hesaplanmaz.
+        try:
+            tahmin_loguna_baglam_yaz(m, secim_label, aday.get("baglam", {}))
+        except Exception:
+            pass
         kullanilan_maclar.add(mac_id)
         if len(secimler) >= int(maks):
             break
@@ -4168,6 +4415,33 @@ def tahmin_logunu_yaz(kayitlar):
         gecici.write_text(json.dumps(kayitlar, ensure_ascii=False, indent=2), encoding="utf-8")
         gecici.replace(TAHMIN_LOG_PATH)
         return True
+    except Exception:
+        return False
+
+
+def tahmin_loguna_baglam_yaz(m, label, baglam):
+    """Hesaplanan bağlamı, aynı maç+tahmin kaydına sonuç analizi için snapshot olarak ekler."""
+    try:
+        kayitlar = tahmin_logunu_oku()
+        if not kayitlar or not isinstance(baglam, dict):
+            return False
+        hedef = str(m.get("match_id") or mac_key(m))
+        degisti = False
+        for k in kayitlar:
+            kid = str(k.get("match_id") or k.get("kayit_id") or "")
+            ayni = kid == hedef or (
+                takim_adi_norm(k.get("ev")) == takim_adi_norm(m.get("ev"))
+                and takim_adi_norm(k.get("dep")) == takim_adi_norm(m.get("dep"))
+                and str(k.get("zaman", ""))[:10] == str(m.get("zaman", ""))[:10]
+            )
+            if not ayni or str(k.get("tahmin", "")).strip() != str(label or "").strip():
+                continue
+            k["baglam_ayari"] = float(baglam.get("toplam", 0.0) or 0.0)
+            k["baglam_kaynak"] = str(baglam.get("kaynak", ""))
+            k["baglam_snapshot"] = baglam
+            k["baglam_kaydedildi"] = datetime.now().isoformat(timespec="seconds")
+            degisti = True
+        return tahmin_logunu_yaz(kayitlar) if degisti else False
     except Exception:
         return False
 
@@ -6455,9 +6729,32 @@ with st.sidebar:
                 st.success("API Key temizlendi")
                 st.rerun()
         if get_app_api_key():
-            st.success("API key aktif ✅")
+            st.success("Odds API key aktif ✅")
         else:
-            st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için API key gerekir.")
+            st.warning("Kayıtlı analizler açılabilir; canlı skor ve yeni veri için Odds API key gerekir.")
+
+        st.markdown("##### ⚽ API-Football · bağlam fallback")
+        af_current = st.session_state.get("user_api_football_key", "")
+        af_input = st.text_input(
+            "API-FOOTBALL KEY",
+            value=af_current,
+            placeholder="Son form / saha formu / H2H için...",
+            type="password",
+            key="api_football_key_sidebar_clean",
+        )
+        af1, af2 = st.columns(2)
+        with af1:
+            if st.button("AF Kaydet", use_container_width=True, key="save_api_football_key_sidebar_clean"):
+                st.session_state["user_api_football_key"] = af_input.strip()
+                st.rerun()
+        with af2:
+            if st.button("AF Temizle", use_container_width=True, key="clear_api_football_key_sidebar_clean"):
+                st.session_state.pop("user_api_football_key", None)
+                st.rerun()
+        if get_api_football_key():
+            st.caption("✅ API-Football fallback aktif · yalnızca yerel bağlam eksikse çağrılır")
+        else:
+            st.caption("API-Football fallback kapalı")
 
     # API TASARRUF PANELİ: analiz butonları cache'teki aynı bülteni kullanır.
     cache_hazir, cache_toplam = odds_cache_bilgi(secili_kodlar, secili_tarih)
@@ -7420,6 +7717,34 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         )
 
         if not biten.empty:
+            # Bağlam performansı yalnızca tahmin anında snapshot kaydı bulunan maçlarda ölçülür.
+            # Böylece maç bittikten sonra yeni form/H2H kullanıp geçmişe veri sızıntısı yapılmaz.
+            if "baglam_ayari" in biten.columns:
+                bag_biten = biten[pd.to_numeric(biten["baglam_ayari"], errors="coerce").notna()].copy()
+                if not bag_biten.empty:
+                    bag_biten["Bağlam Puanı"] = pd.to_numeric(bag_biten["baglam_ayari"], errors="coerce")
+                    bag_biten["Bağlam Grubu"] = pd.cut(
+                        bag_biten["Bağlam Puanı"],
+                        bins=[-float("inf"), -2.0, -0.5, 0.5, 2.0, float("inf")],
+                        labels=["≤ -2", "-2 / -0.5", "Nötr", "+0.5 / +2", "+2 üzeri"],
+                        right=False,
+                    )
+                    bag_ozet = (bag_biten.groupby("Bağlam Grubu", observed=False)
+                        .agg(Tahmin=("tuttu", "size"), Kazanan=("tuttu", "sum"), Ortalama_Bağlam=("Bağlam Puanı", "mean"))
+                        .reset_index())
+                    bag_ozet = bag_ozet[bag_ozet["Tahmin"] > 0].copy()
+                    bag_ozet["Başarı %"] = (bag_ozet["Kazanan"] / bag_ozet["Tahmin"] * 100).round(1)
+                    bag_ozet["Ort. Bağlam"] = bag_ozet["Ortalama_Bağlam"].round(2)
+                    bag_ozet = bag_ozet.drop(columns=["Ortalama_Bağlam"])
+                    st.markdown("#### 🧭 Bağlam etkisi performansı")
+                    st.caption(
+                        f"{len(bag_biten)} tamamlanmış tahminde seçim anındaki bağlam snapshot'ı var. "
+                        "Pozitif bağlam grupları zamanla daha başarılı oluyorsa ek katman fayda sağlıyor demektir."
+                    )
+                    st.dataframe(bag_ozet, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Bağlam performansı: henüz sonuçlanmış snapshot kaydı yok. Yeni Günün Kuponları sonuçlandıkça burada ölçülecek.")
+
             c1, c2, c3 = st.columns(3)
             for alan, baslik, kolon in [("tahmin", "Tahmin türü", c1), ("lig", "Lig", c2)]:
                 ozet = biten.groupby(alan, dropna=False).agg(Tahmin=("tuttu", "size"), Kazanan=("tuttu", "sum")).reset_index()
@@ -7462,12 +7787,15 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 else "✅ Tuttu" if bool(x.get("alternatif_tuttu")) else "❌ Tutmadı",
                 axis=1,
             )
-            for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None)]:
+            for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None), ("baglam_ayari", None)]:
                 if kolon not in liste.columns:
                     liste[kolon] = varsayilan
             liste["alternatif_tahmin"] = liste["alternatif_tahmin"].fillna("").replace("None", "")
+            liste["Bağlam"] = pd.to_numeric(liste["baglam_ayari"], errors="coerce").map(
+                lambda x: f"{x:+.1f}" if pd.notna(x) else "—"
+            )
             goster = liste[[
-                "Tarih", "lig", "Maç", "tahmin", "guven", "Sonuç", "Durum",
+                "Tarih", "lig", "Maç", "tahmin", "guven", "Bağlam", "Sonuç", "Durum",
                 "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
             ]].rename(columns={
                 "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %",
@@ -8699,6 +9027,21 @@ else:
                     st.rerun()
 
     kupon_mesaji = None
+    def _secim_hassasiyetleri(secim):
+        """Eski/yeni kupon kayıtlarında hassasiyet listesini mümkün olan tüm alanlardan geri kazanır."""
+        for key in ("hassasiyetler", "top10_hassasiyetler", "stability_tols", "ana_hassasiyetler"):
+            vals = secim.get(key) if isinstance(secim, dict) else None
+            if vals:
+                out = []
+                for x in vals:
+                    try:
+                        out.append(round(float(x), 2))
+                    except Exception:
+                        pass
+                if out:
+                    return sorted(set(out))
+        return []
+
     with st.expander("🎫 Günün Kuponunu Oluştur", expanded=False):
         bilgi_col, gunun_col, olustur_col = st.columns([3.2, 1.15, 1.15], gap="small")
         with bilgi_col:
@@ -8813,7 +9156,7 @@ else:
                         continue
 
                     for aday_i, secim in enumerate(secimler):
-                        destekler = secim.get("hassasiyetler", []) or []
+                        destekler = _secim_hassasiyetleri(secim)
                         try:
                             destek_yazi = ", ".join(f"{float(x):.2f}" for x in destekler)
                         except Exception:
@@ -9164,7 +9507,7 @@ else:
                         )
 
                         for secim_no, secim in enumerate(kayit.get("secimler", [])):
-                            destekler = secim.get("hassasiyetler", []) or []
+                            destekler = _secim_hassasiyetleri(secim)
                             destek_yazi = ", ".join(f"{float(x):.2f}" for x in destekler)
                             hassasiyet_alt = (
                                 f'<div style="font-size:.70rem;color:#a7f3d0;margin-top:3px">'
