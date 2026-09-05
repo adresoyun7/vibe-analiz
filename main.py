@@ -2499,8 +2499,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
         h2h_mac = int((h2h_b or {}).get("mac", 0) or 0)
         h2h_tutan = int((h2h_b or {}).get("tutan", 0) or 0)
         if h2h_mac >= 5:
-            if h2h_tutan == 0:
-                continue
+            # H2H 0/5 artık doğrudan eleme değildir; toplam bağlam puanına negatif sinyal olarak yansır.
             if h2h_tutan == 1 and not (guven >= 90 and stabil >= 7):
                 continue
 
