@@ -1123,17 +1123,20 @@ def dinamik_min_mac(tolerans: float) -> int:
 
 
 def sample_factor_hesapla(sample: int, tolerans: float) -> float:
-    if tolerans <= 0.02:
-        hedef = 5
-    elif tolerans <= 0.05:
-        hedef = 10
-    elif tolerans <= 0.08:
-        hedef = 15
-    elif tolerans <= 0.12:
-        hedef = 25
-    else:
-        hedef = 40
-    return min(0.75 + 0.25 * (sample / max(hedef, 1)), 1.0)
+    """Örnek cezası: 0.00 hassasiyet muaf; diğerlerinde yalnızca 1 örnek cezalı."""
+    sample = int(sample or 0)
+    tolerans = float(tolerans or 0.0)
+
+    # 0.00 hassasiyet dar eşleşme olduğu için tek örnek olsa bile ceza uygulanmaz.
+    if abs(tolerans) < 1e-9:
+        return 1.0
+
+    # 0.01+ hassasiyetlerde yalnızca tek örnekli sonuçları törpüle.
+    if sample == 1:
+        return 0.80
+
+    # 2 veya daha fazla örnekte örnek sayısından kaynaklı ceza yok.
+    return 1.0
 
 
 def tolerans_rehberi(tolerans: float):
@@ -3277,15 +3280,10 @@ def hassasiyet_birlesik_hesapla(
             )
         )
 
-        # Çok az örnekte ek ceza. Örnek sayısı pozitif bonus vermez.
-        if medyan_ornek < 5:
-            az_ornek_cezasi = 8.0
-        elif medyan_ornek < 8:
-            az_ornek_cezasi = 5.0
-        elif medyan_ornek < 12:
-            az_ornek_cezasi = 2.0
-        else:
-            az_ornek_cezasi = 0.0
+        # Birleşik puanda da yalnızca gerçekten tek örnekli yapı cezalandırılır.
+        # 2+ örneğe artık düşük örnek cezası uygulanmaz. 0.00 hassasiyetin tek
+        # örnek durumu sample_factor_hesapla içinde özellikle muaf tutulur.
+        az_ornek_cezasi = 8.0 if medyan_ornek <= 1 else 0.0
 
         birlesik_puan = (
             duzeltilmis_guven * 0.80
