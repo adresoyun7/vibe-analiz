@@ -1775,7 +1775,7 @@ def build_top3_coupon(indexed_items, mode="best_favorites"):
     ]
 
 
-def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=None):
+def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=None, haric_secimler=None):
     """Hassasiyet uzlaşması bulunan analizlerden kupon taslağı üretir."""
     ayarlar = {
         "Temkinli": {"min_guven": 66, "taban": 2, "maks": 3, "min_stabil": 1, "ek_stabil": 2, "min_oran": 1.0},
@@ -1875,20 +1875,20 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
     else:
         adaylar.sort(key=lambda x: (x["kalite"], x["secim_guven"]), reverse=True)
 
-    # Önceki profil ile birebir aynı kuponun oluşmasını azalt: farklı maç/market
-    # adaylarını öne al, ancak aday sayısı azsa kuponu tamamen boş bırakma.
-    onceliksiz_secimler = set(onceliksiz_secimler or [])
-    if onceliksiz_secimler:
-        adaylar.sort(
-            key=lambda x: (
-                (mac_key(x["m"]), x["secim_label"]) in onceliksiz_secimler,
-            )
-        )
+    # Profiller artık birbirinin seçimlerini geriye atmaz. Aynı güçlü seçim
+    # Temkinli, Dengeli ve Yüksek Oran kriterlerini ayrı ayrı karşılıyorsa
+    # birden fazla profilde yer alabilir.
+    # haric_secimler yalnızca AYNI profil içinde ikinci/üçüncü kupon üretilirken
+    # daha önce kullanılan maç+market seçimlerini tekrar kullanmamak içindir.
+    haric_secimler = set(haric_secimler or [])
     secilenler, maclar = [], set()
     for aday in adaylar:
         m, t = aday["m"], aday["t"]
         mac_id = mac_key(m)
+        secim_key = (mac_id, aday["secim_label"])
         lig = str(m.get("lig", ""))
+        if secim_key in haric_secimler:
+            continue
         if mac_id in maclar:
             continue
         # Profilin taban sayısından sonraki seçimler daha yüksek kararlılık ister.
@@ -8181,19 +8181,19 @@ else:
             st.caption(
                 "Her maç 0.00 ile 0.10 arasında 0.01'er hassasiyet adımıyla toplam 11 noktada taranır. "
                 "Farklı tahmin varsa en iyi puanlanan market seçilir; belirli bir minimum destek sayısı zorunlu değildir. "
-                "Tek hassasiyetteki yüksek güven de aday olabilir. Yalnızca MS, 2.5 Alt/Üst, KG ve "
-                "bunların kombinasyonları kullanılır."
+                "Tek hassasiyetteki yüksek güven de aday olabilir. Aynı güçlü seçim farklı profil kriterlerini karşılıyorsa "
+                "profiller arasında tekrar kullanılabilir; bülten genişse her profil için birden fazla kupon üretilir. "
+                "Yalnızca MS, 2.5 Alt/Üst, KG ve bunların kombinasyonları kullanılır."
             )
         with olustur_col:
             gunun_kupon_btn = st.button(
-                "3 kuponu oluştur", key="gunun_kuponu_tek_buton",
+                "Kuponları oluştur", key="gunun_kuponu_tek_buton",
                 use_container_width=True, type="primary",
             )
 
         if gunun_kupon_btn:
             olusan_profiller = []
             bulunamayan_profiller = []
-            onceki_profil_secimleri = set()
             for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
                 kupon_kaynagi = gunun_en_iyi_10_uret(
                     st.session_state.get("last_gecmis_df"),
@@ -8204,20 +8204,47 @@ else:
                     kupon_modu=True,
                     kupon_profili=profil_adi,
                 )
-                otomatik_secimler = gunun_kuponunu_olustur(
-                    kupon_kaynagi,
-                    profil_adi,
-                    onceliksiz_secimler=onceki_profil_secimleri,
-                )
-                if otomatik_secimler:
+
+                # Her profil kendi aday havuzunu bağımsız kullanır. Böylece örneğin
+                # Temkinli'deki güçlü bir kombinasyon Dengeli/Yüksek Oran'da da
+                # kriterleri karşılıyorsa tekrar seçilebilir.
+                profil_kullanilan = set()
+                profil_kupon_sayisi = 0
+                profil_toplam_secim = 0
+
+                while True:
+                    otomatik_secimler = gunun_kuponunu_olustur(
+                        kupon_kaynagi,
+                        profil_adi,
+                        haric_secimler=profil_kullanilan,
+                    )
+                    if not otomatik_secimler:
+                        break
+
                     kupon_gecmisine_ekle(otomatik_secimler, profil_adi, "0.00–0.10 tarama")
-                    olusan_profiller.append(f"{profil_adi} ({len(otomatik_secimler)} maç)")
+                    profil_kupon_sayisi += 1
+                    profil_toplam_secim += len(otomatik_secimler)
+
+                    yeni_secim_eklendi = False
                     for secim in otomatik_secimler:
-                        onceki_profil_secimleri.add((
+                        secim_key = (
                             f"{secim.get('ev', '')}|{secim.get('dep', '')}|"
                             f"{str(secim.get('zaman_iso', ''))[:16]}",
                             secim.get("tahmin", ""),
-                        ))
+                        )
+                        if secim_key not in profil_kullanilan:
+                            yeni_secim_eklendi = True
+                        profil_kullanilan.add(secim_key)
+
+                    # Güvenlik: anahtar eşleşmesinde beklenmeyen bir durum olursa
+                    # sonsuz döngüye girme.
+                    if not yeni_secim_eklendi:
+                        break
+
+                if profil_kupon_sayisi:
+                    olusan_profiller.append(
+                        f"{profil_adi} x{profil_kupon_sayisi} ({profil_toplam_secim} seçim)"
+                    )
                 else:
                     bulunamayan_profiller.append(profil_adi)
             if olusan_profiller:
@@ -8232,7 +8259,7 @@ else:
                     f"{', '.join(olusan_profiller)} kaydedildi. Hassasiyet taraması: 0.00–0.10.{ek_mesaj}",
                 )
             else:
-                kupon_mesaji = ("warning", "Üç profil için de en az iki uygun seçim bulunamadı; kupon oluşturulmadı.")
+                kupon_mesaji = ("warning", "Profiller için uygun seçim bulunamadı; kupon oluşturulmadı.")
 
     if kupon_mesaji:
         getattr(st, kupon_mesaji[0])(kupon_mesaji[1])
