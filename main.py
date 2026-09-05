@@ -7778,8 +7778,12 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 # otomatik tetikle.
                 st.session_state["sonuc_reset_hedef_mac_analizi"] = True
                 st.session_state["sonuc_reset_otomatik_analiz"] = True
+                # Reset sonrası Sonuç Takibi tek manuel hassasiyetle değil,
+                # 0.00–0.10 birleşik hassasiyet taramasıyla yeniden üretilir.
+                st.session_state["sonuc_reset_genis_tarama"] = True
                 st.session_state["sonuc_reset_bilgi"] = (
-                    "Sonuç Takibi sıfırlandı. Tahminler yeni kodla yeniden oluşturuluyor."
+                    "Sonuç Takibi sıfırlandı. 0.00–0.10 birleşik hassasiyet taramasıyla "
+                    "tahminler yeni kod üzerinden yeniden oluşturuluyor."
                 )
                 st.rerun()
             else:
@@ -8182,8 +8186,12 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
 
 # Sonuç Takibi sıfırlandıysa, eski final_list'i kullanmak yerine aynı analiz
 # motorunu mevcut ayarlarla baştan çalıştır.
+_sonuc_reset_genis_tarama = False
 if st.session_state.pop("sonuc_reset_otomatik_analiz", False):
     analiz_btn = True
+    _sonuc_reset_genis_tarama = bool(
+        st.session_state.pop("sonuc_reset_genis_tarama", False)
+    )
     _reset_bilgi = st.session_state.pop("sonuc_reset_bilgi", "")
     if _reset_bilgi:
         st.info(_reset_bilgi)
@@ -8209,7 +8217,14 @@ if analiz_btn:
             for _, m in bulten.iterrows():
                 # Maç Analizi: üstte seçilen manuel hassasiyetle TEK kez çalışır.
                 # Top 50 Market: 0.00–0.10 birleşik hassasiyet modeli kullanılmaya devam eder.
-                if st.session_state.get("sayfa_modu") == "Maç Analizi":
+                if _sonuc_reset_genis_tarama:
+                    # Sonuç Takibi reseti: her maç için 0.00–0.10 hassasiyetleri
+                    # birlikte tara. Karşıt-market tutarlılık kuralları
+                    # hassasiyet_birlesik_hesapla içinde uygulanmaya devam eder.
+                    t, b_det = hassasiyet_birlesik_hesapla(
+                        gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
+                    )
+                elif st.session_state.get("sayfa_modu") == "Maç Analizi":
                     t, b_det = hesapla(
                         gecmis,
                         m,
@@ -8232,7 +8247,7 @@ if analiz_btn:
                     gercek_ornek = len(b_det) if b_det is not None else 0
                 except Exception:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
-                if gercek_ornek < max(1, int(min_ornek or 1)):
+                if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
                     continue
 
                 if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
