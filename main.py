@@ -1391,18 +1391,41 @@ def bulten_cek(key, kodlar, t):
                 market = None
                 totals_market = None
                 secilen_bk_key = ""
-                for bk in sorted(bookies, key=bk_priority):
+                totals_bk_key = ""
+                sirali_bk = sorted(bookies, key=bk_priority)
+
+                # 1X2 için tercih edilen bookmaker'ı seç.
+                for bk in sirali_bk:
                     markets_by_key = {str(mk.get("key", "")): mk for mk in bk.get("markets", [])}
                     h2h_mk = markets_by_key.get("h2h")
                     if h2h_mk is None:
                         continue
                     market = h2h_mk
-                    totals_market = markets_by_key.get("totals")
                     secilen_bk_key = str(bk.get("key", ""))
                     break
 
                 if not market:
                     continue
+
+                # 2.5 Alt/Üst bağımsız aranır. H2H aldığımız bookmaker totals
+                # sunmuyorsa diğer bookmaker'larda gerçek 2.5 çizgisini ara.
+                for bk in sirali_bk:
+                    markets_by_key = {str(mk.get("key", "")): mk for mk in bk.get("markets", [])}
+                    tmkt = markets_by_key.get("totals")
+                    if not tmkt:
+                        continue
+                    has_25 = False
+                    for ox in tmkt.get("outcomes", []) or []:
+                        try:
+                            if abs(float(ox.get("point")) - 2.5) <= 1e-9:
+                                has_25 = True
+                                break
+                        except Exception:
+                            continue
+                    if has_25:
+                        totals_market = tmkt
+                        totals_bk_key = str(bk.get("key", ""))
+                        break
 
                 outcomes = market.get("outcomes", [])
                 h = next((x["price"] for x in outcomes if x["name"] == home), None)
@@ -1443,6 +1466,7 @@ def bulten_cek(key, kodlar, t):
                     "b": float(b),
                     "a": float(a),
                     "bookmaker_key": secilen_bk_key,
+                    "totals_bookmaker_key": totals_bk_key,
                     "o25_over": o25_over,
                     "o25_under": o25_under,
                 })
@@ -2278,6 +2302,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "a": m.get("a"),
             "o25_over": m.get("o25_over"),
             "o25_under": m.get("o25_under"),
+            "totals_bookmaker_key": m.get("totals_bookmaker_key", ""),
         })
         kullanilan_maclar.add(mac_id)
         if len(secimler) >= int(maks):
@@ -2655,9 +2680,29 @@ TAKIM_ADI_ALIASLARI = {
     "hellasverona": "verona",
     # Almanya
     "bayernmunich": "bayernmunchen",
+    "fcbayernmunich": "bayernmunchen",
+    "fcbayernmunchen": "bayernmunchen",
+    "borussiadortmund": "dortmund",
+    "bdortmund": "dortmund",
+    "bvbdortmund": "dortmund",
+    "bvb09dortmund": "dortmund",
+    "tsghoffenheim": "hoffenheim",
+    "tsg1899hoffenheim": "hoffenheim",
+    "1899hoffenheim": "hoffenheim",
+    "hoffenheim1899": "hoffenheim",
     "borussiamonchengladbach": "monchengladbach",
     "bmonchengladbach": "monchengladbach",
     "koln": "cologne",
+    "fckoln": "cologne",
+    "rbLeipzig".lower(): "leipzig",
+    "rasenballsportleipzig": "leipzig",
+    "bayer04leverkusen": "leverkusen",
+    "bayerleverkusen": "leverkusen",
+    "vflwolfsburg": "wolfsburg",
+    "eintrachtfrankfurt": "frankfurt",
+    "scfreiburg": "freiburg",
+    "vfbStuttgart".lower(): "stuttgart",
+    "werderbremen": "bremen",
     # Fransa / Hollanda / Portekiz
     "parissaintgermain": "parissg",
     "psg": "parissg",
@@ -2750,10 +2795,27 @@ def takim_adi_eslestir(takim, adaylar):
 
 
 def _takim_maskesi(series, takim):
+    """Takım adını alias + kontrollü fuzzy eşleşme ile satırlara uygular.
+
+    The Odds API'deki uzun adlar (örn. TSG Hoffenheim / Borussia Dortmund)
+    football-data geçmişindeki kısa adlarla (Hoffenheim / Dortmund) aynı
+    kanonik kulübe bağlanır. Yanlış eşleşmemek için önce exact/alias, sonra
+    takim_adi_eslestir'in güvenli eşiklerini kullanır.
+    """
     hedef = takim_adi_norm(takim)
     if not hedef:
         return pd.Series(False, index=series.index)
-    return series.astype(str).map(takim_adi_norm).eq(hedef)
+
+    norm_series = series.astype(str).map(takim_adi_norm)
+    exact = norm_series.eq(hedef)
+    if bool(exact.any()):
+        return exact
+
+    adaylar = pd.unique(series.astype(str)).tolist()
+    eslesen = takim_adi_eslestir(takim, adaylar)
+    if eslesen:
+        return norm_series.eq(takim_adi_norm(eslesen))
+    return pd.Series(False, index=series.index)
 
 
 def takim_son_maclari(veri, eslesen_takim, mac_tarihi, limit=10):
