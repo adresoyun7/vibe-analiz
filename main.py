@@ -1820,9 +1820,10 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             combo_uygun = combo_uygun and combo_p >= max(65, guven - 3)
         elif profil == "Dengeli":
             combo_uygun = combo_uygun and combo_p >= max(52, guven - 8)
-        # Hassasiyet taramasında market zaten 0.00–0.10 uzlaşmasına göre
-        # seçilmiştir; tek bir toleranstaki kombo bunun üzerine yazamaz.
-        combo_secildi = combo_uygun and not t.get("hassasiyet_taramali")
+        # Hassasiyet taramasında normal profillerde seçilen market korunur.
+        # Ancak Yüksek Oran profili yalnızca kombo kabul ettiği için, mevcut güçlü
+        # combo_label şartları sağlıyorsa hassasiyet taramalı kayıtta da komboya geç.
+        combo_secildi = combo_uygun and (profil == "Yüksek Oran" or not t.get("hassasiyet_taramali"))
         if combo_secildi:
             secim_label = combo_label
             secim_guven = combo_p
@@ -8311,6 +8312,21 @@ else:
         )
 
         kupon_gecmisi = kupon_gecmisini_oku()
+
+        # Yalnızca otomatik oluşturulan kupon geçmişini tek seferde temizler.
+        # Kullanıcının "Kendi Kuponum" seçimlerine dokunmaz.
+        if kupon_gecmisi:
+            temizle_bos, temizle_col = st.columns([7.8, 2.2], gap="small")
+            with temizle_col:
+                if st.button(
+                    "🗑️ Tüm otomatik kuponları temizle",
+                    key="auto_coupon_clear_all",
+                    use_container_width=True,
+                    help="Temkinli, Dengeli ve Yüksek Oran altında oluşturulan tüm otomatik kupon kayıtlarını siler. Kendi Kuponum etkilenmez.",
+                ):
+                    kupon_gecmisini_yaz([])
+                    st.rerun()
+
         if kupon_gecmisi or st.session_state.kupona:
             st.markdown(
                 """
