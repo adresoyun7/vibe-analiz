@@ -8298,8 +8298,16 @@ else:
                             except Exception:
                                 pass
 
+                        # Streamlit container key CSS sınıfına dönüştürülürken Türkçe
+                        # karakterler (özellikle "Yüksek Oran") seçiciyi bozabiliyor.
+                        # CSS için yalnızca ASCII profil anahtarı kullan.
+                        profil_css_key = {
+                            "Temkinli": "temkinli",
+                            "Dengeli": "dengeli",
+                            "Yüksek Oran": "yuksek_oran",
+                        }.get(profil_adi, "profil")
                         aday_key = (
-                            f"profil_aday_kart_{profil_adi.replace(' ', '_')}_"
+                            f"profil_aday_kart_{profil_css_key}_"
                             f"{aday_i}_{abs(hash(str(secim.get('zaman_iso',''))))}"
                         )
                         st.markdown(
