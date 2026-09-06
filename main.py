@@ -7349,28 +7349,6 @@ if gecmis_btn:
             st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
-    st.markdown(
-        """
-        <div class="history-page-header" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
-          <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">🔎 Geçmiş Örnekleri İncele</div>
-          <div style="font-size:.90rem;margin-top:7px;line-height:1.5;">
-            Seçilen liglerde o gün oynanacak tüm maçları ve benzer 1-X-2 oranlarına sahip geçmiş karşılaşmaları gösterir; tahmin üretmez.
-          </div>
-        </div>
-        <style>
-        .history-page-header, .history-page-header * {
-            color:#0f172a !important;
-            -webkit-text-fill-color:#0f172a !important;
-            opacity:1 !important;
-        }
-        .history-page-header > div:last-child {
-            color:#334155 !important;
-            -webkit-text-fill-color:#334155 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     inceleme = st.session_state.get("gecmis_inceleme_list")
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
