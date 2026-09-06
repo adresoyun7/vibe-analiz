@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 83
+APP_SCHEMA_VERSION = 84
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -5804,25 +5804,10 @@ FUTBOL_LIGLERI = {
         "Belçika": "soccer_belgium_first_div",
         "Portekiz": "soccer_portugal_primeira_liga",
         "İskoçya": "soccer_spl",
-        "Danimarka": "soccer_denmark_superliga",
-        "Avusturya": "soccer_austria_bundesliga",
-        "İsviçre": "soccer_switzerland_superleague",
-        "İsveç": "soccer_sweden_allsvenskan",
-        "Norveç": "soccer_norway_eliteserien",
-        "Polonya": "soccer_poland_ekstraklasa",
-        "Finlandiya": "soccer_finland_veikkausliiga",
-        "İrlanda": "soccer_league_of_ireland",
         "Yunanistan": "soccer_greece_super_league",
-        "Rusya Premier League": "soccer_russia_premier_league",
     },
     "DÜNYA VALUE": {
-        "MLS": "soccer_usa_mls",
-        "Brezilya Serie A": "soccer_brazil_campeonato",
-        "Arjantin Primera": "soccer_argentina_primera_division",
-        "Japonya J League": "soccer_japan_j_league",
-        "Meksika Liga MX": "soccer_mexico_ligamx",
         "Güney Kore K League 1": "soccer_korea_kleague1",
-        "Çin Süper Ligi": "soccer_china_superleague",
         "Suudi Pro League": "soccer_saudi_arabia_pro_league",
         "Şili Primera": "soccer_chile_campeonato",
     },
@@ -5850,21 +5835,6 @@ ODDS_TO_HISTORY = {
     "soccer_portugal_primeira_liga": "P1",
     "soccer_spl": "SC0",
     "soccer_greece_super_league": "G1",
-    "soccer_denmark_superliga": "DNK",
-    "soccer_austria_bundesliga": "AUT",
-    "soccer_switzerland_superleague": "SWZ",
-    "soccer_sweden_allsvenskan": "SWE",
-    "soccer_norway_eliteserien": "NOR",
-    "soccer_poland_ekstraklasa": "POL",
-    "soccer_finland_veikkausliiga": "FIN",
-    "soccer_league_of_ireland": "IRL",
-    "soccer_russia_premier_league": "RUS",
-    "soccer_usa_mls": "USA",
-    "soccer_brazil_campeonato": "BRA",
-    "soccer_argentina_primera_division": "ARG",
-    "soccer_japan_j_league": "JPN",
-    "soccer_mexico_ligamx": "MEX",
-    "soccer_china_superleague": "CHN",
 }
 
 LEAGUE_EMOJIS = {
