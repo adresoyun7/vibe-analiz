@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 81
+APP_SCHEMA_VERSION = 82
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -6408,7 +6408,7 @@ with st.container(key="sticky_analysis_controls"):
             0.00, 0.30, 0.08,
             step=0.01,
             key="top_tol",
-            on_change=clear_detail_on_filter_change,
+
             help="Düşük değerler oranı daha yakın maçları; yüksek değerler daha fazla geçmiş örneği kapsar.",
         )
     with ayar_ornek_col:
