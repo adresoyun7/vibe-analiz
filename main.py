@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 82
+APP_SCHEMA_VERSION = 83
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -8717,8 +8717,24 @@ def ana_tahmin_gecmis_detayi(m, t, b_det):
     dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
     dt["Ev Sahibi"] = bd["HomeTeam"]
     dt["Deplasman"] = bd["AwayTeam"]
-    dt["İY Sonuç"] = bd["HTHG"].astype(int).astype(str) + "-" + bd["HTAG"].astype(int).astype(str)
-    dt["MS Sonuç"] = bd["FTHG"].astype(int).astype(str) + "-" + bd["FTAG"].astype(int).astype(str)
+    # Extra/worldwide geçmiş liglerde ilk yarı skorları (HTHG/HTAG) boş olabilir.
+    # NaN değerlerini int'e çevirmek IntCastingNaNError üretir; eksik HT skorunu "-" göster.
+    hthg_num = pd.to_numeric(bd.get("HTHG"), errors="coerce")
+    htag_num = pd.to_numeric(bd.get("HTAG"), errors="coerce")
+    iy_sonuc = (
+        hthg_num.astype("Int64").astype(str)
+        + "-"
+        + htag_num.astype("Int64").astype(str)
+    )
+    dt["İY Sonuç"] = iy_sonuc.where(hthg_num.notna() & htag_num.notna(), "-")
+    fthg_num = pd.to_numeric(bd.get("FTHG"), errors="coerce")
+    ftag_num = pd.to_numeric(bd.get("FTAG"), errors="coerce")
+    ms_sonuc = (
+        fthg_num.astype("Int64").astype(str)
+        + "-"
+        + ftag_num.astype("Int64").astype(str)
+    )
+    dt["MS Sonuç"] = ms_sonuc.where(fthg_num.notna() & ftag_num.notna(), "-")
     dt["2.5 GOL"] = (bd["FTHG"] + bd["FTAG"] >= 3).map({True: "Üst", False: "Alt"})
     dt["KG"] = ((bd["FTHG"] > 0) & (bd["FTAG"] > 0)).map({True: "Var", False: "Yok"})
     dt["HT/FT"] = bd["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + bd["FTR"].replace({"H": "1", "A": "2", "D": "X"})
