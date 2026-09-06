@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 85
+APP_SCHEMA_VERSION = 86
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1268,16 +1268,8 @@ def _gecmis_cache_yukle():
             if "Date" in df.columns:
                 df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
 
-            # Bu 16 Football-Data extra/worldwide ligi bültende seçilebilir kalır,
-            # fakat geçmiş model havuzunda kullanılmaz (İY verileri eksik).
-            _extra_gecmis_askida = {
-                "ARG", "AUT", "BRA", "CHN", "DNK", "FIN", "IRL", "JPN",
-                "MEX", "NOR", "POL", "ROU", "RUS", "SWE", "SWZ", "USA",
-            }
-            if "league_code" in df.columns:
-                df = df[
-                    ~df["league_code"].astype(str).str.upper().isin(_extra_gecmis_askida)
-                ].copy()
+            # Extra/worldwide ligler bültende kalır; geçmiş model ve detay havuzundan çıkar.
+            df = sadece_tam_verili_gecmis(df)
 
             # Football-Data extra/worldwide dosyaları season_code='2021+' olarak
             # kaydedilmişti. Backtest ve sezon filtrelerinin çalışması için tarihi
@@ -5956,6 +5948,20 @@ def filtrelenmis_lig_listesi(arama_text: str):
     ]
 
 
+EXTRA_GECMIS_ASKIDA_KODLARI = {
+    "ARG", "AUT", "BRA", "CHN", "DNK", "FIN", "IRL", "JPN",
+    "MEX", "NOR", "POL", "ROU", "RUS", "SWE", "SWZ", "USA",
+}
+
+def sadece_tam_verili_gecmis(df):
+    """İY verisi eksik extra/worldwide ligleri tüm geçmiş örnek görünümlerinden çıkar."""
+    if df is None or getattr(df, "empty", True) or "league_code" not in df.columns:
+        return df
+    return df[
+        ~df["league_code"].astype(str).str.upper().isin(EXTRA_GECMIS_ASKIDA_KODLARI)
+    ].copy()
+
+
 GECMISI_BULUNAN_LIGLER = [
     "soccer_turkey_super_league",
     "soccer_epl",
@@ -6516,8 +6522,8 @@ with st.container(key="sticky_analysis_controls"):
                 clear_leagues()
                 st.rerun()
         with preset3:
-            if st.button("Geçmişi Bulunan Ligler", use_container_width=True, key="preset_history_top",
-                         help="Yalnızca geçmiş model verisi aktif olan ligleri seçer."):
+            if st.button("Tam Verili Ligler", use_container_width=True, key="preset_history_top",
+                         help="Geçmiş sonuç ve ilk yarı verileri eksiksiz olan ligleri seçer."):
                 set_leagues(GECMISI_BULUNAN_LIGLER)
                 st.rerun()
         with preset4:
@@ -8449,7 +8455,7 @@ if analiz_btn:
             except Exception:
                 st.session_state["son_gecmis_kaynak_hatalari"] = []
                 st.session_state["son_gecmis_kaynak"] = ""
-            st.session_state.last_gecmis_df = gecmis
+            st.session_state.last_gecmis_df = sadece_tam_verili_gecmis(gecmis)
             st.session_state.last_bulten_df = bulten
             st.session_state["son_bulten_mac_sayisi"] = 0 if getattr(bulten, "empty", True) else len(bulten)
             st.session_state["son_api_hatasi"] = st.session_state.get("odds_api_last_error")
@@ -8751,6 +8757,8 @@ def ana_tahmin_gecmis_detayi(m, t, b_det):
     """, unsafe_allow_html=True)
 
     bd = b_det.head(gosterim_adedi).copy()
+
+    bd = sadece_tam_verili_gecmis(bd)
     dt = pd.DataFrame()
     dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
     dt["Ev Sahibi"] = bd["HomeTeam"]
