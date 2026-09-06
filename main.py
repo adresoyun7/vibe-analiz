@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 84
+APP_SCHEMA_VERSION = 85
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -5956,6 +5956,28 @@ def filtrelenmis_lig_listesi(arama_text: str):
     ]
 
 
+GECMISI_BULUNAN_LIGLER = [
+    "soccer_turkey_super_league",
+    "soccer_epl",
+    "soccer_efl_champ",
+    "soccer_england_league1",
+    "soccer_england_league2",
+    "soccer_spain_la_liga",
+    "soccer_spain_segunda_division",
+    "soccer_germany_bundesliga",
+    "soccer_germany_bundesliga2",
+    "soccer_italy_serie_a",
+    "soccer_italy_serie_b",
+    "soccer_france_ligue_one",
+    "soccer_france_ligue_two",
+    "soccer_netherlands_eredivisie",
+    "soccer_belgium_first_div",
+    "soccer_portugal_primeira_liga",
+    "soccer_spl",
+    "soccer_greece_super_league",
+]
+
+
 KARLI_LIG_PRESETLERI = {
     # Avrupa ana ligleri, mevcut alt ligleri ve UEFA kupaları.
     "cekirdek_value": [
@@ -6484,7 +6506,7 @@ with st.container(key="sticky_analysis_controls"):
                 on_change=clear_detail_on_filter_change,
             )
 
-        preset1, preset2, preset3 = st.columns(3, gap="small")
+        preset1, preset2, preset3, preset4 = st.columns(4, gap="small")
         with preset1:
             if st.button("Hepsini Aç", use_container_width=True, key="preset_all_top"):
                 set_leagues(tum_lig_kodlari())
@@ -6494,6 +6516,11 @@ with st.container(key="sticky_analysis_controls"):
                 clear_leagues()
                 st.rerun()
         with preset3:
+            if st.button("Geçmişi Bulunan Ligler", use_container_width=True, key="preset_history_top",
+                         help="Yalnızca geçmiş model verisi aktif olan ligleri seçer."):
+                set_leagues(GECMISI_BULUNAN_LIGLER)
+                st.rerun()
+        with preset4:
             if st.button("Avrupa Ana + Alt", use_container_width=True, key="preset_core_top"):
                 toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek_value"])
                 st.rerun()
