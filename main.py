@@ -8256,8 +8256,16 @@ if analiz_btn:
                     st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı.")
 
         final = []
+        # Analiz filtresi teşhisi: hangi aşamada kaç maç eleniyor?
+        _sayac_toplam = 0
+        _sayac_t_none = 0
+        _sayac_ornek = 0
+        _sayac_guven = 0
+        _sayac_gecen = 0
+
         if not bulten.empty and not gecmis.empty:
             for _, m in bulten.iterrows():
+                _sayac_toplam += 1
                 # Maç Analizi: üstte seçilen manuel hassasiyetle TEK kez çalışır.
                 # Top 50 Market: 0.00–0.10 birleşik hassasiyet modeli kullanılmaya devam eder.
                 if _sonuc_reset_genis_tarama:
@@ -8281,6 +8289,7 @@ if analiz_btn:
                         gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
                     )
                 if t is None:
+                    _sayac_t_none += 1
                     continue
 
                 # Minimum Örnek Sayısı ana maç analizinde de kesin olarak uygulanır.
@@ -8291,13 +8300,16 @@ if analiz_btn:
                 except Exception:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
                 if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
+                    _sayac_ornek += 1
                     continue
 
                 if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
+                    _sayac_guven += 1
                     continue
                 m_dict = m.to_dict()
                 m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
                 final.append({"m": m_dict, "t": t, "b": b_det})
+                _sayac_gecen += 1
 
         final = sorted(
             final,
@@ -8328,6 +8340,16 @@ if analiz_btn:
         )
         st.session_state.final_list = final
         st.session_state["son_final_mac_sayisi"] = len(final)
+        st.session_state["analiz_filtre_sayaclari"] = {
+            "toplam": _sayac_toplam,
+            "t_none": _sayac_t_none,
+            "ornek": _sayac_ornek,
+            "guven": _sayac_guven,
+            "gecen": _sayac_gecen,
+            "min_ornek": int(min_ornek or 0),
+            "oynanabilir_esik": int(oynanabilir_esik or 0),
+            "tolerans": float(TOLERANS or 0.0),
+        }
         analiz_tahminlerini_kaydet(final)
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
@@ -8969,14 +8991,25 @@ if "son_bulten_mac_sayisi" in st.session_state:
     _fc = int(st.session_state.get("son_final_mac_sayisi", 0) or 0)
     _ae = st.session_state.get("son_api_hatasi")
     _dt = st.session_state.get("son_analiz_tarihi_secili", "")
+    _fs = st.session_state.get("analiz_filtre_sayaclari", {}) or {}
+
     if _ae:
         st.error(f"🔎 Son analiz teşhisi · Tarih: {_dt} · API/bülten: {_bc} maç · Analize kalan: {_fc} · Hata: {_ae}")
     elif _bc == 0:
         st.warning(f"🔎 Son analiz teşhisi · Tarih: {_dt} · The Odds API'den bu filtrelerle 0 maç geldi.")
     elif _fc == 0:
-        st.warning(f"🔎 Son analiz teşhisi · Tarih: {_dt} · API'den {_bc} maç geldi fakat güven/örnek filtrelerinden sonra 0 maç kaldı.")
+        st.warning(
+            f"🔎 Son analiz teşhisi · API: {_bc} · hesapla() sonuç yok: {_fs.get('t_none',0)} · "
+            f"minimum örnekten elenen: {_fs.get('ornek',0)} · güven eşiğinden elenen: {_fs.get('guven',0)} · "
+            f"geçen: {_fs.get('gecen',0)} · tolerans: {_fs.get('tolerans','?')} · "
+            f"min örnek: {_fs.get('min_ornek','?')} · güven eşiği: {_fs.get('oynanabilir_esik','?')}"
+        )
     else:
-        st.success(f"🔎 Son analiz teşhisi · Tarih: {_dt} · API: {_bc} maç · Gösterilen: {_fc} maç")
+        st.success(
+            f"🔎 Son analiz teşhisi · API: {_bc} · hesapla() sonuç yok: {_fs.get('t_none',0)} · "
+            f"örnekten elenen: {_fs.get('ornek',0)} · güvenden elenen: {_fs.get('guven',0)} · "
+            f"gösterilen: {_fc}"
+        )
 
 st.markdown(
     f'<div style="font-size:.88rem;color:#475569;font-weight:800;margin-top:10px">📅 {format_tr_date(secili_tarih)}</div>',
