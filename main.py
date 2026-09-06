@@ -1,5 +1,6 @@
 
 import io
+import os
 import json
 import math
 import re
@@ -1256,6 +1257,35 @@ def fake_confidence_duzelt(conf_prob: float, sample: int, tolerans: float):
     return conf_prob * carpan, carpan < 1.0
 
 
+GEÇMİŞ_VERİ_DOSYASI = Path(__file__).with_name("yapaikupon_gecmis_cache.csv")
+
+def _gecmis_cache_yukle():
+    """Uygulamanın yanındaki kalıcı yerel geçmiş CSV'sini yükler."""
+    try:
+        if GEÇMİŞ_VERİ_DOSYASI.exists() and GEÇMİŞ_VERİ_DOSYASI.stat().st_size > 0:
+            df = pd.read_csv(GEÇMİŞ_VERİ_DOSYASI)
+            if "Date" in df.columns:
+                df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            return df
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+def _gecmis_cache_kaydet(df):
+    """Başarılı canlı indirmeyi yerel cache'e atomik biçimde yazar."""
+    if df is None or getattr(df, "empty", True):
+        return False
+    try:
+        tmp = GEÇMİŞ_VERİ_DOSYASI.with_suffix(".tmp.csv")
+        kayit = df.copy()
+        if "Date" in kayit.columns:
+            kayit["Date"] = pd.to_datetime(kayit["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        kayit.to_csv(tmp, index=False)
+        os.replace(tmp, GEÇMİŞ_VERİ_DOSYASI)
+        return True
+    except Exception:
+        return False
+
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(sezonlar):
     if not sezonlar:
@@ -1277,8 +1307,6 @@ def futbol_veri_motoru(sezonlar):
         for s in sezonlar:
             url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
             try:
-                # Streamlit Cloud'da pd.read_csv(URL) zaman zaman boş/SSL/403 hatası verebiliyor.
-                # Önce requests ile indir, sonra bellekte CSV olarak oku.
                 r = requests.get(
                     url,
                     timeout=20,
@@ -1286,6 +1314,13 @@ def futbol_veri_motoru(sezonlar):
                 )
                 if r.status_code != 200 or not r.content:
                     hatalar.append(f"{k}-{s}: HTTP {r.status_code}")
+                    continue
+
+                # Football-Data arıza sayfasını 200 ile döndürürse CSV sanmayalım.
+                ct = str(r.headers.get("content-type", "")).lower()
+                ilk = r.content[:300].lower()
+                if b"<html" in ilk or b"temporarily unavailable" in ilk or "text/html" in ct:
+                    hatalar.append(f"{k}-{s}: geçici HTML/servis hatası")
                     continue
 
                 df = pd.read_csv(io.BytesIO(r.content))
@@ -1316,24 +1351,44 @@ def futbol_veri_motoru(sezonlar):
                 if not temp.empty:
                     liste.append(temp)
                 else:
-                    hatalar.append(f"{k}-{s}: CSV geldi ama kullanılabilir oran satırı yok")
-
+                    hatalar.append(f"{k}-{s}: kullanılabilir oran satırı yok")
             except Exception as exc:
                 hatalar.append(f"{k}-{s}: {type(exc).__name__}: {exc}")
 
-    sonuc = pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
+    if liste:
+        sonuc = pd.concat(liste).reset_index(drop=True)
+        _gecmis_cache_kaydet(sonuc)
+        try:
+            sonuc.attrs["kaynak"] = "football-data + yerel cache güncellendi"
+            sonuc.attrs["kaynak_hata_sayisi"] = len(hatalar)
+            sonuc.attrs["kaynak_hatalari"] = hatalar[:12]
+        except Exception:
+            pass
+        return sonuc
 
-    # cache_data içinde session_state yazmak güvenli olmayabileceği için
-    # teşhis bilgisini DataFrame attrs içine taşıyoruz.
+    # Canlı kaynak tamamen çökerse yerel cache'den devam et.
+    yerel = _gecmis_cache_yukle()
+    if not yerel.empty:
+        # Yalnızca seçilen sezonları döndür.
+        if "season_code" in yerel.columns:
+            yerel = yerel[yerel["season_code"].astype(str).isin([str(x) for x in sezonlar])].copy()
+        try:
+            yerel.attrs["kaynak"] = "yerel cache fallback"
+            yerel.attrs["kaynak_hata_sayisi"] = len(hatalar)
+            yerel.attrs["kaynak_hatalari"] = hatalar[:12]
+        except Exception:
+            pass
+        return yerel.reset_index(drop=True)
+
+    sonuc = pd.DataFrame()
     try:
+        sonuc.attrs["kaynak"] = "veri yok"
         sonuc.attrs["kaynak_hata_sayisi"] = len(hatalar)
         sonuc.attrs["kaynak_hatalari"] = hatalar[:12]
     except Exception:
         pass
-
     return sonuc
 
-@st.cache_data(ttl=1800, show_spinner=False)
 def odds_spor_katalogu(key):
     try:
         r = requests.get(
@@ -8262,8 +8317,10 @@ if analiz_btn:
             st.session_state["son_gecmis_satir_sayisi"] = 0 if getattr(gecmis, "empty", True) else len(gecmis)
             try:
                 st.session_state["son_gecmis_kaynak_hatalari"] = list(gecmis.attrs.get("kaynak_hatalari", []))
+                st.session_state["son_gecmis_kaynak"] = str(gecmis.attrs.get("kaynak", ""))
             except Exception:
                 st.session_state["son_gecmis_kaynak_hatalari"] = []
+                st.session_state["son_gecmis_kaynak"] = ""
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
             st.session_state["son_bulten_mac_sayisi"] = 0 if getattr(bulten, "empty", True) else len(bulten)
@@ -9022,16 +9079,20 @@ if "son_bulten_mac_sayisi" in st.session_state:
     elif _fc == 0:
         _gr = int(st.session_state.get("son_gecmis_satir_sayisi", 0) or 0)
         _gh = st.session_state.get("son_gecmis_kaynak_hatalari", []) or []
+        _gk = st.session_state.get("son_gecmis_kaynak", "") or ""
         if _gr == 0:
             st.error(
-                f"🔎 Asıl sorun bulundu · API: {_bc} maç geliyor ama geçmiş veri motoru 0 satır döndürüyor. "
-                f"Bu yüzden analiz döngüsü hiç başlamıyor."
+                f"🔎 Geçmiş veri yok · API: {_bc} maç geliyor ama Football-Data erişilemiyor ve henüz yerel cache oluşmamış."
+            )
+            st.caption(
+                "İlk başarılı Football-Data bağlantısında yapaikupon_gecmis_cache.csv otomatik oluşturulacak. "
+                "Sonraki kesintilerde uygulama bu dosyadan çalışmaya devam edecek."
             )
             if _gh:
                 st.caption("Football-Data hataları: " + " | ".join(map(str, _gh[:6])))
         else:
             st.warning(
-                f"🔎 Son analiz teşhisi · API: {_bc} · geçmiş veri: {_gr} satır · "
+                f"🔎 Son analiz teşhisi · API: {_bc} · geçmiş veri: {_gr} satır · kaynak: {_gk} · "
                 f"hesapla() sonuç yok: {_fs.get('t_none',0)} · minimum örnekten elenen: {_fs.get('ornek',0)} · "
                 f"güven eşiğinden elenen: {_fs.get('guven',0)} · geçen: {_fs.get('gecen',0)} · "
                 f"tolerans: {_fs.get('tolerans','?')} · min örnek: {_fs.get('min_ornek','?')} · "
