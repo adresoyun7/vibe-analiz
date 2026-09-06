@@ -7370,8 +7370,19 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         # Geçmiş Örnekleri için hızlı görünüm/filtre anahtarları.
         # Sağ üstte, koyu mod anahtarı gibi açılıp kapanırlar.
         mevcut_ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
-        if "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
+
+        # Ana "Sadece aynı lig verilerini kullan" seçeneği değiştiğinde
+        # Geçmiş Örnekleri sayfasındaki bağımsız toggle da aynı duruma gelsin.
+        # Böylece ana filtre KAPALI yapıldığında burada eski AÇIK durumu kalmaz.
+        onceki_global_ayni_lig = st.session_state.get("gecmis_global_ayni_lig_onceki", None)
+        if onceki_global_ayni_lig is None or bool(onceki_global_ayni_lig) != mevcut_ayni_lig:
             st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
+            # Mevcut liste eski filtreyle hesaplandıysa alttaki blok yeniden hesaplasın.
+            st.session_state["gecmis_ayni_lig_uygulandi"] = not mevcut_ayni_lig
+            st.session_state["gecmis_global_ayni_lig_onceki"] = mevcut_ayni_lig
+        elif "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
+            st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
+
         # Bu değer, Geçmiş Örnekleri listesinin en son hangi "aynı lig" durumuyla
         # hesaplandığını tutar. Böylece anahtar AÇIK -> KAPALI yapıldığında da liste
         # yeniden tüm ligleri kapsayacak şekilde hesaplanır.
