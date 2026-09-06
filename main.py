@@ -45,8 +45,9 @@ st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 # ==========================================================
 
 # Kullanım:
-# The Odds API key yalnızca sidebar'dan manuel girilir.
-# Streamlit Secrets ve key havuzu kullanılmaz.
+# 1) Kullanıcı sidebar'dan kendi ODDS API KEY'ini girebilir.
+# 2) İstersen Streamlit Cloud > Settings > Secrets içine ODDS_API_KEY ekleyebilirsin.
+#    Sidebar'dan girilen key, secrets key'in önüne geçer.
 
 def get_secret_value(name, default=""):
     try:
@@ -56,8 +57,10 @@ def get_secret_value(name, default=""):
 
 
 def get_app_api_key():
-    """Yalnızca sidebar'dan manuel girilen The Odds API key'ini kullanır."""
-    return str(st.session_state.get("user_api_key", "") or "").strip()
+    user_key = str(st.session_state.get("user_api_key", "")).strip()
+    if user_key:
+        return user_key
+    return str(get_secret_value("ODDS_API_KEY", "")).strip()
 
 
 def get_api_football_key():
@@ -1339,41 +1342,19 @@ def odds_lig_kodu_coz(key, kod):
 
 def bulten_cek(key, kodlar, t):
     st.session_state["odds_api_last_error"] = None
-    key = str(get_app_api_key() or key or "").strip()
+    secret_key = get_app_api_key()
+    if secret_key:
+        key = secret_key
     if not key:
         st.error("Maç bültenini çekmek için ODDS API key gerekli.")
         return pd.DataFrame()
-
     res = []
-    st.session_state["odds_api_raw_match_count"] = 0
-    st.session_state["odds_api_selected_match_count"] = 0
-    st.session_state["odds_api_events_without_odds"] = 0
-
-    # Seçilen gün Türkiye saatidir. API UTC kullandığı için gün başlangıç/bitişini
-    # UTC'ye çevirip doğrudan API sorgusuna ekliyoruz.
-    try:
-        from zoneinfo import ZoneInfo
-        _tr_tz = ZoneInfo("Europe/Istanbul")
-        _utc_tz = ZoneInfo("UTC")
-        _gun_bas = datetime(t.year, t.month, t.day, 0, 0, 0, tzinfo=_tr_tz)
-        _gun_bit = datetime(t.year, t.month, t.day, 23, 59, 59, tzinfo=_tr_tz)
-        _from_utc = _gun_bas.astimezone(_utc_tz).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _to_utc = _gun_bit.astimezone(_utc_tz).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
-        _from_utc = None
-        _to_utc = None
 
     for secili_kod in kodlar:
         k = odds_lig_kodu_coz(key, secili_kod)
         if not k:
             continue
         try:
-            ortak_zaman = (
-                {"commenceTimeFrom": _from_utc, "commenceTimeTo": _to_utc}
-                if _from_utc and _to_utc else {}
-            )
-
-            # 1) Normal sorgu: mevcut davranışı koru.
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
                 params={
@@ -1381,11 +1362,12 @@ def bulten_cek(key, kodlar, t):
                     "regions": "eu",
                     "markets": "h2h,totals",
                     "oddsFormat": "decimal",
-                    **ortak_zaman,
                 },
                 timeout=12,
             )
 
+            # The Odds API kota bilgilerini son başarılı/başarısız yanıttan sakla.
+            # Böylece kullanıcı kalan krediyi arayüzden görebilir.
             try:
                 st.session_state["odds_api_quota"] = {
                     "remaining": r.headers.get("x-requests-remaining"),
@@ -1396,96 +1378,26 @@ def bulten_cek(key, kodlar, t):
             except Exception:
                 pass
 
-            data = []
-            if r.status_code == 200:
+            if r.status_code != 200:
                 try:
-                    _tmp = r.json()
-                    if isinstance(_tmp, list):
-                        data = _tmp
+                    hata_metni = r.text[:300]
                 except Exception:
-                    data = []
-
-            # 2) Bazı futbol liglerinde EU + totals kapsamı boş kalabiliyor.
-            # İlk sorgu boşsa daha geniş bookmaker bölgesiyle yalnız H2H dene.
-            if not data:
-                try:
-                    r2 = requests.get(
-                        f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
-                        params={
-                            "apiKey": key,
-                            "regions": "uk,eu",
-                            "markets": "h2h",
-                            "oddsFormat": "decimal",
-                            **ortak_zaman,
-                        },
-                        timeout=12,
-                    )
-                    try:
-                        st.session_state["odds_api_quota"] = {
-                            "remaining": r2.headers.get("x-requests-remaining"),
-                            "used": r2.headers.get("x-requests-used"),
-                            "last": r2.headers.get("x-requests-last"),
-                            "updated_at": time.time(),
-                        }
-                    except Exception:
-                        pass
-                    if r2.status_code == 200:
-                        _tmp2 = r2.json()
-                        if isinstance(_tmp2, list):
-                            data = _tmp2
-                            r = r2
-                except Exception:
-                    pass
-
-            # 3) Hâlâ boşsa ücretsiz /events endpoint'i ile fikstür gerçekten
-            # API'de var mı kontrol et. Bu sonuç oran olmadığı için analize
-            # eklenmez; yalnız teşhis için sayaç tutulur.
-            if not data:
-                try:
-                    er = requests.get(
-                        f"https://api.the-odds-api.com/v4/sports/{k}/events",
-                        params={"apiKey": key, **ortak_zaman},
-                        timeout=12,
-                    )
-                    if er.status_code == 200:
-                        ev = er.json()
-                        if isinstance(ev, list):
-                            st.session_state["odds_api_events_without_odds"] = (
-                                int(st.session_state.get("odds_api_events_without_odds", 0) or 0)
-                                + len(ev)
-                            )
-                except Exception:
-                    pass
-
-            if not data:
-                if r.status_code != 200:
-                    try:
-                        hata_metni = r.text[:300]
-                    except Exception:
-                        hata_metni = ""
-                    st.session_state["odds_api_last_error"] = (
-                        f"{k}: HTTP {r.status_code} {hata_metni}".strip()
-                    )
+                    hata_metni = ""
+                st.session_state["odds_api_last_error"] = f"{k}: HTTP {r.status_code} {hata_metni}".strip()
                 continue
 
-            st.session_state["odds_api_raw_match_count"] += len(data)
+            data = r.json()
+            if not isinstance(data, list):
+                continue
 
             for m in data:
                 try:
-                    _raw_time = str(m["commence_time"])
-                    try:
-                        from zoneinfo import ZoneInfo
-                        _utc_dt = datetime.fromisoformat(_raw_time.replace("Z", "+00:00"))
-                        tm = _utc_dt.astimezone(ZoneInfo("Europe/Istanbul")).replace(tzinfo=None)
-                    except Exception:
-                        tm = datetime.strptime(_raw_time, "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
                 except Exception:
                     continue
 
                 if tm.date() != t:
                     continue
-
-                st.session_state["odds_api_selected_match_count"] += 1
 
                 bookies = m.get("bookmakers", [])
                 if not bookies:
@@ -4782,6 +4694,13 @@ def tahmin_sonuclarini_guncelle(api_key):
             skor_url = f"https://api.the-odds-api.com/v4/sports/{lig}/scores/"
             skor_param = {"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}
             r = requests.get(skor_url, params=skor_param, timeout=15)
+            # Oturumda kalmış anahtar geçersizse ve uygulamada farklı bir secret
+            # anahtar varsa sonuç takibini onunla bir kez daha dene.
+            if r.status_code == 401:
+                yedek_key = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
+                if yedek_key and yedek_key != str(api_key).strip():
+                    skor_param["apiKey"] = yedek_key
+                    r = requests.get(skor_url, params=skor_param, timeout=15)
             if r.status_code == 200 and isinstance(r.json(), list):
                 skorlar.extend(r.json())
             elif r.status_code == 401:
@@ -6970,7 +6889,8 @@ with st.sidebar:
         else:
             st.caption("API-Football fallback kapalı")
 
-    # Manuel key sistemi: ana analiz her seferinde güncel bülteni API'den alır.
+    # API TASARRUF PANELİ: analiz butonları cache'teki aynı bülteni kullanır.
+    cache_hazir, cache_toplam = odds_cache_bilgi(secili_kodlar, secili_tarih)
     kota = st.session_state.get("odds_api_quota", {}) or {}
     kalan = kota.get("remaining")
     kullanilan = kota.get("used")
@@ -6979,7 +6899,7 @@ with st.sidebar:
         kota_yazi = f"Kalan kredi: {kalan}"
         if kullanilan not in (None, ""):
             kota_yazi += f" · Kullanılan: {kullanilan}"
-    st.caption(f"🌐 Direkt API modu · {kota_yazi}")
+    st.caption(f"🧠 Bülten cache: {cache_hazir}/{cache_toplam} lig · 15 dk · {kota_yazi}")
     if st.button(
         "🔄 Oranları Yenile",
         use_container_width=True,
@@ -6989,9 +6909,9 @@ with st.sidebar:
         if not API_KEY or not secili_kodlar:
             st.warning("API key ve en az bir lig gerekli.")
         else:
-            with st.spinner("Seçili liglerin oranları doğrudan API'den yenileniyor..."):
-                yenilenen_bulten = bulten_cek(
-                    API_KEY, secili_kodlar, secili_tarih
+            with st.spinner("Seçili liglerin oranları yenileniyor..."):
+                yenilenen_bulten = bulten_guncel_al(
+                    API_KEY, secili_kodlar, secili_tarih, zorla_yenile=True
                 )
                 st.session_state.last_bulten_df = yenilenen_bulten
             st.success(f"Oranlar yenilendi · {len(yenilenen_bulten)} maç")
@@ -8319,9 +8239,9 @@ if analiz_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
-        with st.spinner("📊 Güncel maç bülteni The Odds API'den alınıyor ve analiz ediliyor..."):
+        with st.spinner("📊 Bülten hazırlanıyor (cache varsa API kullanılmaz) ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
-            bulten = bulten_cek(API_KEY, secili_kodlar, secili_tarih)
+            bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
             if getattr(bulten, "empty", True):
@@ -8329,14 +8249,7 @@ if analiz_btn:
                 if son_hata:
                     st.error(f"⚠️ The Odds API yanıtı alınamadı: {son_hata}")
                 else:
-                    _raw = int(st.session_state.get("odds_api_raw_match_count", 0) or 0)
-                    _sel = int(st.session_state.get("odds_api_selected_match_count", 0) or 0)
-                    _events = int(st.session_state.get("odds_api_events_without_odds", 0) or 0)
-                    st.warning(
-                        f"⚠️ Seçilen tarih ve liglerde oynanabilir maç bulunamadı. "
-                        f"Oranlı API maçı: {_raw} · Türkiye tarihine uyan: {_sel} · "
-                        f"Fikstürde olup oranı olmayan: {_events}"
-                    )
+                    st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı. Oranları Yenile ile bir kez zorla yenileyebilirsin.")
 
         final = []
         if not bulten.empty and not gecmis.empty:
