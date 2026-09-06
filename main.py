@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 80
+APP_SCHEMA_VERSION = 81
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -9189,11 +9189,9 @@ if "son_bulten_mac_sayisi" in st.session_state:
                 f"güven eşiği: {_fs.get('oynanabilir_esik','?')}"
             )
     else:
-        st.success(
-            f"🔎 Son analiz teşhisi · API: {_bc} · hesapla() sonuç yok: {_fs.get('t_none',0)} · "
-            f"örnekten elenen: {_fs.get('ornek',0)} · güvenden elenen: {_fs.get('guven',0)} · "
-            f"gösterilen: {_fc}"
-        )
+        # Analiz başarılıysa teşhis satırını kullanıcıya gösterme.
+        # API/geçmiş veri problemi veya 0 sonuç olduğunda yukarıdaki uyarılar görünmeye devam eder.
+        pass
 
 st.markdown(
     f'<div style="font-size:.88rem;color:#475569;font-weight:800;margin-top:10px">📅 {format_tr_date(secili_tarih)}</div>',
