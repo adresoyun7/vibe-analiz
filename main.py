@@ -6314,6 +6314,24 @@ def clear_detail_on_filter_change():
     st.session_state.detay_item = None
 
 
+def sync_ayni_lig_globalden_gecmise():
+    """Üstteki aynı-lig checkbox'ını Geçmiş Örnekleri toggle'ına yansıtır."""
+    deger = bool(st.session_state.get("sadece_ayni_lig", False))
+    st.session_state["gecmis_sadece_ayni_lig_toggle"] = deger
+    # Geçmiş örnek listesi bu yeni duruma göre yeniden kurulmalı.
+    st.session_state["gecmis_ayni_lig_uygulandi"] = not deger
+    clear_detail_on_filter_change()
+
+
+def sync_ayni_lig_gecmisten_globale():
+    """Geçmiş Örnekleri toggle'ını üstteki aynı-lig checkbox'ına yansıtır."""
+    deger = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
+    st.session_state["sadece_ayni_lig"] = deger
+    # Mevcut geçmiş liste yeni duruma göre yeniden kurulmalı.
+    st.session_state["gecmis_ayni_lig_uygulandi"] = not deger
+    clear_detail_on_filter_change()
+
+
 def clear_backtest_on_change():
     st.session_state.backtest_df = None
     st.session_state.backtest_11_df = None
@@ -6521,7 +6539,7 @@ with st.container(key="sticky_analysis_controls"):
                 "Sadece aynı lig verilerini kullan", value=False,
                 key="sadece_ayni_lig",
                 help="Açıkken maç yalnızca kendi liginin geçmişiyle karşılaştırılır.",
-                on_change=clear_detail_on_filter_change,
+                on_change=sync_ayni_lig_globalden_gecmise,
             )
 
         preset1, preset2, preset3, preset4 = st.columns(4, gap="small")
@@ -7368,24 +7386,10 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         st.success(f"{len(inceleme)} güncel maç bulundu.")
 
         # Geçmiş Örnekleri için hızlı görünüm/filtre anahtarları.
-        # Sağ üstte, koyu mod anahtarı gibi açılıp kapanırlar.
+        # İki aynı-lig kontrolü çift yönlü callback ile tek ayar gibi çalışır.
         mevcut_ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
-
-        # Ana "Sadece aynı lig verilerini kullan" seçeneği değiştiğinde
-        # Geçmiş Örnekleri sayfasındaki bağımsız toggle da aynı duruma gelsin.
-        # Böylece ana filtre KAPALI yapıldığında burada eski AÇIK durumu kalmaz.
-        onceki_global_ayni_lig = st.session_state.get("gecmis_global_ayni_lig_onceki", None)
-        if onceki_global_ayni_lig is None or bool(onceki_global_ayni_lig) != mevcut_ayni_lig:
+        if "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
             st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
-            # Mevcut liste eski filtreyle hesaplandıysa alttaki blok yeniden hesaplasın.
-            st.session_state["gecmis_ayni_lig_uygulandi"] = not mevcut_ayni_lig
-            st.session_state["gecmis_global_ayni_lig_onceki"] = mevcut_ayni_lig
-        elif "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
-            st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
-
-        # Bu değer, Geçmiş Örnekleri listesinin en son hangi "aynı lig" durumuyla
-        # hesaplandığını tutar. Böylece anahtar AÇIK -> KAPALI yapıldığında da liste
-        # yeniden tüm ligleri kapsayacak şekilde hesaplanır.
         if "gecmis_ayni_lig_uygulandi" not in st.session_state:
             st.session_state["gecmis_ayni_lig_uygulandi"] = mevcut_ayni_lig
         if "gecmis_oranlari_goster" not in st.session_state:
@@ -7397,6 +7401,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 "Sadece aynı ligler",
                 key="gecmis_sadece_ayni_lig_toggle",
                 help="Açıkken geçmiş örnekler yalnızca güncel maçın kendi liginden alınır. Her maç satırında aynı lig / toplam örnek sayısı gösterilir.",
+                on_change=sync_ayni_lig_gecmisten_globale,
             )
         with ust_oran:
             gecmis_oranlari_goster = st.toggle(
