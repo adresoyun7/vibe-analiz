@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 86
+APP_SCHEMA_VERSION = 87
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -8740,7 +8740,11 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
 
 
 def ana_tahmin_gecmis_detayi(m, t, b_det):
+    # Önce askıdaki/eksik İY verili ligleri çıkar; sayaç ve gösterim adedi
+    # yalnızca gerçekten tabloda gösterilebilecek geçmiş maçlardan hesaplansın.
+    b_det = sadece_tam_verili_gecmis(b_det)
     toplam_gecmis_ornek = len(b_det)
+
     gosterim_secimi = st.selectbox(
         "Gösterilecek geçmiş örnek",
         options=[10, 25, 50, "Tümü"],
@@ -8757,8 +8761,6 @@ def ana_tahmin_gecmis_detayi(m, t, b_det):
     """, unsafe_allow_html=True)
 
     bd = b_det.head(gosterim_adedi).copy()
-
-    bd = sadece_tam_verili_gecmis(bd)
     dt = pd.DataFrame()
     dt["Tarih"] = bd["Date"].dt.strftime("%d.%m.%Y")
     dt["Ev Sahibi"] = bd["HomeTeam"]
