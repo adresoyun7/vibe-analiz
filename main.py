@@ -8244,12 +8244,16 @@ if analiz_btn:
             bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
+            st.session_state["son_bulten_mac_sayisi"] = 0 if getattr(bulten, "empty", True) else len(bulten)
+            st.session_state["son_api_hatasi"] = st.session_state.get("odds_api_last_error")
+            st.session_state["son_analiz_tarihi_secili"] = str(secili_tarih)
+
             if getattr(bulten, "empty", True):
                 son_hata = st.session_state.get("odds_api_last_error")
                 if son_hata:
                     st.error(f"⚠️ The Odds API yanıtı alınamadı: {son_hata}")
                 else:
-                    st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı. Oranları Yenile ile bir kez zorla yenileyebilirsin.")
+                    st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı.")
 
         final = []
         if not bulten.empty and not gecmis.empty:
@@ -8323,6 +8327,7 @@ if analiz_btn:
             reverse=True
         )
         st.session_state.final_list = final
+        st.session_state["son_final_mac_sayisi"] = len(final)
         analiz_tahminlerini_kaydet(final)
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
@@ -8957,6 +8962,21 @@ if st.session_state.detay_item is not None or st.session_state.detay_idx is not 
             detay_popup_icerigi()
 
 fl = st.session_state.final_list
+
+# Son analiz teşhisi rerun sonrasında da görünür kalsın.
+if "son_bulten_mac_sayisi" in st.session_state:
+    _bc = int(st.session_state.get("son_bulten_mac_sayisi", 0) or 0)
+    _fc = int(st.session_state.get("son_final_mac_sayisi", 0) or 0)
+    _ae = st.session_state.get("son_api_hatasi")
+    _dt = st.session_state.get("son_analiz_tarihi_secili", "")
+    if _ae:
+        st.error(f"🔎 Son analiz teşhisi · Tarih: {_dt} · API/bülten: {_bc} maç · Analize kalan: {_fc} · Hata: {_ae}")
+    elif _bc == 0:
+        st.warning(f"🔎 Son analiz teşhisi · Tarih: {_dt} · The Odds API'den bu filtrelerle 0 maç geldi.")
+    elif _fc == 0:
+        st.warning(f"🔎 Son analiz teşhisi · Tarih: {_dt} · API'den {_bc} maç geldi fakat güven/örnek filtrelerinden sonra 0 maç kaldı.")
+    else:
+        st.success(f"🔎 Son analiz teşhisi · Tarih: {_dt} · API: {_bc} maç · Gösterilen: {_fc} maç")
 
 st.markdown(
     f'<div style="font-size:.88rem;color:#475569;font-weight:800;margin-top:10px">📅 {format_tr_date(secili_tarih)}</div>',
