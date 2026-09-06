@@ -3598,6 +3598,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
     if not b_ht.empty:
         ilk_yari_gol = b_ht["HTHG"] + b_ht["HTAG"]
+        iy_vc = b_ht["HTR"].value_counts(normalize=True)
         iy05_raw = float((ilk_yari_gol >= 1).mean())
         iy15_raw = float((ilk_yari_gol >= 2).mean())
         htft_s = (
@@ -3608,6 +3609,9 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
         htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
     else:
+        # HT verisi olmayan extra/worldwide liglerde ilk-yarı marketlerini
+        # sıfırla; full-time MS/KG/Üst analizleri çalışmaya devam etsin.
+        iy_vc = pd.Series(dtype="float64")
         iy05_raw = 0.0
         iy15_raw = 0.0
         htft_s = pd.Series(dtype="object")
