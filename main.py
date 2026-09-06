@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 79
+APP_SCHEMA_VERSION = 80
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -5813,6 +5813,7 @@ FUTBOL_LIGLERI = {
         "Finlandiya": "soccer_finland_veikkausliiga",
         "İrlanda": "soccer_league_of_ireland",
         "Yunanistan": "soccer_greece_super_league",
+        "Rusya Premier League": "soccer_russia_premier_league",
     },
     "DÜNYA VALUE": {
         "MLS": "soccer_usa_mls",
@@ -5857,6 +5858,7 @@ ODDS_TO_HISTORY = {
     "soccer_poland_ekstraklasa": "POL",
     "soccer_finland_veikkausliiga": "FIN",
     "soccer_league_of_ireland": "IRL",
+    "soccer_russia_premier_league": "RUS",
     "soccer_usa_mls": "USA",
     "soccer_brazil_campeonato": "BRA",
     "soccer_argentina_primera_division": "ARG",
