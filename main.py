@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 78
+APP_SCHEMA_VERSION = 79
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1260,12 +1260,42 @@ def fake_confidence_duzelt(conf_prob: float, sample: int, tolerans: float):
 GEÇMİŞ_VERİ_DOSYASI = Path(__file__).with_name("yapaikupon_gecmis_cache.csv")
 
 def _gecmis_cache_yukle():
-    """Uygulamanın yanındaki kalıcı yerel geçmiş CSV'sini yükler."""
+    """Uygulamanın yanındaki kalıcı geçmiş CSV'sini ana veri kaynağı olarak yükler."""
     try:
         if GEÇMİŞ_VERİ_DOSYASI.exists() and GEÇMİŞ_VERİ_DOSYASI.stat().st_size > 0:
             df = pd.read_csv(GEÇMİŞ_VERİ_DOSYASI)
+
             if "Date" in df.columns:
-                df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+                df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+
+            # Football-Data extra/worldwide dosyaları season_code='2021+' olarak
+            # kaydedilmişti. Backtest ve sezon filtrelerinin çalışması için tarihi
+            # futbol sezonuna (Temmuz-Haziran) dönüştür.
+            if "season_code" not in df.columns:
+                df["season_code"] = ""
+            if "Date" in df.columns:
+                def _model_sezon_kodu(row):
+                    mevcut = str(row.get("season_code", "") or "").strip()
+                    if mevcut and mevcut not in {"2021+", "nan", "None"}:
+                        return mevcut
+                    dt = row.get("Date")
+                    if pd.isna(dt):
+                        return mevcut
+                    y = int(dt.year)
+                    bas = y if int(dt.month) >= 7 else y - 1
+                    return f"{str(bas)[-2:]}{str(bas + 1)[-2:]}"
+                df["season_code"] = df.apply(_model_sezon_kodu, axis=1)
+
+            # CSV'den gelen sayısal alanları model için kesin numeric yap.
+            for c in [
+                "FTHG", "FTAG", "HTHG", "HTAG",
+                "B365H", "B365D", "B365A",
+                "B365CH", "B365CD", "B365CA",
+                "REF_H", "REF_D", "REF_A",
+            ]:
+                if c in df.columns:
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+
             return df
     except Exception:
         pass
@@ -1288,24 +1318,51 @@ def _gecmis_cache_kaydet(df):
 
 @st.cache_data(ttl=86400)
 def futbol_veri_motoru(sezonlar):
+    """
+    Öncelik sırası:
+      1) Repo/.py yanındaki yapaikupon_gecmis_cache.csv
+      2) Cache yoksa eski Football-Data canlı fallback
+
+    Böylece Streamlit Cloud Football-Data'dan 503 alsa bile uygulama,
+    GitHub'a eklenen kalıcı CSV ile çalışmaya devam eder.
+    """
     if not sezonlar:
         return pd.DataFrame()
 
+    secili_sezonlar = {str(x) for x in sezonlar}
+
+    # 1) ANA KAYNAK: yerel/GitHub cache.
+    yerel = _gecmis_cache_yukle()
+    if not yerel.empty:
+        if "season_code" in yerel.columns:
+            yerel = yerel[yerel["season_code"].astype(str).isin(secili_sezonlar)].copy()
+
+        try:
+            yerel.attrs["kaynak"] = "yerel GitHub cache"
+            yerel.attrs["kaynak_hata_sayisi"] = 0
+            yerel.attrs["kaynak_hatalari"] = []
+            yerel.attrs["cache_dosyasi"] = str(GEÇMİŞ_VERİ_DOSYASI.name)
+        except Exception:
+            pass
+        return yerel.reset_index(drop=True)
+
+    # 2) Yalnızca cache hiç yoksa canlı Football-Data fallback.
+    # Bu bölüm ana kaynak değildir; ilk kurulum/acil durum içindir.
     lig_map = [
         "T1",
-        "E0", "E1", "E2",
+        "E0", "E1", "E2", "E3",
         "SP1", "SP2",
         "D1", "D2",
         "I1", "I2",
         "F1", "F2",
-        "N1", "B1", "P1", "SC0",
+        "N1", "B1", "P1", "SC0", "G1",
     ]
     liste = []
     hatalar = []
 
     for k in lig_map:
-        for s in sezonlar:
-            url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
+        for sezon in sezonlar:
+            url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{k}.csv"
             try:
                 r = requests.get(
                     url,
@@ -1313,14 +1370,13 @@ def futbol_veri_motoru(sezonlar):
                     headers={"User-Agent": "Mozilla/5.0 YapAiKupon/1.0"},
                 )
                 if r.status_code != 200 or not r.content:
-                    hatalar.append(f"{k}-{s}: HTTP {r.status_code}")
+                    hatalar.append(f"{k}-{sezon}: HTTP {r.status_code}")
                     continue
 
-                # Football-Data arıza sayfasını 200 ile döndürürse CSV sanmayalım.
                 ct = str(r.headers.get("content-type", "")).lower()
                 ilk = r.content[:300].lower()
                 if b"<html" in ilk or b"temporarily unavailable" in ilk or "text/html" in ct:
-                    hatalar.append(f"{k}-{s}: geçici HTML/servis hatası")
+                    hatalar.append(f"{k}-{sezon}: geçici HTML/servis hatası")
                     continue
 
                 df = pd.read_csv(io.BytesIO(r.content))
@@ -1346,39 +1402,25 @@ def futbol_veri_motoru(sezonlar):
                 temp["Date"] = pd.to_datetime(temp["Date"], dayfirst=True, errors="coerce")
                 temp = temp.dropna(subset=["Date"])
                 temp["league_code"] = k
-                temp["season_code"] = s
+                temp["season_code"] = str(sezon)
 
                 if not temp.empty:
                     liste.append(temp)
                 else:
-                    hatalar.append(f"{k}-{s}: kullanılabilir oran satırı yok")
+                    hatalar.append(f"{k}-{sezon}: kullanılabilir oran satırı yok")
             except Exception as exc:
-                hatalar.append(f"{k}-{s}: {type(exc).__name__}: {exc}")
+                hatalar.append(f"{k}-{sezon}: {type(exc).__name__}: {exc}")
 
     if liste:
-        sonuc = pd.concat(liste).reset_index(drop=True)
+        sonuc = pd.concat(liste, ignore_index=True)
         _gecmis_cache_kaydet(sonuc)
         try:
-            sonuc.attrs["kaynak"] = "football-data + yerel cache güncellendi"
+            sonuc.attrs["kaynak"] = "Football-Data canlı fallback + cache oluşturuldu"
             sonuc.attrs["kaynak_hata_sayisi"] = len(hatalar)
             sonuc.attrs["kaynak_hatalari"] = hatalar[:12]
         except Exception:
             pass
         return sonuc
-
-    # Canlı kaynak tamamen çökerse yerel cache'den devam et.
-    yerel = _gecmis_cache_yukle()
-    if not yerel.empty:
-        # Yalnızca seçilen sezonları döndür.
-        if "season_code" in yerel.columns:
-            yerel = yerel[yerel["season_code"].astype(str).isin([str(x) for x in sezonlar])].copy()
-        try:
-            yerel.attrs["kaynak"] = "yerel cache fallback"
-            yerel.attrs["kaynak_hata_sayisi"] = len(hatalar)
-            yerel.attrs["kaynak_hatalari"] = hatalar[:12]
-        except Exception:
-            pass
-        return yerel.reset_index(drop=True)
 
     sonuc = pd.DataFrame()
     try:
@@ -1388,6 +1430,7 @@ def futbol_veri_motoru(sezonlar):
     except Exception:
         pass
     return sonuc
+
 
 def odds_spor_katalogu(key):
     try:
@@ -3522,16 +3565,17 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
             b[c] = pd.to_numeric(b[c], errors="coerce")
 
     required_odds = [c for c in [ref_h, ref_d, ref_a] if c in b.columns]
-    b = b.dropna(subset=["FTHG", "FTAG", "HTHG", "HTAG", *required_odds, "FTR", "HTR"])
+
+    # Full-time analizleri için HT verisini zorunlu tutma.
+    # Football-Data extra/worldwide liglerinde HTHG/HTAG/HTR bulunmayabiliyor.
+    b = b.dropna(subset=["FTHG", "FTAG", *required_odds, "FTR"])
     if b.empty:
         return None, b
 
     sample = len(b)
     toplam_gol = b["FTHG"] + b["FTAG"]
-    ilk_yari_gol = b["HTHG"] + b["HTAG"]
 
     ms_vc = b["FTR"].value_counts(normalize=True)
-    iy_vc = b["HTR"].value_counts(normalize=True)
 
     ms_mod = ms_vc.idxmax() if not ms_vc.empty else "D"
     ms_raw = float(ms_vc.get(ms_mod, 0))
@@ -3545,12 +3589,30 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     ms35_raw = float((toplam_gol >= 4).mean())
     ms15_raw = float((toplam_gol >= 2).mean())
     kg_raw = float(((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
-    iy05_raw = float((ilk_yari_gol >= 1).mean())
-    iy15_raw = float((ilk_yari_gol >= 2).mean())
 
-    htft_s = b["HTR"].replace({"H": "1", "A": "2", "D": "X"}) + "/" + b["FTR"].replace({"H": "1", "A": "2", "D": "X"})
-    htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
-    htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
+    # İlk-yarı/HTFT yalnızca gerçekten HT verisi bulunan alt kümeden hesaplanır.
+    if all(c in b.columns for c in ["HTHG", "HTAG", "HTR"]):
+        b_ht = b.dropna(subset=["HTHG", "HTAG", "HTR"]).copy()
+    else:
+        b_ht = b.iloc[0:0].copy()
+
+    if not b_ht.empty:
+        ilk_yari_gol = b_ht["HTHG"] + b_ht["HTAG"]
+        iy05_raw = float((ilk_yari_gol >= 1).mean())
+        iy15_raw = float((ilk_yari_gol >= 2).mean())
+        htft_s = (
+            b_ht["HTR"].replace({"H": "1", "A": "2", "D": "X"})
+            + "/"
+            + b_ht["FTR"].replace({"H": "1", "A": "2", "D": "X"})
+        )
+        htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
+        htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
+    else:
+        iy05_raw = 0.0
+        iy15_raw = 0.0
+        htft_s = pd.Series(dtype="object")
+        htft_mod = "-"
+        htft_raw = 0.0
 
     oran_ev = float(m_row["h"])
     oran_ber = float(m_row["b"])
@@ -3681,7 +3743,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     cond_alt25 = (toplam_gol <= 2)
     cond_kg_var = ((b["FTHG"] > 0) & (b["FTAG"] > 0))
     cond_kg_yok = ~cond_kg_var
-    htft_series = b["HTR"].replace({"H": "1", "D": "X", "A": "2"}) + "/" + b["FTR"].replace({"H": "1", "D": "X", "A": "2"})
+    htft_series = htft_s
 
     combo_defs = [
         ("MS1 + KG Var", cond_ms1 & cond_kg_var, "mskg"),
@@ -5262,11 +5324,17 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
         if train.empty:
             continue
 
-        hedef = {
-            "h": row["B365H"], "b": row["B365D"], "a": row["B365A"],
-            "ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
-            "zaman": row["Date"],
-        }
+        h_col = "REF_H" if "REF_H" in row.index and pd.notna(row.get("REF_H")) else "B365H"
+        d_col = "REF_D" if "REF_D" in row.index and pd.notna(row.get("REF_D")) else "B365D"
+        a_col = "REF_A" if "REF_A" in row.index and pd.notna(row.get("REF_A")) else "B365A"
+        try:
+            hedef = {
+                "h": float(row[h_col]), "b": float(row[d_col]), "a": float(row[a_col]),
+                "ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
+                "zaman": row["Date"],
+            }
+        except Exception:
+            continue
         # Aynı maç için hem güncel-formlu hem formsuz model çalıştırılır.
         # İkisi de yalnızca row["Date"] öncesindeki train verisini görür.
         if birlesik_hassasiyet:
@@ -5763,6 +5831,7 @@ ODDS_TO_HISTORY = {
     "soccer_epl": "E0",
     "soccer_efl_champ": "E1",
     "soccer_england_league1": "E2",
+    "soccer_england_league2": "E3",
     "soccer_spain_la_liga": "SP1",
     "soccer_spain_segunda_division": "SP2",
     "soccer_germany_bundesliga": "D1",
@@ -5775,6 +5844,21 @@ ODDS_TO_HISTORY = {
     "soccer_belgium_first_div": "B1",
     "soccer_portugal_primeira_liga": "P1",
     "soccer_spl": "SC0",
+    "soccer_greece_super_league": "G1",
+    "soccer_denmark_superliga": "DNK",
+    "soccer_austria_bundesliga": "AUT",
+    "soccer_switzerland_superleague": "SWZ",
+    "soccer_sweden_allsvenskan": "SWE",
+    "soccer_norway_eliteserien": "NOR",
+    "soccer_poland_ekstraklasa": "POL",
+    "soccer_finland_veikkausliiga": "FIN",
+    "soccer_league_of_ireland": "IRL",
+    "soccer_usa_mls": "USA",
+    "soccer_brazil_campeonato": "BRA",
+    "soccer_argentina_primera_division": "ARG",
+    "soccer_japan_j_league": "JPN",
+    "soccer_mexico_ligamx": "MEX",
+    "soccer_china_superleague": "CHN",
 }
 
 LEAGUE_EMOJIS = {
