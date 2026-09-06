@@ -1262,59 +1262,76 @@ def futbol_veri_motoru(sezonlar):
         return pd.DataFrame()
 
     lig_map = [
-        # TÜRKİYE
         "T1",
-        # İNGİLTERE
         "E0", "E1", "E2",
-        # İSPANYA
         "SP1", "SP2",
-        # ALMANYA
         "D1", "D2",
-        # İTALYA
         "I1", "I2",
-        # FRANSA
         "F1", "F2",
-        # AVRUPA ANA VALUE
         "N1", "B1", "P1", "SC0",
     ]
     liste = []
+    hatalar = []
 
     for k in lig_map:
         for s in sezonlar:
+            url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
             try:
-                url = f"https://www.football-data.co.uk/mmz4281/{s}/{k}.csv"
-                df = pd.read_csv(url)
+                # Streamlit Cloud'da pd.read_csv(URL) zaman zaman boş/SSL/403 hatası verebiliyor.
+                # Önce requests ile indir, sonra bellekte CSV olarak oku.
+                r = requests.get(
+                    url,
+                    timeout=20,
+                    headers={"User-Agent": "Mozilla/5.0 YapAiKupon/1.0"},
+                )
+                if r.status_code != 200 or not r.content:
+                    hatalar.append(f"{k}-{s}: HTTP {r.status_code}")
+                    continue
+
+                df = pd.read_csv(io.BytesIO(r.content))
                 cols = [
                     "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG",
                     "FTR", "HTR",
-                    # Football-Data: ilk/pre-closing set
                     "B365H", "B365D", "B365A",
-                    # Football-Data: kapanış seti (C = closing), mevcut sezonlarda varsa
                     "B365CH", "B365CD", "B365CA",
                     "HC", "AC", "HY", "AY"
                 ]
                 df = df[df.columns.intersection(cols)].copy()
 
-                # Eksik sütunları güvenli biçimde oluştur. Eski sezonlarda C sütunları olmayabilir.
                 for c in ["B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"]:
                     if c not in df.columns:
                         df[c] = pd.NA
                     df[c] = pd.to_numeric(df[c], errors="coerce")
 
-                # Ana karşılaştırma için mümkünse kapanış oranını, yoksa eski/pre-closing oranını kullan.
                 df["REF_H"] = df["B365CH"].combine_first(df["B365H"])
                 df["REF_D"] = df["B365CD"].combine_first(df["B365D"])
                 df["REF_A"] = df["B365CA"].combine_first(df["B365A"])
 
                 temp = df.dropna(subset=["REF_H", "REF_D", "REF_A"]).copy()
                 temp["Date"] = pd.to_datetime(temp["Date"], dayfirst=True, errors="coerce")
+                temp = temp.dropna(subset=["Date"])
                 temp["league_code"] = k
                 temp["season_code"] = s
-                liste.append(temp)
-            except Exception:
-                continue
 
-    return pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
+                if not temp.empty:
+                    liste.append(temp)
+                else:
+                    hatalar.append(f"{k}-{s}: CSV geldi ama kullanılabilir oran satırı yok")
+
+            except Exception as exc:
+                hatalar.append(f"{k}-{s}: {type(exc).__name__}: {exc}")
+
+    sonuc = pd.concat(liste).reset_index(drop=True) if liste else pd.DataFrame()
+
+    # cache_data içinde session_state yazmak güvenli olmayabileceği için
+    # teşhis bilgisini DataFrame attrs içine taşıyoruz.
+    try:
+        sonuc.attrs["kaynak_hata_sayisi"] = len(hatalar)
+        sonuc.attrs["kaynak_hatalari"] = hatalar[:12]
+    except Exception:
+        pass
+
+    return sonuc
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def odds_spor_katalogu(key):
@@ -8242,6 +8259,11 @@ if analiz_btn:
         with st.spinner("📊 Bülten hazırlanıyor (cache varsa API kullanılmaz) ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
             bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            st.session_state["son_gecmis_satir_sayisi"] = 0 if getattr(gecmis, "empty", True) else len(gecmis)
+            try:
+                st.session_state["son_gecmis_kaynak_hatalari"] = list(gecmis.attrs.get("kaynak_hatalari", []))
+            except Exception:
+                st.session_state["son_gecmis_kaynak_hatalari"] = []
             st.session_state.last_gecmis_df = gecmis
             st.session_state.last_bulten_df = bulten
             st.session_state["son_bulten_mac_sayisi"] = 0 if getattr(bulten, "empty", True) else len(bulten)
@@ -8998,12 +9020,23 @@ if "son_bulten_mac_sayisi" in st.session_state:
     elif _bc == 0:
         st.warning(f"🔎 Son analiz teşhisi · Tarih: {_dt} · The Odds API'den bu filtrelerle 0 maç geldi.")
     elif _fc == 0:
-        st.warning(
-            f"🔎 Son analiz teşhisi · API: {_bc} · hesapla() sonuç yok: {_fs.get('t_none',0)} · "
-            f"minimum örnekten elenen: {_fs.get('ornek',0)} · güven eşiğinden elenen: {_fs.get('guven',0)} · "
-            f"geçen: {_fs.get('gecen',0)} · tolerans: {_fs.get('tolerans','?')} · "
-            f"min örnek: {_fs.get('min_ornek','?')} · güven eşiği: {_fs.get('oynanabilir_esik','?')}"
-        )
+        _gr = int(st.session_state.get("son_gecmis_satir_sayisi", 0) or 0)
+        _gh = st.session_state.get("son_gecmis_kaynak_hatalari", []) or []
+        if _gr == 0:
+            st.error(
+                f"🔎 Asıl sorun bulundu · API: {_bc} maç geliyor ama geçmiş veri motoru 0 satır döndürüyor. "
+                f"Bu yüzden analiz döngüsü hiç başlamıyor."
+            )
+            if _gh:
+                st.caption("Football-Data hataları: " + " | ".join(map(str, _gh[:6])))
+        else:
+            st.warning(
+                f"🔎 Son analiz teşhisi · API: {_bc} · geçmiş veri: {_gr} satır · "
+                f"hesapla() sonuç yok: {_fs.get('t_none',0)} · minimum örnekten elenen: {_fs.get('ornek',0)} · "
+                f"güven eşiğinden elenen: {_fs.get('guven',0)} · geçen: {_fs.get('gecen',0)} · "
+                f"tolerans: {_fs.get('tolerans','?')} · min örnek: {_fs.get('min_ornek','?')} · "
+                f"güven eşiği: {_fs.get('oynanabilir_esik','?')}"
+            )
     else:
         st.success(
             f"🔎 Son analiz teşhisi · API: {_bc} · hesapla() sonuç yok: {_fs.get('t_none',0)} · "
