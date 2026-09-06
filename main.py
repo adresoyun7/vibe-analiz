@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 88
+APP_SCHEMA_VERSION = 89
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -1268,7 +1268,7 @@ def _gecmis_cache_yukle():
             if "Date" in df.columns:
                 df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
 
-            # Extra/worldwide ligler bültende kalır; geçmiş model ve detay havuzundan çıkar.
+            # Askıdaki extra ligler bültende kalır; geçmiş model ve detay havuzundan çıkar.
             df = sadece_tam_verili_gecmis(df)
 
             # Football-Data extra/worldwide dosyaları season_code='2021+' olarak
@@ -3541,8 +3541,9 @@ def form_ozet_yazi(profil):
 
 def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=False, form_profili_override=None):
     # Kesin güvenlik filtresi:
-    # İlk yarı verisi eksik 16 extra/worldwide lig hiçbir koşulda model örneği,
+    # Seçtiğimiz 7 extra/worldwide lig hiçbir koşulda model örneği,
     # güven hesabı, örnek sayısı veya detay geçmişi olarak kullanılmasın.
+    # AUT/BRA/DNK/JPN/NOR/POL/SWE/SWZ/USA ise FT tabanlı marketlerde kullanılabilir.
     b_df = sadece_tam_verili_gecmis(b_df)
     if b_df is None or getattr(b_df, "empty", True):
         return None, pd.DataFrame()
@@ -5961,12 +5962,18 @@ def filtrelenmis_lig_listesi(arama_text: str):
 
 
 EXTRA_GECMIS_ASKIDA_KODLARI = {
-    "ARG", "AUT", "BRA", "CHN", "DNK", "FIN", "IRL", "JPN",
-    "MEX", "NOR", "POL", "ROU", "RUS", "SWE", "SWZ", "USA",
+    # Geçmiş model havuzunda şimdilik tamamen askıda kalan extra ligler
+    "ARG", "CHN", "FIN", "IRL", "MEX", "ROU", "RUS",
+}
+
+EXTRA_SADECE_FT_KODLARI = {
+    # Bu liglerin FT sonuç + kapanış oranı verileri kullanılır.
+    # İY/HTFT hesaplarında HTHG/HTAG/HTR eksik satırlar zaten kullanılmaz.
+    "AUT", "BRA", "DNK", "JPN", "NOR", "POL", "SWE", "SWZ", "USA",
 }
 
 def sadece_tam_verili_gecmis(df):
-    """İY verisi eksik extra/worldwide ligleri tüm geçmiş örnek görünümlerinden çıkar."""
+    """Geçmişte tamamen askıda tuttuğumuz extra/worldwide ligleri çıkar."""
     if df is None or getattr(df, "empty", True) or "league_code" not in df.columns:
         return df
     return df[
