@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 87
+APP_SCHEMA_VERSION = 88
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -3540,6 +3540,13 @@ def form_ozet_yazi(profil):
     )
 
 def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=False, form_profili_override=None):
+    # Kesin güvenlik filtresi:
+    # İlk yarı verisi eksik 16 extra/worldwide lig hiçbir koşulda model örneği,
+    # güven hesabı, örnek sayısı veya detay geçmişi olarak kullanılmasın.
+    b_df = sadece_tam_verili_gecmis(b_df)
+    if b_df is None or getattr(b_df, "empty", True):
+        return None, pd.DataFrame()
+
     # Form, oran eşleşmesi yapılmadan önceki tarihsel takım maçlarından hesaplanır.
     form_kaynagi = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
     b_df = form_kaynagi
@@ -4149,6 +4156,11 @@ def market_gecmis_guven_duzeltmesi(etiket, ham_guven, kayitlar=None):
 def hassasiyet_birlesik_hesapla(
     b_df, m_row, min_ornek, sadece_ayni_lig=False, market_gecmis_kayitlari=None
 ):
+    # Tüm hassasiyet noktaları aynı temiz geçmiş havuzunu kullansın.
+    b_df = sadece_tam_verili_gecmis(b_df)
+    if b_df is None or getattr(b_df, "empty", True):
+        return None, pd.DataFrame()
+
     """
     0.00–0.10 sonuçlarını yeni sıralama mantığıyla birleştirir.
 
