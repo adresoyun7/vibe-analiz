@@ -6988,7 +6988,7 @@ def uygula_tema_css(koyu_mod: bool):
             border:1px solid #284977 !important;
             border-radius:12px !important;
             padding:7px 10px 4px 10px !important;
-            margin:2px 0 8px 0 !important;
+            margin:2px 0 2px 0 !important;
         }
         .st-key-koyu_mod_toggle label,
         .st-key-koyu_mod_toggle label * {
@@ -7384,6 +7384,10 @@ with st.sidebar:
             overflow:hidden !important;
         }
 
+        /* Koyu Mod ile saat kutusu arasında gereksiz boşluk bırakma. */
+        .st-key-koyu_mod_toggle { margin-bottom:2px !important; }
+        .st-key-sidebar_system_clock { margin-top:0 !important; }
+
         /* Sidebar hiçbir zaman ana sayfayla birlikte hareket etmez. */
         section[data-testid="stSidebar"] {
             position:relative !important;
@@ -7462,9 +7466,17 @@ with st.sidebar:
                 background:#ffffff !important;
                 border:1px solid #cbd5e1 !important;
                 border-radius:12px !important;
-                padding:8px 9px 6px 9px !important;
-                margin:2px 0 9px 0 !important;
+                padding:6px 8px !important;
+                margin:0 0 8px 0 !important;
                 box-shadow:0 4px 12px rgba(15,23,42,.08) !important;
+            }
+            .st-key-sidebar_system_clock [data-testid="stHorizontalBlock"] {
+                align-items:center !important;
+                gap:.45rem !important;
+            }
+            .st-key-sidebar_system_clock [data-testid="column"] {
+                display:flex !important;
+                align-items:center !important;
             }
             .st-key-sidebar_system_clock .system-clock-label,
             .st-key-sidebar_system_clock .system-clock-label * {
@@ -7473,21 +7485,28 @@ with st.sidebar:
                 opacity:1 !important;
             }
             .st-key-sidebar_system_clock .system-clock-label {
+                width:100%;
+                min-height:40px;
+                display:flex;
+                flex-direction:column;
+                justify-content:center;
                 font-size:.72rem;
-                line-height:1.3;
+                line-height:1.18;
                 font-weight:700;
-                padding-top:2px;
+                padding:0 !important;
+                margin:0 !important;
             }
             .st-key-sidebar_system_clock .system-clock-time {
                 display:block;
-                margin-top:2px;
+                margin-top:1px;
                 color:#0f172a !important;
                 -webkit-text-fill-color:#0f172a !important;
                 font-size:.82rem;
                 font-weight:900;
             }
             .st-key-sidebar_system_clock button {
-                min-height:38px !important;
+                min-height:40px !important;
+                height:40px !important;
                 color:#ffffff !important;
                 -webkit-text-fill-color:#ffffff !important;
                 font-weight:800 !important;
