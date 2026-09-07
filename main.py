@@ -8285,8 +8285,11 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                 guclu = abs(pct - max_baslik_pct) < 1e-9
                 cls = "oran-ozet-deger oran-ozet-en-guclu" if guclu else "oran-ozet-deger"
                 ayirici = '<span class="oran-ozet-ayirici"> · </span>' if idx else ""
+                # Oran Filtresi başlığında hassasiyet bilgisi yalnızca
+                # yüzdesi en yüksek (sarı) markette gösterilsin.
+                hass_yazi = f" · {uzlasi}/11 hass." if guclu else ""
                 baslik_parcalar.append(
-                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f} · {uzlasi}/11 hass.</span>'
+                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f}{hass_yazi}</span>'
                 )
             baslik_ozeti_html = "".join(baslik_parcalar)
 
@@ -8388,10 +8391,18 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         for col, (baslik, ikon, detay_label, en_iyi_detay) in zip(detay_cols, detay_kartlari):
                             with col:
                                 st.markdown(f"**{ikon} {baslik}**")
+                                detay_pct = float(en_iyi_detay.get('oran', 0) or 0)
+                                detay_hass = int(en_iyi_detay.get('uzlasi', 0) or 0)
+                                # Sadece en yüksek yüzdeli kart hassasiyet sayısını göstersin.
+                                detay_alt = (
+                                    f"{detay_hass}/11 hass. · {toplam_benzer} örnek"
+                                    if abs(detay_pct - max_baslik_pct) < 1e-9
+                                    else f"{toplam_benzer} örnek"
+                                )
                                 st.metric(
                                     detay_label,
-                                    f"%{float(en_iyi_detay.get('oran', 0) or 0):.1f}",
-                                    f"{int(en_iyi_detay.get('uzlasi', 0) or 0)}/11 hass. · {toplam_benzer} örnek",
+                                    f"%{detay_pct:.1f}",
+                                    detay_alt,
                                     delta_color="off",
                                 )
 
