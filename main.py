@@ -6901,6 +6901,39 @@ def uygula_tema_css(koyu_mod: bool):
             overflow:visible !important;
             padding-bottom:6rem !important;
         }
+        /* === DYNAMIC EXPANDER SCROLL FIX v3 ===
+           Alt sıradaki bir expander açıldığında sayfa yüksekliği anlık büyüyor.
+           Scroll'u sabit 100vh AppViewContainer'a kilitlemek yerine belge akışına
+           bırakıyoruz; böylece Oran Filtresi / Yüksek Oran Filtresi son kartı
+           açıldığında oluşan yeni içerik de kaydırılabilir kalıyor. */
+        html, body {
+            height:auto !important;
+            min-height:100% !important;
+            overflow-y:auto !important;
+            overflow-x:hidden !important;
+        }
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"],
+        .main .block-container {
+            height:auto !important;
+            min-height:100vh !important;
+            max-height:none !important;
+            overflow:visible !important;
+        }
+        [data-testid="stAppViewContainer"] {
+            position:relative !important;
+        }
+        div[data-testid="stExpander"],
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpanderDetails"],
+        div[data-testid="stExpanderDetails"] > div {
+            max-height:none !important;
+            overflow:visible !important;
+            contain:none !important;
+        }
+
         [data-testid="stHeader"] {
             background:rgba(7,17,31,.94) !important;
         }
@@ -6909,10 +6942,28 @@ def uygula_tema_css(koyu_mod: bool):
         }
 
         /* Sidebar */
-        section[data-testid="stSidebar"],
-        section[data-testid="stSidebar"] > div {
+        section[data-testid="stSidebar"] {
             background:#091526 !important;
             border-color:#223c63 !important;
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+            position:sticky !important;
+            position:-webkit-sticky !important;
+            top:0 !important;
+            align-self:flex-start !important;
+            z-index:100 !important;
+        }
+        section[data-testid="stSidebar"] > div,
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            background:#091526 !important;
+            border-color:#223c63 !important;
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow-y:auto !important;
+            overflow-x:hidden !important;
         }
         section[data-testid="stSidebar"] label,
         section[data-testid="stSidebar"] label *,
@@ -7314,6 +7365,75 @@ with st.sidebar:
     with st.container(key="koyu_mod_toggle"):
         koyu_mod = st.toggle("🌙 Koyu Mod", value=bool(st.session_state.get("koyu_mod", True)), key="koyu_mod")
     uygula_tema_css(koyu_mod)
+
+    # === SABİT SIDEBAR / SADECE SAĞ TARAF SCROLL ===
+    # Sol panel ekran boyunca sabit kalır; tüm dikey kaydırma ana içerikte yapılır.
+    st.markdown(
+        """
+        <style>
+        html, body {
+            height:100% !important;
+            min-height:100% !important;
+            overflow:hidden !important;
+        }
+        .stApp,
+        [data-testid="stAppViewContainer"] {
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+        }
+
+        /* Sidebar hiçbir zaman ana sayfayla birlikte hareket etmez. */
+        section[data-testid="stSidebar"] {
+            position:relative !important;
+            top:auto !important;
+            align-self:stretch !important;
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+        }
+        section[data-testid="stSidebar"] > div,
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+        }
+
+        /* Tek dikey scroll sahibi sağdaki ana içerik. */
+        [data-testid="stMain"] {
+            height:100vh !important;
+            min-height:0 !important;
+            max-height:100vh !important;
+            overflow-y:auto !important;
+            overflow-x:hidden !important;
+            overscroll-behavior-y:contain !important;
+            scrollbar-gutter:stable !important;
+        }
+        [data-testid="stMainBlockContainer"],
+        .main .block-container {
+            height:auto !important;
+            min-height:100% !important;
+            max-height:none !important;
+            overflow:visible !important;
+            padding-bottom:6rem !important;
+        }
+
+        /* Açılan son maç detayları ana içerik yüksekliğini doğal biçimde büyütsün. */
+        div[data-testid="stExpander"],
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpanderDetails"],
+        div[data-testid="stExpanderDetails"] > div {
+            max-height:none !important;
+            overflow:visible !important;
+            contain:none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     with st.container(key="sidebar_system_clock"):
         st.markdown(
             """
