@@ -2258,16 +2258,13 @@ def gunun_kuponlarini_kaliteye_gore_bol(secimler, maks_kupon_mac=6, min_anlamli_
         if not x.get("profil_aday_fallback"):
             return True
 
-        # Profil fallback adayında yeni bir kupon başlatmak için kontrollü minimum kalite.
-        # Böylece kalite kırılımından sonra elde kalan zayıf tek maç otomatik kupon olmaz.
+        # Profil fallback adayları zaten Temkinli / Dengeli / Yüksek Oran
+        # aday motorunun kendi uygunluk kapılarından geçmiştir. Burada ikinci kez
+        # aşırı sert bir eşik uygulamak aday havuzu varken 0 kupon üretebiliyordu.
+        # Yeni grubun başlangıcında yalnızca çok zayıf/boş kayıtları ele.
         guven = float(x.get("guven", 0) or 0)
         stabil = int(x.get("hassasiyet_sayisi", 0) or 0)
-        return (
-            (guven >= 88 and stabil >= 3)
-            or (guven >= 83 and stabil >= 4)
-            or (guven >= 78 and stabil >= 5)
-            or (guven >= 74 and stabil >= 7)
-        )
+        return guven >= 40 and stabil >= 1
 
     sirali = sorted(
         [dict(x) for x in secimler if isinstance(x, dict)],
@@ -2277,10 +2274,12 @@ def gunun_kuponlarini_kaliteye_gore_bol(secimler, maks_kupon_mac=6, min_anlamli_
     if not sirali:
         return []
 
-    # İlk kupon da minimum başlangıç kalitesini geçmek zorunda.
+    # Profil aday havuzu boş değilse Günün Kuponu hiçbir zaman sırf bu ikinci
+    # kalite kapısı yüzünden 0 kupona düşmesin. Önce uygun başlangıcı ara;
+    # bulunamazsa havuzdaki en güçlü adayı tek başına başlangıç kabul et.
     ilk_index = next((i for i, x in enumerate(sirali) if _yeni_kupon_baslangici_yeterli(x)), None)
     if ilk_index is None:
-        return []
+        ilk_index = 0
 
     ilk = sirali[ilk_index]
     kuponlar = [[ilk]]
@@ -11026,6 +11025,11 @@ else:
                 gunun_kuponlari = gunun_kuponlarini_kaliteye_gore_bol(
                     gunun_secimleri, maks_kupon_mac=6, min_anlamli_dusus=4.0
                 )
+                # Son güvenlik ağı: profil adayları gerçekten üretildiyse bölme
+                # mantığı Günün Kuponu'nu tamamen boş bırakamaz.
+                if not gunun_kuponlari and gunun_secimleri:
+                    gunun_kuponlari = [[dict(gunun_secimleri[0])]]
+
                 for kupon_no, kupon_secimleri in enumerate(gunun_kuponlari, start=1):
                     profil_etiketi = (
                         "Günün Kuponu" if len(gunun_kuponlari) == 1
