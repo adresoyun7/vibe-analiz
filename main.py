@@ -8287,14 +8287,33 @@ def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yari
         b = gecmis_ornekleri_bul(gecmis_df, mac_row, tol, sadece_ayni_lig=ayni_lig, limit=100000)
         if b is None or b.empty or len(b) < int(min_ornek):
             continue
-        stats, _ = oran_filtresi_istatistikleri(b, ms, kg, gol25, yarilar)
+        # Kombo tek başına seçildiğinde de MS/KG/2.5 taraflarını içeride hesapla.
+        # Bu yardımcı istatistikler yalnızca komboyu üretmek için kullanılır;
+        # kullanıcı kapattığı normal marketleri ekranda görmez.
+        stats, _ = oran_filtresi_istatistikleri(
+            b,
+            (ms or kombo),
+            (kg or kombo),
+            (gol25 or kombo),
+            yarilar,
+        )
         taramalar.append((tol, b, stats))
     if not taramalar:
         return None
 
     # Tablo için en geniş geçerli hassasiyetin benzersiz örnekleri kullanılır.
     tol_max, tablo_ornekleri, _ = max(taramalar, key=lambda x: x[0])
-    grup_sirasi = ["MS", "KG", "2.5", "Yarılar"]
+    # Normal marketler yalnızca kullanıcı onları seçtiyse sonuç listesine eklenir.
+    # Kombo için gereken MS/KG/2.5 hesapları yukarıda gizli yardımcı veri olarak kalır.
+    grup_sirasi = []
+    if ms:
+        grup_sirasi.append("MS")
+    if kg:
+        grup_sirasi.append("KG")
+    if gol25:
+        grup_sirasi.append("2.5")
+    if yarilar:
+        grup_sirasi.append("Yarılar")
     final_stats = []
     for grup in grup_sirasi:
         oylar = {}
