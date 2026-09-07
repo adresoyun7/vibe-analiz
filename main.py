@@ -6880,7 +6880,7 @@ with st.container(key="sticky_analysis_controls"):
                 0.00, 0.30, 0.08,
                 step=0.01,
                 key="top_tol",
-
+                on_change=clear_detail_on_filter_change,
                 help="Düşük değerler oranı daha yakın maçları; yüksek değerler daha fazla geçmiş örneği kapsar.",
             )
     with ayar_ornek_col:
