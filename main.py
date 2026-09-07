@@ -7536,6 +7536,10 @@ with st.sidebar:
 
 legal_sidebar_sections()
 
+# Backtest ekranındaki ikinci A/B butonu yalnız Backtest modunda oluşturulur.
+# Diğer sayfalarda NameError oluşmaması için varsayılanı burada tanımla.
+sezon_test_btn = False
+
 # Ana analiz eylemi, sık kullanılan ayarlarla aynı üst satırda gösterilir.
 if st.session_state.get('sayfa_modu') in ['Maç Analizi', 'Top 50 Market']:
     with ust_analiz_buton_alani.container():
@@ -7558,12 +7562,21 @@ elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
 elif st.session_state.get('sayfa_modu') == 'Backtest':
     with ust_analiz_buton_alani.container():
         st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        backtest_btn = st.button(
-            '🧪 BACKTESTİ BAŞLAT',
-            use_container_width=True,
-            type='primary',
-            key='backtest_baslat_btn',
-        )
+        _btcol1, _btcol2 = st.columns(2, gap='small')
+        with _btcol1:
+            backtest_btn = st.button(
+                '🧪 BACKTESTİ BAŞLAT',
+                use_container_width=True,
+                type='primary',
+                key='backtest_baslat_btn',
+            )
+        with _btcol2:
+            sezon_test_btn = st.button(
+                '⚖️ SEZON AĞIRLIK TESTİ',
+                use_container_width=True,
+                key='sezon_agirlik_test_btn',
+                help='Eşit sezon ağırlığı ile yakın sezon ağırlığını aynı veri ve filtrelerde yan yana test eder.',
+            )
 elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
     with ust_analiz_buton_alani.container():
         st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
@@ -8483,8 +8496,14 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     st.stop()
 
 
-if backtest_btn:
-    with st.spinner("🧪 11 hassasiyet test ediliyor (0.00–0.10)..."):
+if backtest_btn or sezon_test_btn:
+    _ab_istegi = bool(sezon_test_btn)
+    _spinner_text = (
+        "⚖️ Eşit sezon ve yakın sezon ağırlıklı sistemler karşılaştırılıyor..."
+        if _ab_istegi else
+        "🧪 11 hassasiyet test ediliyor (0.00–0.10)..."
+    )
+    with st.spinner(_spinner_text):
         bt_sezonlar = list(dict.fromkeys(list(yillar) + [backtest_sezonu]))
         # Backtest başlatılırken Football-Data'yı zorla yenile ve eski cache ile birleştir.
         futbol_veri_motoru.clear()
@@ -8612,9 +8631,17 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     if _bt_veri_tarihi:
         st.caption(f"📅 Backtest veri setindeki son tamamlanmış maç tarihi: {_bt_veri_tarihi}")
 
+    st.markdown("### ⚖️ Sezon Ağırlık Testi")
+    st.caption(
+        "Üstteki **⚖️ SEZON AĞIRLIK TESTİ** butonuna basınca aynı backtest, "
+        "Eşit Sezon ve Yakın Sezon Ağırlıklı olarak iki kez çalıştırılır ve sonuçlar burada yan yana gösterilir."
+    )
+
     # === EŞİT SEZON vs YAKIN SEZON AĞIRLIKLI A/B KARŞILAŞTIRMASI ===
     _bt_esit_cmp = st.session_state.get("backtest_df_esit_sezon")
     _bt_agir_cmp = st.session_state.get("backtest_df_yakin_sezon")
+    if _bt_esit_cmp is None or _bt_agir_cmp is None:
+        st.info("Henüz sezon ağırlık karşılaştırması çalıştırılmadı. Üstteki ⚖️ SEZON AĞIRLIK TESTİ butonuna bas.")
     if _bt_esit_cmp is not None and _bt_agir_cmp is not None:
         def _ab_ozet(_df, _ad):
             if _df is None or getattr(_df, "empty", True):
