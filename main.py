@@ -7918,7 +7918,7 @@ with st.sidebar:
 11.09.2026 21:45 | Rennes | Marsilya
 12.09.2026 17:00 | Chelsea | Hull City
 13.09.2026 18:30 | Manchester United | Manchester City
-14.09.2026 17:15 | Levante | Barcelona
+13.09.2026 17:15 | Levante | Barcelona
 12.09.2026 19:00 | Lazio | AC Milan'''
         spor_toto_metin = st.text_area(
             'Spor Toto maçları',
@@ -8065,6 +8065,14 @@ def _spor_toto_takim_benzerlik(a, b):
         "chelsea": "chelsea",
         "hullcityafc": "hullcity",
         "hullcity": "hullcity",
+        "besiktas": "besiktas",
+        "besiktasjk": "besiktas",
+        "besiktasjkas": "besiktas",
+        "besiktasas": "besiktas",
+        "erzurumspor": "erzurumspor",
+        "erzurumsporfk": "erzurumspor",
+        "bberzurumspor": "erzurumspor",
+        "buyuksehirbelediyeerzurumspor": "erzurumspor",
     }
     ka = aliaslar.get(ka, ka)
     kb = aliaslar.get(kb, kb)
@@ -8127,33 +8135,115 @@ def _spor_toto_eslestir(mac, bulten):
 
 
 def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_lig=False):
+    """Spor Toto MS taraması: tüm geçmiş liglerde 1/X/2 oran profili ara.
+
+    Ana uygulamadaki hesapla() fonksiyonunu bilinçli olarak kullanmaz; çünkü o fonksiyon
+    HT verisi eksik bazı ligleri güvenlik amacıyla tamamen dışarıda bırakır. Spor Toto
+    burada yalnızca maç sonucu (1/X/2) kullandığı için FTR + kapanış oranı olan tüm
+    geçmiş ligler güvenle örnek havuzuna dahil edilir.
+    """
+    if gecmis_df is None or getattr(gecmis_df, "empty", True):
+        return []
+    b0 = gecmis_df.copy()
+    if sadece_ayni_lig and "league_code" in b0.columns and mac_row.get("sport_key"):
+        b0 = b0[b0["league_code"].astype(str) == str(mac_row.get("sport_key"))].copy()
+    if b0.empty or "FTR" not in b0.columns:
+        return []
+
+    ref_h = "REF_H" if "REF_H" in b0.columns else "B365H"
+    ref_d = "REF_D" if "REF_D" in b0.columns else "B365D"
+    ref_a = "REF_A" if "REF_A" in b0.columns else "B365A"
+    if not all(c in b0.columns for c in [ref_h, ref_d, ref_a]):
+        return []
+
+    for c in [ref_h, ref_d, ref_a]:
+        b0[c] = pd.to_numeric(b0[c], errors="coerce")
+    b0 = b0.dropna(subset=[ref_h, ref_d, ref_a, "FTR"]).copy()
+    if b0.empty:
+        return []
+
+    try:
+        mh, md, ma = float(mac_row["h"]), float(mac_row["b"]), float(mac_row["a"])
+    except Exception:
+        return []
+
     taramalar = []
+    gerekli = max(1, int(min_ornek_val or 1))
     for tol in toleranslar:
-        try:
-            _t, b_det = hesapla(
-                gecmis_df, mac_row, float(tol),
-                sadece_ayni_lig=ayni_lig,
-                form_aktif=False,
-                kalibrasyon_aktif=False,
-            )
-        except Exception:
+        tol = float(tol)
+        b = b0[
+            b0[ref_h].between(mh - tol, mh + tol)
+            & b0[ref_d].between(md - tol, md + tol)
+            & b0[ref_a].between(ma - tol, ma + tol)
+        ].copy()
+        if b.empty:
             continue
-        if b_det is None or getattr(b_det, "empty", True) or "FTR" not in b_det.columns:
-            continue
-        try:
-            seri = b_det["FTR"].dropna().astype(str)
-        except Exception:
-            continue
-        if len(seri) < max(1, int(min_ornek_val or 1)):
+        seri = b["FTR"].dropna().astype(str)
+        if len(seri) < gerekli:
             continue
         vc = seri.value_counts(normalize=True)
         taraf_map = {"H": "1", "D": "X", "A": "2"}
         mod = str(vc.idxmax()) if not vc.empty else "D"
         taraf = taraf_map.get(mod, "X")
         yuzde = float(vc.get(mod, 0.0)) * 100.0
-        taramalar.append({"tol": float(tol), "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
+        taramalar.append({"tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
     return taramalar
 
+
+def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
+    """Hiç tolerans kutusu dolmazsa tüm liglerde en yakın oran profillerini kullan.
+
+    Bu yalnızca Spor Toto için son çaredir. Toleransı sonsuza kadar büyütmek yerine
+    H/X/A üçlüsüne log-oran mesafesi en düşük geçmiş maçlar seçilir.
+    """
+    if gecmis_df is None or getattr(gecmis_df, "empty", True) or "FTR" not in gecmis_df.columns:
+        return None
+    b = gecmis_df.copy()
+    ref_h = "REF_H" if "REF_H" in b.columns else "B365H"
+    ref_d = "REF_D" if "REF_D" in b.columns else "B365D"
+    ref_a = "REF_A" if "REF_A" in b.columns else "B365A"
+    if not all(c in b.columns for c in [ref_h, ref_d, ref_a]):
+        return None
+    for c in [ref_h, ref_d, ref_a]:
+        b[c] = pd.to_numeric(b[c], errors="coerce")
+    b = b.dropna(subset=[ref_h, ref_d, ref_a, "FTR"]).copy()
+    if b.empty:
+        return None
+    try:
+        mh, md, ma = float(mac_row["h"]), float(mac_row["b"]), float(mac_row["a"])
+    except Exception:
+        return None
+    if min(mh, md, ma) <= 0:
+        return None
+
+    import numpy as np
+    # Oranların mutlak farkı yerine oranlı/log mesafe; 1.10->1.20 ile 5.0->5.1 aynı sayılmaz.
+    b["_st_dist"] = (
+        (np.log(b[ref_h].clip(lower=1.001)) - np.log(mh)) ** 2
+        + (np.log(b[ref_d].clip(lower=1.001)) - np.log(md)) ** 2
+        + (np.log(b[ref_a].clip(lower=1.001)) - np.log(ma)) ** 2
+    ) ** 0.5
+    b = b.sort_values("_st_dist")
+    n = max(5, min(12, int(min_ornek_val or 5)))
+    yakin = b.head(n).copy()
+    if len(yakin) < 3:
+        return None
+    seri = yakin["FTR"].dropna().astype(str)
+    if len(seri) < 3:
+        return None
+    vc = seri.value_counts(normalize=True)
+    mod = str(vc.idxmax()) if not vc.empty else "D"
+    taraf = {"H": "1", "D": "X", "A": "2"}.get(mod, "X")
+    return {
+        "secim": taraf,
+        "guven": round(float(vc.get(mod, 0.0)) * 100.0, 1),
+        "kararlilik": 1,
+        "gecerli": 1,
+        "ornek": len(seri),
+        "hass": [],
+        "spor_toto_faz": "en yakın oran fallback",
+        "spor_toto_min_ornek": len(seri),
+    }
 
 def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
     """Normal 0.00–0.10 tarama; veri yoksa yalnız Spor Toto'da kontrollü fallback."""
@@ -8180,7 +8270,8 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
             break
 
     if not taramalar:
-        return None
+        # Tüm liglerde 0.00–0.20 kutusu yine boşsa en yakın gerçek oran profillerine git.
+        return _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, normal_min)
 
     sayim = pd.Series([x["taraf"] for x in taramalar]).value_counts()
     en_cok = int(sayim.max())
