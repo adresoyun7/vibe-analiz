@@ -7385,7 +7385,7 @@ with st.sidebar:
         }
 
         /* Koyu Mod ile saat kutusu arasında gereksiz boşluk bırakma. */
-        .st-key-koyu_mod_toggle { margin-bottom:2px !important; }
+        .st-key-koyu_mod_toggle { margin-bottom:-14px !important; }
         .st-key-sidebar_system_clock { margin-top:0 !important; }
 
         /* Sidebar hiçbir zaman ana sayfayla birlikte hareket etmez. */
@@ -7477,6 +7477,7 @@ with st.sidebar:
             .st-key-sidebar_system_clock [data-testid="column"] {
                 display:flex !important;
                 align-items:center !important;
+                justify-content:center !important;
             }
             .st-key-sidebar_system_clock .system-clock-label,
             .st-key-sidebar_system_clock .system-clock-label * {
@@ -7490,6 +7491,8 @@ with st.sidebar:
                 display:flex;
                 flex-direction:column;
                 justify-content:center;
+                align-items:center;
+                text-align:center;
                 font-size:.72rem;
                 line-height:1.18;
                 font-weight:700;
