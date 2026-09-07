@@ -8654,6 +8654,22 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                             detay_label = detay_label.replace("İki Yarı 1.5 Üst ", "")
                         detay_kartlari.append((baslik, ikon, detay_label, en_iyi_detay))
 
+                    # Kombo seçiliyse yalnızca en yüksek kombo da aynı detay satırına kart olarak eklenir.
+                    if oran_filter_kombo:
+                        kombo_stats = [x for x in istatistikler if x.get("grup") == "Kombo"]
+                        if kombo_stats:
+                            en_yuksek_kombo = max(
+                                kombo_stats,
+                                key=lambda x: (
+                                    float(x.get("oran", 0) or 0),
+                                    int(x.get("uzlasi", 0) or 0),
+                                    int(x.get("hit", 0) or 0),
+                                ),
+                            )
+                            kombo_tip = str(en_yuksek_kombo.get("kombo_tipi", "Kombo"))
+                            kombo_label = str(en_yuksek_kombo.get("label", "—"))
+                            detay_kartlari.append((f"Kombo · {kombo_tip}", "🔗", kombo_label, en_yuksek_kombo))
+
                     if detay_kartlari:
                         detay_cols = st.columns(len(detay_kartlari), gap="small")
                         for detay_i, (col, (baslik, ikon, detay_label, en_iyi_detay)) in enumerate(zip(detay_cols, detay_kartlari)):
@@ -8674,34 +8690,6 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                     detay_alt,
                                     delta_color="off",
                                 )
-
-                    # Kombo seçiliyse maç detayında yalnızca en yüksek kombo gösterilir.
-                    # Tek satır: kombo tipi + seçim + yüzde + hassasiyet + örnek sayısı.
-                    if oran_filter_kombo:
-                        kombo_stats = [x for x in istatistikler if x.get('grup') == 'Kombo']
-                        if kombo_stats:
-                            en_yuksek_kombo = max(
-                                kombo_stats,
-                                key=lambda x: (
-                                    float(x.get('oran', 0) or 0),
-                                    int(x.get('uzlasi', 0) or 0),
-                                    int(x.get('hit', 0) or 0),
-                                ),
-                            )
-                            kombo_pct = float(en_yuksek_kombo.get('oran', 0) or 0)
-                            kombo_hass = int(en_yuksek_kombo.get('uzlasi', 0) or 0)
-                            kombo_tip = str(en_yuksek_kombo.get('kombo_tipi', 'Kombo'))
-                            kombo_label = str(en_yuksek_kombo.get('label', '—'))
-                            kombo_renk = '#a78bfa' if kombo_pct > 50.0 else normal_renk
-                            kombo_html = (
-                                '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
-                                'margin:.15rem 0 .55rem 0;font-weight:750;">'
-                                '🔗 <span style="color:' + kombo_renk + ';">' + escape(kombo_tip) + ' · ' +
-                                escape(kombo_label) + ' · %' + f'{kombo_pct:.1f}' + '</span>' +
-                                '<span style="opacity:.72;font-weight:600;"> · ' + str(kombo_hass) +
-                                '/11 hass. · ' + str(toplam_benzer) + ' örnek</span></div>'
-                            )
-                            st.markdown(kombo_html, unsafe_allow_html=True)
 
                     try:
                         ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
@@ -8737,13 +8725,21 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         tablo_veri["İki yarı 1.5 Üst"] = iki_yari_15_txt
 
                     if oran_filter_kombo:
-                        for c in [x for x in istatistikler if x.get('grup') == 'Kombo']:
+                        kombo_stats = [x for x in istatistikler if x.get('grup') == 'Kombo']
+                        if kombo_stats:
+                            c = max(
+                                kombo_stats,
+                                key=lambda x: (
+                                    float(x.get('oran', 0) or 0),
+                                    int(x.get('uzlasi', 0) or 0),
+                                    int(x.get('hit', 0) or 0),
+                                ),
+                            )
                             label = str(c.get('label', ''))
-                            if ' + ' not in label:
-                                continue
-                            l1, l2 = label.split(' + ', 1)
-                            evet_hayir = (_kombo_label_mask(ornekler, l1) & _kombo_label_mask(ornekler, l2)).map({True: 'Evet', False: 'Hayır'})
-                            tablo_veri[str(c.get('kombo_tipi', 'Kombo'))] = evet_hayir
+                            if ' + ' in label:
+                                l1, l2 = label.split(' + ', 1)
+                                evet_hayir = (_kombo_label_mask(ornekler, l1) & _kombo_label_mask(ornekler, l2)).map({True: 'Evet', False: 'Hayır'})
+                                tablo_veri[str(c.get('kombo_tipi', 'Kombo'))] = evet_hayir
 
                     tablo = pd.DataFrame(tablo_veri)
                     st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
