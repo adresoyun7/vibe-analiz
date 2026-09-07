@@ -7042,6 +7042,26 @@ def uygula_tema_css(koyu_mod: bool):
             -webkit-text-fill-color:#cbd5e1 !important;
         }
 
+        /* Sabit filtre checkbox tikleri kırmızı */
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input:checked + div {
+            background-color:#ef4444 !important;
+            border-color:#ef4444 !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input:checked + div svg {
+            color:#ffffff !important;
+            fill:#ffffff !important;
+            stroke:#ffffff !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] [aria-checked="true"] {
+            background-color:#ef4444 !important;
+            border-color:#ef4444 !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] [aria-checked="true"] svg {
+            color:#ffffff !important;
+            fill:#ffffff !important;
+            stroke:#ffffff !important;
+        }
+
         /* Metric / info / warning / success alanları */
         [data-testid="stMetric"], [data-testid="metric-container"] {
             background:#0b1628 !important;
