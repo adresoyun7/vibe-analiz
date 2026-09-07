@@ -4147,6 +4147,151 @@ def market_gecmis_guven_duzeltmesi(etiket, ham_guven, kayitlar=None):
     return duzeltilmis, shrunk_success, n, delta
 
 
+
+
+def _teyit_seviye(skor):
+    try:
+        x = float(skor)
+    except Exception:
+        return "—"
+    if x >= 85:
+        return "Çok Güçlü"
+    if x >= 75:
+        return "Güçlü"
+    if x >= 65:
+        return "Orta"
+    return "Zayıf"
+
+
+def _teyit_skoru_hesapla(gecmis_df, m_row, label, t, onceki_tahminler=None):
+    """
+    Teyit Motoru v1.
+
+    Ana puanı DEĞİŞTİRMEZ. Ayrı bir doğrulama skoru üretir.
+    Yalnızca hedef maçtan önceki veri kendisine verilmelidir.
+
+    Bileşenler:
+      %35 yakın oran + aynı market geçmiş başarısı
+      %25 sezonlar arası tutarlılık
+      %20 aynı market + benzer uzlaşı geçmiş performansı (varsa)
+      %20 hassasiyet profilinin sağlamlığı
+
+    Eksik bileşenler nötr 50 kabul edilmez; mevcut bileşenlerin ağırlıkları
+    kendi içinde yeniden normalize edilir. Böylece canlı ekranda geçmiş
+    backtest kaydı yoksa skor gereksiz yere aşağı çekilmez.
+    """
+    try:
+        df = sadece_tam_verili_gecmis(gecmis_df.copy())
+    except Exception:
+        df = gecmis_df.copy() if gecmis_df is not None else pd.DataFrame()
+    if df is None or getattr(df, "empty", True) or not label:
+        return None, {}
+
+    hcol = "REF_H" if "REF_H" in df.columns else "B365H"
+    dcol = "REF_D" if "REF_D" in df.columns else "B365D"
+    acol = "REF_A" if "REF_A" in df.columns else "B365A"
+    try:
+        hh, dd, aa = float(m_row["h"]), float(m_row["b"]), float(m_row["a"])
+    except Exception:
+        return None, {}
+
+    x = df.copy()
+    for c in [hcol, dcol, acol]:
+        x[c] = pd.to_numeric(x[c], errors="coerce")
+    x = x.dropna(subset=[hcol, dcol, acol, "FTHG", "FTAG", "FTR"])
+    if x.empty:
+        return None, {}
+
+    # Üç 1-X-2 oranının birlikte yakın olmasını isteriz. Çok dar havuzlarda
+    # veri kaybetmemek için ±0.22 kullanılır; yakın olan maç daha ağırdır.
+    x = x[
+        x[hcol].between(hh - 0.22, hh + 0.22)
+        & x[dcol].between(dd - 0.22, dd + 0.22)
+        & x[acol].between(aa - 0.22, aa + 0.22)
+    ].copy()
+
+    bilesenler = {}
+    agirliklar = {}
+    if not x.empty:
+        dist = (((x[hcol]-hh)**2 + (x[dcol]-dd)**2 + (x[acol]-aa)**2) / 3.0) ** 0.5
+        w = 1.0 / (1.0 + (dist / 0.08) ** 2)
+        dogru = x.apply(lambda r: tahmin_tuttu_mu(label, r), axis=1)
+        gecerli = dogru.notna()
+        if gecerli.any():
+            yy = dogru[gecerli].astype(float)
+            ww = w[gecerli].astype(float)
+            etkin_n = float(ww.sum())
+            ham = float((yy * ww).sum() / max(etkin_n, 1e-9))
+            # Az örneği %55 tabanına küçült.
+            shrink = (ham * etkin_n + 0.55 * 20.0) / (etkin_n + 20.0)
+            bilesenler["Benzer geçmiş"] = round(shrink * 100.0, 1)
+            agirliklar["Benzer geçmiş"] = 35.0
+
+            # Aynı yakın-oran havuzunun farklı geçmiş sezonlarda da benzer
+            # sonuç vermesini ödüllendir. En az 6 geçerli maç olan sezonlar.
+            if "season_code" in x.columns:
+                tmp = x.loc[gecerli].copy()
+                tmp["_dogru"] = yy.values
+                sezon_oranlari = []
+                for _, g in tmp.groupby(tmp["season_code"].astype(str)):
+                    if len(g) >= 6:
+                        sezon_oranlari.append(float(g["_dogru"].mean() * 100.0))
+                if len(sezon_oranlari) >= 2:
+                    ort = float(pd.Series(sezon_oranlari).mean())
+                    sap = float(pd.Series(sezon_oranlari).std(ddof=0))
+                    tutarlilik = max(0.0, min(100.0, ort - 0.85 * sap))
+                    bilesenler["Sezon tutarlılığı"] = round(tutarlilik, 1)
+                    agirliklar["Sezon tutarlılığı"] = 25.0
+
+    # Geçmişte AYNI tahmin ve mevcut uzlaşıya ±1 yakın kayıtlar nasıl çalıştı?
+    try:
+        onceki = pd.DataFrame(onceki_tahminler or [])
+        mevcut_k = int(t.get("stability_count", 0) or 0)
+        if not onceki.empty and mevcut_k > 0 and {"Tahmin", "Tuttu", "Ana Kararlılık"}.issubset(onceki.columns):
+            onceki["Ana Kararlılık"] = pd.to_numeric(onceki["Ana Kararlılık"], errors="coerce")
+            q = onceki[
+                onceki["Tahmin"].astype(str).eq(str(label))
+                & onceki["Ana Kararlılık"].between(mevcut_k - 1, mevcut_k + 1)
+            ].dropna(subset=["Tuttu"])
+            if len(q) >= 5:
+                n = float(len(q))
+                p = float(q["Tuttu"].astype(bool).mean())
+                shrink = (p*n + 0.55*15.0) / (n + 15.0)
+                bilesenler["Uzlaşı geçmişi"] = round(shrink * 100.0, 1)
+                agirliklar["Uzlaşı geçmişi"] = 20.0
+    except Exception:
+        pass
+
+    # Sadece kaç hassasiyet değil, hassasiyetlerin ardışık bir blok oluşturup
+    # oluşturmadığı da hesaba katılır.
+    try:
+        vals = sorted({int(round(float(z) * 100)) for z in (t.get("stability_tols", []) or [])})
+        if vals:
+            en_uzun = 1
+            cur = 1
+            for a, b in zip(vals, vals[1:]):
+                if b == a + 1:
+                    cur += 1
+                    en_uzun = max(en_uzun, cur)
+                else:
+                    cur = 1
+            kapsam = len(vals) / 11.0
+            blok = en_uzun / 11.0
+            saglamlik = max(0.0, min(100.0, (0.60*kapsam + 0.40*blok) * 100.0))
+            bilesenler["Hassasiyet sağlamlığı"] = round(saglamlik, 1)
+            agirliklar["Hassasiyet sağlamlığı"] = 20.0
+    except Exception:
+        pass
+
+    if not bilesenler:
+        return None, {}
+    toplam_w = sum(agirliklar[k] for k in bilesenler)
+    skor = sum(bilesenler[k] * agirliklar[k] for k in bilesenler) / max(toplam_w, 1e-9)
+    skor = round(max(0.0, min(100.0, skor)), 1)
+    detay = dict(bilesenler)
+    detay["Kullanılan ağırlık"] = round(toplam_w, 1)
+    return skor, detay
+
 def hassasiyet_birlesik_hesapla(
     b_df, m_row, min_ornek, sadece_ayni_lig=False, market_gecmis_kayitlari=None
 ):
@@ -4271,9 +4416,6 @@ def hassasiyet_birlesik_hesapla(
     ana, alt = sirali[0], (sirali[1] if len(sirali) > 1 else None)
     t = dict(ana["temsilci"]["t"])
     b = ana["temsilci"]["b"]
-    # Tekil temsilci modelin eski oynanabilirlik puanını koru. Birleşik modelde
-    # playable_score alanı ana puanla değiştirildiği için bunu ayrı alanda saklıyoruz.
-    _eski_oynanabilirlik = float(t.get("playable_score", t.get("ana_p", 0)) or 0)
 
     t.update({
         "ana_label": ana["label"],
@@ -4281,10 +4423,7 @@ def hassasiyet_birlesik_hesapla(
         "ana_ham_guven": ana["ham_guven"],
         "ana_odd": market_label_to_odd(m_row, ana["label"]),
         "score": ana["puan"],
-        # Sıralama/geriye dönük uyumluluk için playable_score ana puan olarak kalır.
         "playable_score": ana["puan"],
-        # Kartta ikinci gösterge olarak eski sistemin puanı ayrıca gösterilir.
-        "oynanabilirlik_skoru": round(_eski_oynanabilirlik, 1),
         "ornek": int(len(b)),
         "birlesik_ornek_medyan": ana["ornek"],
         "kullanilan_tolerans": float(ana["temsilci"]["tol"]),
@@ -4300,6 +4439,13 @@ def hassasiyet_birlesik_hesapla(
         "market_guven_delta": ana["market_guven_delta"],
         "puan_formulu": "Güven %80 + Kararlılık %20",
     })
+
+    teyit_skoru, teyit_detay = _teyit_skoru_hesapla(
+        b_df, m_row, ana["label"], t, market_gecmis_kayitlari
+    )
+    t["teyit_skoru"] = teyit_skoru
+    t["teyit_seviye"] = _teyit_seviye(teyit_skoru) if teyit_skoru is not None else "—"
+    t["teyit_detay"] = teyit_detay
 
     t["stability_early_tols"] = [
         x for x in ana["toleranslar"] if float(x) <= 0.05
@@ -5398,6 +5544,8 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             "Ana Medyan Örnek": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
             "Ana Kararlılık": int(t.get("stability_count", 0) or 0),
             "Ana Hassasiyetler": " · ".join(t.get("stability_tols", []) or []),
+            "Teyit Skoru": float(t.get("teyit_skoru")) if t.get("teyit_skoru") is not None else None,
+            "Teyit Seviye": t.get("teyit_seviye", "—"),
             "Alternatif Tahmin": alternatif_label if alternatif_guven > 60 else "",
             "Alt. Güven": alternatif_guven if alternatif_guven > 60 else None,
             "Alt. Örnek": int(t.get("alt_ornek", 0) or 0) if alternatif_guven > 60 else None,
@@ -8578,6 +8726,39 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                 )
                 st.dataframe(backtest_stili(puan_ozeti), use_container_width=True, hide_index=True)
 
+        # Teyit Motoru v1: ana puandan bağımsız seçicilik testi.
+        if "Teyit Skoru" in bt.columns:
+            teyit_bt = bt.copy()
+            teyit_bt["Teyit Skoru"] = pd.to_numeric(teyit_bt["Teyit Skoru"], errors="coerce")
+            teyit_bt = teyit_bt.dropna(subset=["Teyit Skoru", "Tuttu"])
+            if not teyit_bt.empty:
+                teyit_bt["Teyit Aralığı"] = pd.cut(
+                    teyit_bt["Teyit Skoru"],
+                    bins=[-float("inf"), 65, 75, 85, float("inf")],
+                    labels=["65 altı", "65–74", "75–84", "85+"],
+                    right=False,
+                )
+                teyit_ozet = (
+                    teyit_bt.groupby("Teyit Aralığı", observed=False)
+                    .agg(Tahmin=("Tuttu", "size"), Kazanan=("Tuttu", "sum"), Ortalama_Teyit=("Teyit Skoru", "mean"))
+                    .reset_index()
+                )
+                teyit_ozet = teyit_ozet[teyit_ozet["Tahmin"] > 0].copy()
+                teyit_ozet["Başarı %"] = (teyit_ozet["Kazanan"] / teyit_ozet["Tahmin"] * 100).round(1)
+                teyit_ozet["Ortalama Teyit"] = teyit_ozet["Ortalama_Teyit"].round(1)
+                teyit_ozet = teyit_ozet.drop(columns=["Ortalama_Teyit"])
+                teyit_ozet["Teyit Aralığı"] = teyit_ozet["Teyit Aralığı"].astype(str)
+                _ts = {"85+": 0, "75–84": 1, "65–74": 2, "65 altı": 3}
+                teyit_ozet["_sira"] = teyit_ozet["Teyit Aralığı"].map(_ts)
+                teyit_ozet = teyit_ozet.sort_values("_sira").drop(columns=["_sira"])
+                st.markdown("### Teyit Motoru v1 performansı")
+                st.caption(
+                    "Teyit, ana puanı değiştirmez. Yakın oran geçmişi, sezon tutarlılığı, "
+                    "geçmiş uzlaşı davranışı ve hassasiyet profilini ayrı bir skor olarak ölçer. "
+                    "İlk hedef: 85+ grubunun alt gruplardan belirgin biçimde daha başarılı olup olmadığını görmek."
+                )
+                st.dataframe(backtest_stili(teyit_ozet), use_container_width=True, hide_index=True)
+
         ozet_col, alt_ozet_col = st.columns(2)
         with ozet_col:
             st.markdown("### Ana market özeti")
@@ -9132,6 +9313,11 @@ def detay_ana_icerik():
     )
 
     ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
+    _teyit_val = t.get("teyit_skoru")
+    _teyit_html = (
+        f"<div style='margin-top:10px;font-size:0.84rem;color:#c7cfdd'>🛡️ Teyit: <b>{float(_teyit_val):.1f}/100</b> · {t.get('teyit_seviye','—')}</div>"
+        if _teyit_val is not None else ""
+    )
 
     st.markdown(f"""
     <div class="hero-boxes">
@@ -9145,6 +9331,7 @@ def detay_ana_icerik():
         <div class="hb-label">GÜVEN SKORU</div>
         <div class="hb-val">{int(t['ana_p'])}%</div>
         <div><span class="hb-badge {t['guven_badge_cls']}">{t['guven_badge_lbl']}</span></div>
+        {_teyit_html}
       </div>
       <div class="hbox dark">
         <div class="hb-label">TAHMİNİ SKOR</div>
@@ -9650,18 +9837,13 @@ else:
             combo_level = t.get("combo_level", "")
             level_text = f' · {combo_level}' if combo_level else ''
             combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
-        # Kararlılık bilgisini kartta tek ve net bir satır olarak göster.
-        # Eski kayıtlarda stability_text boş olsa bile tolerans listesi / sayaçtan geri üret.
-        _stability_tols = list(t.get("stability_tols", []) or [])
-        _stability_count = int(t.get("stability_count", len(_stability_tols)) or len(_stability_tols))
-        _stability_text = str(t.get("stability_text", "") or "").strip()
-        if not _stability_text and _stability_tols:
-            _stability_text = " · ".join(str(x) for x in _stability_tols)
-        _stability_suffix = f" · {_stability_text}" if _stability_text else ""
-        stability_html = (
-            f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">'
-            f'🎯 Stabil: {_stability_count}/11{_stability_suffix}</div>'
-        )
+        stability_html = ""
+        if t.get("stability_early_text"):
+            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>'
+        if t.get("stability_late_text"):
+            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>'
+        if not stability_html:
+            stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
@@ -9710,9 +9892,9 @@ else:
                   <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#8fa0ba">📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
-                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 Ana Puan: {float(t.get('birlesik_puan', t.get('score', t.get('ana_p', 0))) or 0):.1f}</div>
-                <div style="margin-top:4px;font-size:0.72rem;color:#9fd3a8">📈 Oynanabilirlik: {float(t.get('oynanabilirlik_skoru', t.get('ana_p', 0)) or 0):.1f}</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                {f"<div style='margin-top:6px;font-size:0.72rem;color:#2f80ed'>🛡️ Teyit {float(t.get('teyit_skoru')):.1f}/100 · {t.get('teyit_seviye','—')}</div>" if t.get('teyit_skoru') is not None else ""}
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
                 {stability_html}
               </div>
             </div>
