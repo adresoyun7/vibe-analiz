@@ -5804,7 +5804,7 @@ def gecmis_tablo_stili(tablo):
         if str(value) == "Evet":
             return "background-color:#6b21a8;color:#faf5ff;font-weight:900"
         if str(value) == "Hayır":
-            return "background-color:#9a3412;color:#fff7ed;font-weight:900"
+            return "background-color:#991b1b;color:#fef2f2;font-weight:900"
         return ""
 
     def olay_renk(value):
@@ -7673,40 +7673,30 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                 ):
                     ist_map = {x.get("label"): x for x in istatistikler}
 
-                    if any(x.get("grup") == "MS" for x in istatistikler):
-                        st.markdown("#### ⚽ Maç Sonucu")
-                        cols = st.columns(3)
-                        for col, label in zip(cols, ["MS 1", "MS X", "MS 2"]):
-                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0, "toplam": toplam_benzer})
-                            with col:
-                                st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
-
-                    if any(x.get("grup") == "KG" for x in istatistikler):
-                        st.markdown("#### 🔁 Karşılıklı Gol")
-                        cols = st.columns(2)
-                        for col, label in zip(cols, ["KG Var", "KG Yok"]):
-                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
-                            with col:
-                                st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
-
-                    if any(x.get("grup") == "2.5" for x in istatistikler):
-                        st.markdown("#### 🎯 2.5 Gol")
-                        cols = st.columns(2)
-                        for col, label in zip(cols, ["2.5 Üst", "2.5 Alt"]):
-                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
-                            with col:
-                                st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
-
-                    if any(x.get("grup") == "Yarılar" for x in istatistikler):
-                        st.markdown("#### ⏱️ Her İki Yarı 1.5 Üst")
-                        cols = st.columns(2)
-                        for col, label, baslik in [
-                            (cols[0], "Her iki yarı 1.5 Üst Evet", "Evet"),
-                            (cols[1], "Her iki yarı 1.5 Üst Hayır", "Hayır"),
-                        ]:
-                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
-                            with col:
-                                st.metric(baslik, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
+                    # Açılır bölümde de her market grubunda yalnızca en yüksek yüzdeyi göster.
+                    for grup, baslik, ikon in [
+                        ("MS", "Maç Sonucu", "⚽"),
+                        ("KG", "Karşılıklı Gol", "🔁"),
+                        ("2.5", "2.5 Gol", "🎯"),
+                        ("Yarılar", "İki Yarı 1.5 Üst", "⏱️"),
+                    ]:
+                        adaylar = [x for x in istatistikler if x.get("grup") == grup]
+                        if not adaylar:
+                            continue
+                        en_iyi_detay = max(
+                            adaylar,
+                            key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("hit", 0) or 0)),
+                        )
+                        detay_label = str(en_iyi_detay.get("label", "—"))
+                        if grup == "Yarılar":
+                            detay_label = detay_label.replace("Her iki yarı 1.5 Üst ", "")
+                        st.markdown(f"#### {ikon} {baslik}")
+                        st.metric(
+                            detay_label,
+                            f"%{float(en_iyi_detay.get('oran', 0) or 0):.1f}",
+                            f"{int(en_iyi_detay.get('hit', 0) or 0)}/{toplam_benzer} maç",
+                            delta_color="off",
+                        )
 
                     try:
                         ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
