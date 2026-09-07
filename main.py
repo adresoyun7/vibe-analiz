@@ -8186,7 +8186,15 @@ def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_li
         mod = str(vc.idxmax()) if not vc.empty else "D"
         taraf = taraf_map.get(mod, "X")
         yuzde = float(vc.get(mod, 0.0)) * 100.0
-        taramalar.append({"tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
+        # Kolon üretiminde X'i körlemesine eklemek yerine, her hassasiyetteki gerçek
+        # 1/X/2 dağılımını da sakla. Böylece beraberlik ana seçime yakınsa alternatif
+        # kolonlara girebilir; net favorilerde gereksiz X üretilmez.
+        taramalar.append({
+            "tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri),
+            "p1": float(vc.get("H", 0.0)) * 100.0,
+            "px": float(vc.get("D", 0.0)) * 100.0,
+            "p2": float(vc.get("A", 0.0)) * 100.0,
+        })
     return taramalar
 
 
@@ -8241,6 +8249,9 @@ def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
         "gecerli": 1,
         "ornek": len(seri),
         "hass": [],
+        "p1": round(float(vc.get("H", 0.0)) * 100.0, 1),
+        "px": round(float(vc.get("D", 0.0)) * 100.0, 1),
+        "p2": round(float(vc.get("A", 0.0)) * 100.0, 1),
         "spor_toto_faz": "en yakın oran fallback",
         "spor_toto_min_ornek": len(seri),
     }
@@ -8283,6 +8294,11 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
 
     secim = max(aday_taraflar, key=_ort)
     secim_kayitlari = [x for x in taramalar if x["taraf"] == secim]
+    # Tüm geçerli hassasiyetlerdeki ortalama MS dağılımı. Kolon çeşitlendirmesi
+    # bu değerleri kullanır; yalnızca modal tahmine bakmaz.
+    p1 = sum(float(x.get("p1", 0.0)) for x in taramalar) / max(len(taramalar), 1)
+    px = sum(float(x.get("px", 0.0)) for x in taramalar) / max(len(taramalar), 1)
+    p2 = sum(float(x.get("p2", 0.0)) for x in taramalar) / max(len(taramalar), 1)
     return {
         "secim": secim,
         "guven": round(sum(x["yuzde"] for x in secim_kayitlari) / max(len(secim_kayitlari), 1), 1),
@@ -8290,6 +8306,9 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
         "gecerli": len(taramalar),
         "ornek": max(x["ornek"] for x in secim_kayitlari),
         "hass": [x["tol"] for x in secim_kayitlari],
+        "p1": round(p1, 1),
+        "px": round(px, 1),
+        "p2": round(p2, 1),
         "spor_toto_faz": kullanilan_faz,
         "spor_toto_min_ornek": kullanilan_min,
     }
@@ -8368,18 +8387,44 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 sec = str(r.get('secim'))
                 for k in kolonlar:
                     kolonlar[k][r['no']] = sec
-            # Alternatif üretmek için gerçek piyasa 1/X/2 oran sırasını yalnızca çeşitlendirme sinyali olarak kullan.
-            # Ana kolon model tahminini korur; 2-4 kolon düşük güvenlilerde farklılaşır.
+            # 2-4. kolonlarda alternatifleri gerçek 1/X/2 geçmiş dağılımına göre seç.
+            # Özellikle X, ana tahmine yeterince yakınsa kolona alınır; net favorilerde
+            # sırf çeşitlilik olsun diye beraberlik eklenmez.
             zayif = sorted(tamam, key=lambda r: (float(r.get('guven',0)), int(r.get('kararlilik',0))))
-            alternatif_dongu = {'1':['X','2'], 'X':['1','2'], '2':['X','1']}
-            for idx, r in enumerate(zayif[:6]):
-                alt = alternatif_dongu.get(str(r.get('secim')), ['X','2'])
-                if idx % 3 == 0:
-                    kolonlar[2][r['no']] = alt[0]
-                elif idx % 3 == 1:
-                    kolonlar[3][r['no']] = alt[0]
-                else:
-                    kolonlar[4][r['no']] = alt[0]
+            degisen_kolon = 2
+            degisim_sayisi = 0
+            for r in zayif:
+                ana = str(r.get('secim'))
+                probs = {
+                    '1': float(r.get('p1', 0) or 0),
+                    'X': float(r.get('px', 0) or 0),
+                    '2': float(r.get('p2', 0) or 0),
+                }
+                ana_p = probs.get(ana, float(r.get('guven', 0) or 0))
+                diger = sorted(
+                    [(t, p) for t, p in probs.items() if t != ana],
+                    key=lambda x: x[1], reverse=True
+                )
+                uygun = []
+                for taraf, p in diger:
+                    # Genel alternatif: ana tahminden en fazla 10 puan geride ve en az %25.
+                    # Beraberlik için ayrıca %28+ olması veya ana tahmine 8 puandan yakın olması yeterli.
+                    if taraf == 'X':
+                        if p >= 28.0 or (p >= 24.0 and (ana_p - p) <= 8.0):
+                            uygun.append((taraf, p))
+                    elif p >= 25.0 and (ana_p - p) <= 10.0:
+                        uygun.append((taraf, p))
+                if not uygun:
+                    continue
+                alt_taraf = uygun[0][0]
+                kolonlar[degisen_kolon][r['no']] = alt_taraf
+                degisim_sayisi += 1
+                degisen_kolon += 1
+                if degisen_kolon > 4:
+                    degisen_kolon = 2
+                # En fazla 9 kontrollü değişiklik; kolonlar tamamen rastgele dağılmasın.
+                if degisim_sayisi >= 9:
+                    break
             gor = []
             for r in _st_sonuclar:
                 if not str(r.get('durum', '')).startswith('Tamam'):
