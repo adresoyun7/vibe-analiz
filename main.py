@@ -6683,14 +6683,24 @@ with st.container(key="sticky_analysis_controls"):
         [2.25, .95, 1.35, 1.25], gap="small"
     )
     with ayar_tol_col:
-        TOLERANS = st.slider(
-            "Oran Hassasiyeti",
-            0.00, 0.30, 0.08,
-            step=0.01,
-            key="top_tol",
+        if st.session_state.get("sayfa_modu") in ["Oran Filtresi", "Yüksek Oran Filtresi"]:
+            # Bu iki görünüm tek hassasiyete bağlı değildir; 0.00-0.10 arası 11 seviye otomatik taranır.
+            TOLERANS = 0.10
+            st.markdown(
+                "<div style='font-size:.82rem;color:#64748b;margin-bottom:4px;'>Oran Hassasiyeti</div>"
+                "<div style='background:#0f1b31;border:1px solid #284977;border-radius:8px;padding:8px 10px;"
+                "color:#f8fafc;font-weight:800;'>0.00–0.10 · Otomatik 11 tarama</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            TOLERANS = st.slider(
+                "Oran Hassasiyeti",
+                0.00, 0.30, 0.08,
+                step=0.01,
+                key="top_tol",
 
-            help="Düşük değerler oranı daha yakın maçları; yüksek değerler daha fazla geçmiş örneği kapsar.",
-        )
+                help="Düşük değerler oranı daha yakın maçları; yüksek değerler daha fazla geçmiş örneği kapsar.",
+            )
     with ayar_ornek_col:
         min_ornek = st.number_input(
             "Minimum Örnek Sayısı",
@@ -8031,98 +8041,172 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     st.stop()
 
 
+# Oran ve Yüksek Oran filtrelerinde 0.00-0.10 arasındaki 11 hassasiyet otomatik taranır.
+# Her seviye ayrı hesaplanır; aynı geçmiş maçlar 11 kez tek havuzda çoğaltılmaz.
+OTOMATIK_HASSASIYETLER = [i / 100.0 for i in range(11)]
+
+def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yarilar):
+    taramalar = []
+    for tol in OTOMATIK_HASSASIYETLER:
+        b = gecmis_ornekleri_bul(gecmis_df, mac_row, tol, sadece_ayni_lig=ayni_lig, limit=100000)
+        if b is None or b.empty or len(b) < int(min_ornek):
+            continue
+        stats, _ = oran_filtresi_istatistikleri(b, ms, kg, gol25, yarilar)
+        taramalar.append((tol, b, stats))
+    if not taramalar:
+        return None
+
+    # Tablo için en geniş geçerli hassasiyetin benzersiz örnekleri kullanılır.
+    tol_max, tablo_ornekleri, _ = max(taramalar, key=lambda x: x[0])
+    grup_sirasi = ["MS", "KG", "2.5", "Yarılar"]
+    final_stats = []
+    for grup in grup_sirasi:
+        oylar = {}
+        oranlar = {}
+        for tol, b, stats in taramalar:
+            adaylar = [x for x in stats if x.get("grup") == grup]
+            if not adaylar:
+                continue
+            kazanan = max(adaylar, key=lambda x: (float(x.get("oran", 0)), int(x.get("hit", 0))))
+            label = str(kazanan.get("label", "—"))
+            oylar[label] = oylar.get(label, 0) + 1
+            # Aynı label'ın o hassasiyetteki gerçek yüzdesini kaydet.
+            es = next((x for x in adaylar if str(x.get("label")) == label), kazanan)
+            oranlar.setdefault(label, []).append(float(es.get("oran", 0)))
+        if not oylar:
+            continue
+        label = max(oylar, key=lambda k: (oylar[k], sum(oranlar[k]) / max(1, len(oranlar[k]))))
+        # Seçilen ortak label'ın tüm geçerli taramalardaki yüzdesini ortala.
+        tum_oranlar = []
+        for tol, b, stats in taramalar:
+            es = next((x for x in stats if x.get("grup") == grup and str(x.get("label")) == label), None)
+            if es is not None:
+                tum_oranlar.append(float(es.get("oran", 0)))
+        ort = sum(tum_oranlar) / len(tum_oranlar) if tum_oranlar else 0.0
+        if grup == "Yarılar" and ort < 50.0:
+            continue
+        uzlasi = int(oylar[label])
+        gecerli = sum(1 for _, _, stats in taramalar if any(x.get("grup") == grup for x in stats))
+        hit = int(round(ort / 100.0 * len(tablo_ornekleri)))
+        ornek_guveni = min(len(tablo_ornekleri) / 30.0, 1.0)
+        final_stats.append({
+            "label": label, "grup": grup, "hit": hit, "toplam": len(tablo_ornekleri),
+            "oran": round(ort, 1), "puan": round(ort * (0.82 + 0.18 * ornek_guveni), 1),
+            "uzlasi": uzlasi, "gecerli_hassasiyet": gecerli,
+        })
+    final_stats.sort(key=lambda x: (x.get("puan", 0), x.get("uzlasi", 0)), reverse=True)
+    if not final_stats:
+        return None
+    return {
+        "ornekler": tablo_ornekleri, "istatistikler": final_stats, "en_iyi": final_stats[0],
+        "toplam_benzer": len(tablo_ornekleri), "tarama_sayisi": len(taramalar), "tablo_tol": tol_max,
+    }
+
+def _yuksek_11_uzlasi(gecmis_df, mac_row, ayni_lig, f12, f21, fkg, limit):
+    taramalar = []
+    for tol in OTOMATIK_HASSASIYETLER:
+        tum = gecmis_ornekleri_bul(gecmis_df, mac_row, tol, sadece_ayni_lig=ayni_lig, limit=100000)
+        if tum is None or tum.empty:
+            continue
+        stats, _, _ = yuksek_oran_istatistikleri(tum, f12, f21, fkg)
+        taramalar.append((tol, tum, stats))
+    if not taramalar:
+        return None
+    tol_max, tum_max, _ = max(taramalar, key=lambda x: x[0])
+    olay_ornekleri = gecmis_ornekleri_bul(
+        gecmis_df, mac_row, tol_max, sadece_ayni_lig=ayni_lig,
+        filtre_12=f12, filtre_21=f21, filtre_cift_yari_kg=fkg, limit=limit,
+    )
+    if olay_ornekleri is None or olay_ornekleri.empty:
+        return None
+    labels = ["1/2", "2/1", "İki yarıda da KG"]
+    final_stats = []
+    for label in labels:
+        vals = []
+        wins = 0
+        for _, _, stats in taramalar:
+            if not stats:
+                continue
+            es = next((x for x in stats if x.get("label") == label), None)
+            if es is not None:
+                vals.append(float(es.get("oran", 0)))
+            winner = max(stats, key=lambda x: (float(x.get("puan", 0)), int(x.get("hit", 0))))
+            if winner.get("label") == label:
+                wins += 1
+        if not vals:
+            continue
+        ort = sum(vals) / len(vals)
+        hit = int(round(ort / 100.0 * len(tum_max)))
+        duz = (hit + 1) / (len(tum_max) + 2)
+        og = min(len(tum_max) / 30.0, 1.0)
+        puan = duz * 100 * (0.65 + 0.35 * og)
+        final_stats.append({
+            "label": label, "hit": hit, "toplam": len(tum_max), "oran": round(ort, 1),
+            "puan": round(puan, 1), "uzlasi": wins, "gecerli_hassasiyet": len(vals),
+        })
+    final_stats.sort(key=lambda x: (x.get("uzlasi", 0), x.get("puan", 0)), reverse=True)
+    if not final_stats:
+        return None
+    en_iyi = final_stats[0]
+    toplam = len(tum_max)
+    if en_iyi["uzlasi"] >= 9 and toplam >= 20 and en_iyi["oran"] >= 10:
+        oneri = "GÜÇLÜ DENENEBİLİR"
+    elif en_iyi["uzlasi"] >= 7 and toplam >= 12 and en_iyi["oran"] >= 6:
+        oneri = "DENENEBİLİR"
+    elif en_iyi["uzlasi"] >= 5 and en_iyi["hit"] >= 2:
+        oneri = "RİSKLİ DENEME"
+    else:
+        oneri = "PAS"
+    return {
+        "ornekler": olay_ornekleri, "istatistikler": final_stats, "en_iyi": en_iyi, "oneri": oneri,
+        "toplam_benzer": toplam, "tarama_sayisi": len(taramalar), "tablo_tol": tol_max,
+    }
+
 # Oran filtresi yalnızca kullanıcı ÖRNEKLERİ GETİR'e bastığında yeniden hesaplanır.
 if oran_filtresi_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
-    elif not (oran_filter_ms or oran_filter_kg or oran_filter_25 or oran_filter_cift_yari_15):
-        st.error("⚠️ En az bir market seçin.")
     else:
-        with st.spinner("📊 Benzer oranlı geçmiş maçlar taranıyor..."):
+        with st.spinner("📊 0.00–0.10 arası 11 hassasiyet taranıyor..."):
             of_gecmis = futbol_veri_motoru(tuple(yillar))
             of_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
             oran_filtresi_list = []
             for _, of_mac in of_bulten.iterrows():
-                tum_ornekler = gecmis_ornekleri_bul(
-                    of_gecmis,
-                    of_mac,
-                    TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    limit=100000,
+                sonuc = _oran_11_uzlasi(
+                    of_gecmis, of_mac, oran_filter_min_ornek, sadece_ayni_lig,
+                    oran_filter_ms, oran_filter_kg, oran_filter_25, oran_filter_cift_yari_15,
                 )
-                toplam_benzer = int(len(tum_ornekler))
-                if tum_ornekler.empty or toplam_benzer < int(oran_filter_min_ornek):
+                if sonuc is None:
                     continue
-                istatistikler, en_iyi = oran_filtresi_istatistikleri(
-                    tum_ornekler,
-                    goster_ms=oran_filter_ms,
-                    goster_kg=oran_filter_kg,
-                    goster_25=oran_filter_25,
-                    goster_cift_yari_15=oran_filter_cift_yari_15,
-                )
-                if not istatistikler:
-                    continue
-                oran_filtresi_list.append({
-                    "m": of_mac.to_dict(),
-                    "ornekler": tum_ornekler,
-                    "istatistikler": istatistikler,
-                    "en_iyi": en_iyi,
-                    "toplam_benzer": toplam_benzer,
-                })
+                sonuc["m"] = of_mac.to_dict()
+                oran_filtresi_list.append(sonuc)
             oran_filtresi_list.sort(
-                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
+                key=lambda x: (x.get("en_iyi", {}).get("uzlasi", 0), x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
                 reverse=True,
             )
             st.session_state.oran_filtresi_list = oran_filtresi_list
             st.rerun()
 
-
-# Yüksek oran filtresi de yalnızca kullanıcı ÖRNEKLERİ GETİR'e bastığında yeniden hesaplanır.
+# Yüksek oran filtresi de 11 hassasiyeti tek tıklamada tarar.
 if yuksek_oran_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
-    elif not (yuksek_filtre_12 or yuksek_filtre_21 or yuksek_filtre_cift_yari_kg):
-        st.error("⚠️ En az bir yüksek oran marketi seçin.")
     else:
-        with st.spinner("💎 1/2, 2/1 ve iki yarıda da KG örnekleri taranıyor..."):
+        with st.spinner("💎 0.00–0.10 arası 11 hassasiyet taranıyor..."):
             yo_gecmis = futbol_veri_motoru(tuple(yillar))
             yo_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
             yuksek_liste = []
             for _, yo_mac in yo_bulten.iterrows():
-                tum_ornekler = gecmis_ornekleri_bul(
-                    yo_gecmis,
-                    yo_mac,
-                    TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    limit=100000,
+                sonuc = _yuksek_11_uzlasi(
+                    yo_gecmis, yo_mac, sadece_ayni_lig,
+                    yuksek_filtre_12, yuksek_filtre_21, yuksek_filtre_cift_yari_kg, yuksek_limit,
                 )
-                ornekler = gecmis_ornekleri_bul(
-                    yo_gecmis,
-                    yo_mac,
-                    TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    filtre_12=yuksek_filtre_12,
-                    filtre_21=yuksek_filtre_21,
-                    filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
-                    limit=yuksek_limit,
-                )
-                if not ornekler.empty:
-                    istatistikler, en_iyi, oneri = yuksek_oran_istatistikleri(
-                        tum_ornekler,
-                        filtre_12=yuksek_filtre_12,
-                        filtre_21=yuksek_filtre_21,
-                        filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
-                    )
-                    yuksek_liste.append({
-                        "m": yo_mac.to_dict(),
-                        "ornekler": ornekler,
-                        "istatistikler": istatistikler,
-                        "en_iyi": en_iyi,
-                        "oneri": oneri,
-                        "toplam_benzer": len(tum_ornekler),
-                    })
+                if sonuc is None:
+                    continue
+                sonuc["m"] = yo_mac.to_dict()
+                yuksek_liste.append(sonuc)
             yuksek_liste.sort(
-                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
+                key=lambda x: (x.get("en_iyi", {}).get("uzlasi", 0), x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
                 reverse=True,
             )
             st.session_state.yuksek_oran_list = yuksek_liste
@@ -8133,9 +8217,9 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
     if oran_liste is None:
         st.info("Lig, tarih ve marketleri seçip ORAN FİLTRESİNİ ÇALIŞTIR butonuna bas.")
     elif not oran_liste:
-        st.warning("Seçilen hassasiyet ve minimum örnek sayısıyla eşleşen güncel maç bulunamadı.")
+        st.warning("0.00–0.10 taramasında minimum örnek şartını karşılayan güncel maç bulunamadı.")
     else:
-        st.success(f"{len(oran_liste)} güncel maç için benzer oran istatistiği bulundu.")
+        st.success(f"{len(oran_liste)} güncel maç bulundu · 0.00–0.10 arası 11 hassasiyet otomatik tarandı.")
 
         # Geçmiş Örnekleri görünümü gibi kompakt maç satırları.
         st.markdown(
@@ -8189,20 +8273,20 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                     label = label.replace("Her İki Yarı 1.5 Üst ", "İki Yarı 1.5 Üst ")
                     label = label.replace("Her iki yarı 1.5 Üst ", "İki Yarı 1.5 Üst ")
                     label = label.replace("Her iki yarı 1.5 üst ", "İki Yarı 1.5 Üst ")
-                grup_en_iyiler.append((label, float(en_iyi_grup.get("oran", 0) or 0)))
+                grup_en_iyiler.append((label, float(en_iyi_grup.get("oran", 0) or 0), int(en_iyi_grup.get("uzlasi", 0) or 0), int(en_iyi_grup.get("gecerli_hassasiyet", 0) or 0)))
 
             # Gruplar arasındaki en yüksek yüzde sarı, diğerleri camgöbeği.
-            max_baslik_pct = max((pct for _, pct in grup_en_iyiler), default=0.0)
+            max_baslik_pct = max((pct for _, pct, _, _ in grup_en_iyiler), default=0.0)
             koyu_aktif = bool(st.session_state.get("koyu_mod", False))
             normal_renk = "#67e8f9" if koyu_aktif else "#0369a1"
             guclu_renk = "#facc15" if koyu_aktif else "#b45309"
             baslik_parcalar = []
-            for idx, (label, pct) in enumerate(grup_en_iyiler):
+            for idx, (label, pct, uzlasi, gecerli_hass) in enumerate(grup_en_iyiler):
                 guclu = abs(pct - max_baslik_pct) < 1e-9
                 cls = "oran-ozet-deger oran-ozet-en-guclu" if guclu else "oran-ozet-deger"
                 ayirici = '<span class="oran-ozet-ayirici"> · </span>' if idx else ""
                 baslik_parcalar.append(
-                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f}</span>'
+                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f} · {uzlasi}/{gecerli_hass} hass.</span>'
                 )
             baslik_ozeti_html = "".join(baslik_parcalar)
 
@@ -8307,7 +8391,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                 st.metric(
                                     detay_label,
                                     f"%{float(en_iyi_detay.get('oran', 0) or 0):.1f}",
-                                    f"{int(en_iyi_detay.get('hit', 0) or 0)}/{toplam_benzer} maç",
+                                    f"{int(en_iyi_detay.get('uzlasi', 0) or 0)}/{int(en_iyi_detay.get('gecerli_hassasiyet', 0) or 0)} hass. · {toplam_benzer} örnek",
                                     delta_color="off",
                                 )
 
@@ -8346,7 +8430,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
     elif not yuksek_liste:
         st.warning("Seçilen koşullarda 1/2, 2/1 veya iki yarıda da KG geçmiş örneği bulunan güncel maç yok.")
     else:
-        st.success(f"{len(yuksek_liste)} güncel maç filtreye takıldı.")
+        st.success(f"{len(yuksek_liste)} güncel maç filtreye takıldı · 0.00–0.10 arası 11 hassasiyet otomatik tarandı.")
         for sira, item in enumerate(yuksek_liste, start=1):
             m = item["m"]
             ornekler = item["ornekler"]
@@ -8378,8 +8462,8 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                       <div style="font-size:1.08rem;color:{oneri_renk};font-weight:900;margin-top:3px;">{escape(oneri)}</div>
                       <div style="font-size:.80rem;color:#cbd5e1;margin-top:4px;">
                         En uygun: <b>{escape(str(en_iyi.get('label', '—')))}</b> ·
-                        Denenebilirlik puanı: <b>{float(en_iyi.get('puan', 0)):.1f}</b> ·
-                        Toplam benzer maç: <b>{toplam_benzer}</b>
+                        Uzlaşı: <b>{int(en_iyi.get('uzlasi', 0))}/{int(en_iyi.get('gecerli_hassasiyet', 0))} hass.</b> ·
+                        Ortalama oran: <b>%{float(en_iyi.get('oran', 0)):.1f}</b> · Toplam benzer maç: <b>{toplam_benzer}</b>
                       </div>
                     </div>
                     """,
@@ -8393,7 +8477,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                         st.metric(
                             label,
                             f"{int(bilgi.get('hit', 0))} adet",
-                            f"%{float(bilgi.get('oran', 0)):.1f} / {int(bilgi.get('toplam', toplam_benzer))} maç",
+                            f"%{float(bilgi.get('oran', 0)):.1f} · {int(bilgi.get('uzlasi', 0))}/{int(bilgi.get('gecerli_hassasiyet', 0))} hass.",
                             delta_color="off",
                         )
                 st.markdown(
