@@ -7402,6 +7402,25 @@ with st.sidebar:
             overflow:hidden !important;
         }
 
+        /* Sidebar ile ana içerik arasında farklı renkli/beyaz şerit bırakma. */
+        [data-testid="stAppViewContainer"],
+        [data-testid="stAppViewContainer"] > div,
+        [data-testid="stAppViewContainer"] > div > div {
+            background:#07111f !important;
+        }
+        [data-testid="stAppViewContainer"] > div {
+            gap:0 !important;
+            column-gap:0 !important;
+        }
+        section[data-testid="stSidebar"] {
+            margin-right:0 !important;
+            box-shadow:none !important;
+        }
+        [data-testid="stMain"] {
+            margin-left:0 !important;
+            background:#07111f !important;
+        }
+
         /* Tek dikey scroll sahibi sağdaki ana içerik. */
         [data-testid="stMain"] {
             height:100vh !important;
