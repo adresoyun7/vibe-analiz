@@ -8099,13 +8099,90 @@ if st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             toplam_benzer = int(item.get("toplam_benzer", len(ornekler)))
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
 
+            # Seçili marketlerin TÜM yüzdelerini maç başlığının sağında göster.
+            # En yüksek yüzde diğerlerinden farklı renkte vurgulanır.
+            en_yuksek_oran = max(
+                [float(x.get("oran", 0) or 0) for x in istatistikler],
+                default=0.0,
+            )
+            istatistik_html = []
+            for bilgi in istatistikler:
+                label = escape(str(bilgi.get("label", "—")))
+                yuzde = float(bilgi.get("oran", 0) or 0)
+                en_yuksek_mi = abs(yuzde - en_yuksek_oran) < 1e-9
+                cls = "of-stat of-stat-best" if en_yuksek_mi else "of-stat"
+                istatistik_html.append(
+                    f'<span class="{cls}"><b>{label}</b> %{yuzde:.1f}</span>'
+                )
+
+            st.markdown(
+                f"""
+                <style>
+                .of-match-head {{
+                    display:flex;
+                    align-items:center;
+                    justify-content:space-between;
+                    gap:18px;
+                    width:100%;
+                    padding:11px 14px;
+                    margin:0 0 6px 0;
+                    border:1px solid #223c63;
+                    border-radius:12px;
+                    background:linear-gradient(90deg,#07111f 0%,#0a1830 100%);
+                }}
+                .of-match-left {{
+                    min-width:260px;
+                    color:#f8fafc !important;
+                    font-weight:800;
+                    font-size:.94rem;
+                    white-space:nowrap;
+                }}
+                .of-match-right {{
+                    margin-left:auto;
+                    display:flex;
+                    justify-content:flex-end;
+                    align-items:center;
+                    gap:7px;
+                    flex-wrap:wrap;
+                    text-align:right;
+                }}
+                .of-stat {{
+                    display:inline-block;
+                    padding:4px 8px;
+                    border-radius:7px;
+                    border:1px solid #334155;
+                    background:#111827;
+                    color:#cbd5e1 !important;
+                    font-size:.76rem;
+                    line-height:1.1;
+                    white-space:nowrap;
+                }}
+                .of-stat b {{ color:#f8fafc !important; }}
+                .of-stat-best {{
+                    background:#173b2a !important;
+                    border-color:#22c55e !important;
+                    color:#86efac !important;
+                    box-shadow:0 0 0 1px rgba(34,197,94,.10);
+                }}
+                .of-stat-best b {{ color:#86efac !important; }}
+                @media (max-width: 900px) {{
+                    .of-match-head {{align-items:flex-start;flex-direction:column;}}
+                    .of-match-right {{margin-left:0;justify-content:flex-start;text-align:left;}}
+                    .of-match-left {{min-width:0;white-space:normal;}}
+                }}
+                </style>
+                <div class="of-match-head">
+                    <div class="of-match-left">#{sira}&nbsp;&nbsp;{escape(str(m.get('ev', '')))} – {escape(str(m.get('dep', '')))} &nbsp;·&nbsp; {escape(str(saat))}</div>
+                    <div class="of-match-right">{"".join(istatistik_html)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
             with st.expander(
-                f"#{sira}  {m.get('ev', '')} – {m.get('dep', '')}  ·  {saat}  ·  En yüksek: {en_iyi.get('label', '—')} %{float(en_iyi.get('oran', 0)):.1f}",
+                f"Geçmiş örnekleri · {toplam_benzer} maç · Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f}",
                 expanded=(sira == 1),
             ):
-                st.markdown(
-                    f"**Güncel oran:** `{m.get('h', 0):.2f} / {m.get('b', 0):.2f} / {m.get('a', 0):.2f}` &nbsp;&nbsp; · &nbsp;&nbsp; **Benzer geçmiş maç:** `{toplam_benzer}`"
-                )
 
                 ist_map = {x.get("label"): x for x in istatistikler}
 
