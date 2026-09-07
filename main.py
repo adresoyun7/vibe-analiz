@@ -5581,8 +5581,8 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
     return pd.DataFrame(satirlar), secili_df, uzlasi_df, tek_uzlasi_df, tahmin_uzlasi_df
 
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
-                         filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False, filtre_cift_yari_15=False,
-                         limit=25):
+                         filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
+                         filtre_cift_yari_15=False, limit=25):
     """Bir güncel maç için benzer oranlı geçmiş maçları ve özel senaryoları getirir."""
     kaynak = ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig)
     if kaynak.empty:
@@ -5608,7 +5608,9 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
         (b["HTHG"] > 0) & (b["HTAG"] > 0)
         & (ev_ikinci_yari > 0) & (dep_ikinci_yari > 0)
     )
-    b["olay_cift_yari_15"] = ((b["HTHG"] + b["HTAG"]) >= 2) & ((ev_ikinci_yari + dep_ikinci_yari) >= 2)
+    ilk_yari_gol = b["HTHG"] + b["HTAG"]
+    ikinci_yari_gol = ev_ikinci_yari + dep_ikinci_yari
+    b["olay_cift_yari_15"] = (ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)
 
     secili_maskeler = []
     if filtre_12:
@@ -5633,7 +5635,7 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                 ("1/2", r["olay_12"]),
                 ("2/1", r["olay_21"]),
                 ("İki yarıda da KG", r["olay_cift_yari_kg"]),
-                ("İki Yarı 1.5 Üst", r["olay_cift_yari_15"]),
+                ("İki yarı 1.5 Üst", r["olay_cift_yari_15"]),
             ] if bool(ok)
         ) or "—",
         axis=1,
@@ -5820,6 +5822,9 @@ def gecmis_tablo_stili(tablo):
         metin = str(value)
         if "İki yarıda da KG" in metin:
             return "background-color:#6b21a8;color:#faf5ff;font-weight:900"
+        if "İki yarı 1.5 Üst" in metin:
+            # İki yarı 1.5 Üst için diğer yüksek-oran olaylarından net ayrılan cyan ton.
+            return "background-color:#0e7490;color:#ecfeff;font-weight:900"
         if "1/2" in metin:
             return "background-color:#9f1239;color:#fff1f2;font-weight:900"
         if "2/1" in metin:
@@ -5862,7 +5867,7 @@ def yuksek_oran_istatistikleri(tum_ornekler, filtre_12=True, filtre_21=True,
         ("1/2", "olay_12", filtre_12),
         ("2/1", "olay_21", filtre_21),
         ("İki yarıda da KG", "olay_cift_yari_kg", filtre_cift_yari_kg),
-        ("İki Yarı 1.5 Üst", "olay_cift_yari_15", filtre_cift_yari_15),
+        ("İki yarı 1.5 Üst", "olay_cift_yari_15", filtre_cift_yari_15),
     ]
     istatistikler = []
     for label, kolon, aktif in tanimlar:
@@ -7718,7 +7723,7 @@ with st.sidebar:
         with of2:
             oran_filter_kg = st.checkbox('Karşılıklı Gol', value=True, key='oran_filter_kg')
         oran_filter_25 = st.checkbox('2.5 Alt / Üst', value=True, key='oran_filter_25')
-        # İki Yarı 1.5 Üst artık Oran Filtresi'nde değil; Yüksek Oran Filtresi'ne taşındı.
+        # İki yarı 1.5 Üst Oran Filtresi'nden kaldırıldı; yalnızca Yüksek Oran Filtresi'nde kullanılır.
         oran_filter_cift_yari_15 = False
         # Kombo isteğe bağlıdır. İşaretli değilse hiçbir kombo hesabı yapılmaz.
         oran_filter_kombo = st.checkbox('Kombo', value=False, key='oran_filter_kombo')
@@ -7731,12 +7736,15 @@ with st.sidebar:
             yuksek_filtre_12 = st.checkbox('1/2', value=True, key='yuksek_filtre_12')
         with yf2:
             yuksek_filtre_21 = st.checkbox('2/1', value=True, key='yuksek_filtre_21')
-        yuksek_filtre_cift_yari_kg = st.checkbox(
-            'İki yarıda da karşılıklı gol', value=True, key='yuksek_filtre_cift_yari_kg'
-        )
-        yuksek_filtre_cift_yari_15 = st.checkbox(
-            'İki Yarı 1.5 Üst', value=True, key='yuksek_filtre_cift_yari_15'
-        )
+        yf3, yf4 = st.columns(2)
+        with yf3:
+            yuksek_filtre_cift_yari_kg = st.checkbox(
+                'İki yarıda da karşılıklı gol', value=True, key='yuksek_filtre_cift_yari_kg'
+            )
+        with yf4:
+            yuksek_filtre_cift_yari_15 = st.checkbox(
+                'İki yarı 1.5 Üst', value=True, key='yuksek_filtre_cift_yari_15'
+            )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
         yuksek_oran_btn = False
     elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
@@ -8412,7 +8420,7 @@ def _yuksek_11_uzlasi(gecmis_df, mac_row, ayni_lig, f12, f21, fkg, fy15, limit):
     )
     if olay_ornekleri is None or olay_ornekleri.empty:
         return None
-    labels = ["1/2", "2/1", "İki yarıda da KG", "İki Yarı 1.5 Üst"]
+    labels = ["1/2", "2/1", "İki yarıda da KG", "İki yarı 1.5 Üst"]
     final_stats = []
     for label in labels:
         vals = []
@@ -8794,7 +8802,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
     if yuksek_liste is None:
         st.info("Lig, tarih ve marketleri seçip ÖRNEKLERİ GETİR butonuna bas.")
     elif not yuksek_liste:
-        st.warning("Seçilen koşullarda 1/2, 2/1, iki yarıda da KG veya İki Yarı 1.5 Üst geçmiş örneği bulunan güncel maç yok.")
+        st.warning("Seçilen koşullarda 1/2, 2/1, iki yarıda da KG veya iki yarı 1.5 Üst geçmiş örneği bulunan güncel maç yok.")
     else:
         st.success(f"{len(yuksek_liste)} güncel maç filtreye takıldı · 0.00–0.10 arası 11 hassasiyet otomatik tarandı.")
         for sira, item in enumerate(yuksek_liste, start=1):
@@ -8837,7 +8845,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                 )
 
                 metrik_kolonlari = st.columns(4)
-                for metrik_col, label in zip(metrik_kolonlari, ["1/2", "2/1", "İki yarıda da KG", "İki Yarı 1.5 Üst"]):
+                for metrik_col, label in zip(metrik_kolonlari, ["1/2", "2/1", "İki yarıda da KG", "İki yarı 1.5 Üst"]):
                     bilgi = istatistik_map.get(label, {"hit": 0, "toplam": toplam_benzer, "oran": 0.0})
                     with metrik_col:
                         st.metric(
@@ -8849,6 +8857,41 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                 st.markdown(
                     f"**Güncel oran:** `{m.get('h', 0):.2f} / {m.get('b', 0):.2f} / {m.get('a', 0):.2f}`"
                 )
+                # Bir geçmiş maç aynı anda birden fazla yüksek oran olayına uyuyorsa
+                # tabloda yalnızca bu maç için seçili istatistikler arasındaki en güçlü olay gösterilir.
+                # Güç sırası: önce 11 hassasiyet ortalama yüzdesi, eşitse uzlaşı, sonra hit sayısı.
+                olay_kolon_map = {
+                    "1/2": "olay_12",
+                    "2/1": "olay_21",
+                    "İki yarıda da KG": "olay_cift_yari_kg",
+                    "İki yarı 1.5 Üst": "olay_cift_yari_15",
+                }
+
+                def _tek_yuksek_oran_olayi(r):
+                    adaylar = []
+                    for olay_label, olay_kolon in olay_kolon_map.items():
+                        if olay_label not in istatistik_map or olay_kolon not in r.index:
+                            continue
+                        try:
+                            gerceklesti = bool(r[olay_kolon])
+                        except Exception:
+                            gerceklesti = False
+                        if not gerceklesti:
+                            continue
+                        bilgi = istatistik_map.get(olay_label, {})
+                        adaylar.append((
+                            float(bilgi.get("oran", 0) or 0),
+                            int(bilgi.get("uzlasi", 0) or 0),
+                            int(bilgi.get("hit", 0) or 0),
+                            olay_label,
+                        ))
+                    if not adaylar:
+                        return "—"
+                    adaylar.sort(reverse=True)
+                    return adaylar[0][3]
+
+                yuksek_oran_olay_serisi = ornekler.apply(_tek_yuksek_oran_olayi, axis=1)
+
                 tablo = pd.DataFrame({
                     "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
                     "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
@@ -8862,7 +8905,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                     ),
                     "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
                     "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
-                    "Yüksek oran olayı": ornekler["Olay"],
+                    "Yüksek oran olayı": yuksek_oran_olay_serisi,
                 })
                 st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
