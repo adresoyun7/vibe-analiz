@@ -8286,7 +8286,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                 cls = "oran-ozet-deger oran-ozet-en-guclu" if guclu else "oran-ozet-deger"
                 ayirici = '<span class="oran-ozet-ayirici"> · </span>' if idx else ""
                 baslik_parcalar.append(
-                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f} · {uzlasi}/{gecerli_hass} hass.</span>'
+                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f} · {uzlasi}/11 hass.</span>'
                 )
             baslik_ozeti_html = "".join(baslik_parcalar)
 
@@ -8391,7 +8391,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                 st.metric(
                                     detay_label,
                                     f"%{float(en_iyi_detay.get('oran', 0) or 0):.1f}",
-                                    f"{int(en_iyi_detay.get('uzlasi', 0) or 0)}/{int(en_iyi_detay.get('gecerli_hassasiyet', 0) or 0)} hass. · {toplam_benzer} örnek",
+                                    f"{int(en_iyi_detay.get('uzlasi', 0) or 0)}/11 hass. · {toplam_benzer} örnek",
                                     delta_color="off",
                                 )
 
@@ -8462,7 +8462,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                       <div style="font-size:1.08rem;color:{oneri_renk};font-weight:900;margin-top:3px;">{escape(oneri)}</div>
                       <div style="font-size:.80rem;color:#cbd5e1;margin-top:4px;">
                         En uygun: <b>{escape(str(en_iyi.get('label', '—')))}</b> ·
-                        Uzlaşı: <b>{int(en_iyi.get('uzlasi', 0))}/{int(en_iyi.get('gecerli_hassasiyet', 0))} hass.</b> ·
+                        Uzlaşı: <b>{int(en_iyi.get('uzlasi', 0))}/11 hass.</b> ·
                         Ortalama oran: <b>%{float(en_iyi.get('oran', 0)):.1f}</b> · Toplam benzer maç: <b>{toplam_benzer}</b>
                       </div>
                     </div>
@@ -8477,7 +8477,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                         st.metric(
                             label,
                             f"{int(bilgi.get('hit', 0))} adet",
-                            f"%{float(bilgi.get('oran', 0)):.1f} · {int(bilgi.get('uzlasi', 0))}/{int(bilgi.get('gecerli_hassasiyet', 0))} hass.",
+                            f"%{float(bilgi.get('oran', 0)):.1f} · {int(bilgi.get('uzlasi', 0))}/11 hass.",
                             delta_color="off",
                         )
                 st.markdown(
