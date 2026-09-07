@@ -7444,24 +7444,24 @@ with st.sidebar:
     elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
         of1, of2 = st.columns(2)
         with of1:
-            oran_filter_ms = st.checkbox('Maç Sonucu', value=True, key='oran_filter_ms')
+            oran_filter_ms = st.checkbox('Maç Sonucu', value=False, key='oran_filter_ms')
         with of2:
-            oran_filter_kg = st.checkbox('Karşılıklı Gol', value=True, key='oran_filter_kg')
+            oran_filter_kg = st.checkbox('Karşılıklı Gol', value=False, key='oran_filter_kg')
         of3, of4 = st.columns(2)
         with of3:
-            oran_filter_25 = st.checkbox('2.5 Alt / Üst', value=True, key='oran_filter_25')
+            oran_filter_25 = st.checkbox('2.5 Alt / Üst', value=False, key='oran_filter_25')
         with of4:
-            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', value=True, key='oran_filter_cift_yari_15')
+            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', value=False, key='oran_filter_cift_yari_15')
         oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
         oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
         yf1, yf2 = st.columns(2)
         with yf1:
-            yuksek_filtre_12 = st.checkbox('1/2', value=True, key='yuksek_filtre_12')
+            yuksek_filtre_12 = st.checkbox('1/2', value=False, key='yuksek_filtre_12')
         with yf2:
-            yuksek_filtre_21 = st.checkbox('2/1', value=True, key='yuksek_filtre_21')
+            yuksek_filtre_21 = st.checkbox('2/1', value=False, key='yuksek_filtre_21')
         yuksek_filtre_cift_yari_kg = st.checkbox(
-            'İki yarıda da karşılıklı gol', value=True, key='yuksek_filtre_cift_yari_kg'
+            'İki yarıda da karşılıklı gol', value=False, key='yuksek_filtre_cift_yari_kg'
         )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
         yuksek_oran_btn = False
@@ -8084,21 +8084,6 @@ if yuksek_oran_btn:
             st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Oran Filtresi':
-    st.markdown(
-        """
-        <div class="high-filter-header-fix" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
-          <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">📊 Oran Filtresi</div>
-        </div>
-        <style>
-        .high-filter-header-fix, .high-filter-header-fix * {
-            color:#0f172a !important;
-            -webkit-text-fill-color:#0f172a !important;
-            opacity:1 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     oran_liste = st.session_state.get("oran_filtresi_list")
     if oran_liste is None:
         st.info("Lig, tarih ve marketleri seçip ORAN FİLTRESİNİ ÇALIŞTIR butonuna bas.")
@@ -8188,21 +8173,6 @@ if st.session_state.get('sayfa_modu') == 'Oran Filtresi':
 
 
 if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
-    st.markdown(
-        """
-        <div class="high-filter-header-fix" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
-          <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">💎 Yüksek Oran Filtresi</div>
-        </div>
-        <style>
-        .high-filter-header-fix, .high-filter-header-fix * {
-            color:#0f172a !important;
-            -webkit-text-fill-color:#0f172a !important;
-            opacity:1 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     yuksek_liste = st.session_state.get("yuksek_oran_list")
     if yuksek_liste is None:
         st.info("Lig, tarih ve marketleri seçip YÜKSEK ORANLILARI BUL butonuna bas.")
@@ -8283,17 +8253,6 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
 
 
 if st.session_state.get('sayfa_modu') == 'Canlı Takip':
-    st.markdown(
-        """
-        <div style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;color:#0f172a">
-          <div style="font-size:1.55rem;font-weight:900;color:#0f172a">📡 Canlı Tahmin Takibi</div>
-          <div style="font-size:.90rem;margin-top:7px;color:#334155">
-            Kaydedilmiş maç önü tahminlerini canlı skor ve başlangıç saatinden hesaplanan tahmini dakikayla karşılaştırır.
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
     simdi_canli = datetime.utcnow() + timedelta(hours=3)
     son_yenileme = st.session_state.get("canli_son_yenileme")
     otomatik_zamani = (
