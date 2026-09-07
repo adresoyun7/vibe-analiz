@@ -8480,10 +8480,12 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             for idx, (label, pct, uzlasi, gecerli_hass) in enumerate(grup_en_iyiler):
                 guclu = abs(pct - max_baslik_pct) < 1e-9
                 ms_50_ustu = str(label).startswith("MS ") and pct > 50.0
-                if guclu:
-                    cls = "oran-ozet-deger oran-ozet-en-guclu"
-                elif ms_50_ustu:
+                if ms_50_ustu:
+                    # MS %50 üstündeyse, en yüksek yüzde olsa bile sarı vurguya dönmesin;
+                    # sakin ve ayrı bir renkte kalsın.
                     cls = "oran-ozet-deger oran-ozet-ms-guclu"
+                elif guclu:
+                    cls = "oran-ozet-deger oran-ozet-en-guclu"
                 else:
                     cls = "oran-ozet-deger"
                 ayirici = '<span class="oran-ozet-ayirici"> · </span>' if idx else ""
@@ -8540,8 +8542,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         font-weight:950 !important;
                     }}
                     .st-key-oran_mac_baslik_{sira} .oran-ozet-ms-guclu {{
-                        color:#5fa8a8 !important;
-                        -webkit-text-fill-color:#5fa8a8 !important;
+                        color:#94a3b8 !important;
+                        -webkit-text-fill-color:#94a3b8 !important;
                         font-weight:850 !important;
                     }}
                     .st-key-oran_mac_baslik_{sira} .oran-ozet-ayirici {{
@@ -8604,8 +8606,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                         f"""<style>
                                         .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricValue\"],
                                         .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricLabel\"] {{
-                                            color:#5fa8a8 !important;
-                                            -webkit-text-fill-color:#5fa8a8 !important;
+                                            color:#94a3b8 !important;
+                                            -webkit-text-fill-color:#94a3b8 !important;
                                             font-weight:850 !important;
                                         }}
                                         </style>""",
