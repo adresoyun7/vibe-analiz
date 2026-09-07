@@ -8479,7 +8479,13 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             baslik_parcalar = []
             for idx, (label, pct, uzlasi, gecerli_hass) in enumerate(grup_en_iyiler):
                 guclu = abs(pct - max_baslik_pct) < 1e-9
-                cls = "oran-ozet-deger oran-ozet-en-guclu" if guclu else "oran-ozet-deger"
+                ms_50_ustu = str(label).startswith("MS ") and pct > 50.0
+                if guclu:
+                    cls = "oran-ozet-deger oran-ozet-en-guclu"
+                elif ms_50_ustu:
+                    cls = "oran-ozet-deger oran-ozet-ms-guclu"
+                else:
+                    cls = "oran-ozet-deger"
                 ayirici = '<span class="oran-ozet-ayirici"> · </span>' if idx else ""
                 # Oran Filtresi başlığında hassasiyet bilgisi yalnızca
                 # yüzdesi en yüksek (sarı) markette gösterilsin.
@@ -8533,6 +8539,11 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         -webkit-text-fill-color:{guclu_renk} !important;
                         font-weight:950 !important;
                     }}
+                    .st-key-oran_mac_baslik_{sira} .oran-ozet-ms-guclu {{
+                        color:#22c55e !important;
+                        -webkit-text-fill-color:#22c55e !important;
+                        font-weight:950 !important;
+                    }}
                     .st-key-oran_mac_baslik_{sira} .oran-ozet-ayirici {{
                         color:{normal_renk} !important;
                         -webkit-text-fill-color:{normal_renk} !important;
@@ -8584,10 +8595,22 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
 
                     if detay_kartlari:
                         detay_cols = st.columns(len(detay_kartlari), gap="small")
-                        for col, (baslik, ikon, detay_label, en_iyi_detay) in zip(detay_cols, detay_kartlari):
+                        for detay_i, (col, (baslik, ikon, detay_label, en_iyi_detay)) in enumerate(zip(detay_cols, detay_kartlari)):
                             with col:
                                 st.markdown(f"**{ikon} {baslik}**")
                                 detay_pct = float(en_iyi_detay.get('oran', 0) or 0)
+                                if baslik == "Maç Sonucu" and detay_pct > 50.0:
+                                    st.markdown(
+                                        f"""<style>
+                                        .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricValue\"],
+                                        .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricLabel\"] {{
+                                            color:#22c55e !important;
+                                            -webkit-text-fill-color:#22c55e !important;
+                                            font-weight:900 !important;
+                                        }}
+                                        </style>""",
+                                        unsafe_allow_html=True,
+                                    )
                                 detay_hass = int(en_iyi_detay.get('uzlasi', 0) or 0)
                                 # Sadece en yüksek yüzdeli kart hassasiyet sayısını göstersin.
                                 detay_alt = (
@@ -8595,12 +8618,21 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                     if abs(detay_pct - max_baslik_pct) < 1e-9
                                     else f"{toplam_benzer} örnek"
                                 )
-                                st.metric(
-                                    detay_label,
-                                    f"%{detay_pct:.1f}",
-                                    detay_alt,
-                                    delta_color="off",
-                                )
+                                if baslik == "Maç Sonucu" and detay_pct > 50.0:
+                                    with st.container(key=f"oran_ms50_{sira}_{detay_i}"):
+                                        st.metric(
+                                            detay_label,
+                                            f"%{detay_pct:.1f}",
+                                            detay_alt,
+                                            delta_color="off",
+                                        )
+                                else:
+                                    st.metric(
+                                        detay_label,
+                                        f"%{detay_pct:.1f}",
+                                        detay_alt,
+                                        delta_color="off",
+                                    )
 
                     try:
                         ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
