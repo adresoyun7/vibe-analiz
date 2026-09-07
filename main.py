@@ -4271,6 +4271,9 @@ def hassasiyet_birlesik_hesapla(
     ana, alt = sirali[0], (sirali[1] if len(sirali) > 1 else None)
     t = dict(ana["temsilci"]["t"])
     b = ana["temsilci"]["b"]
+    # Tekil temsilci modelin eski oynanabilirlik puanını koru. Birleşik modelde
+    # playable_score alanı ana puanla değiştirildiği için bunu ayrı alanda saklıyoruz.
+    _eski_oynanabilirlik = float(t.get("playable_score", t.get("ana_p", 0)) or 0)
 
     t.update({
         "ana_label": ana["label"],
@@ -4278,7 +4281,10 @@ def hassasiyet_birlesik_hesapla(
         "ana_ham_guven": ana["ham_guven"],
         "ana_odd": market_label_to_odd(m_row, ana["label"]),
         "score": ana["puan"],
+        # Sıralama/geriye dönük uyumluluk için playable_score ana puan olarak kalır.
         "playable_score": ana["puan"],
+        # Kartta ikinci gösterge olarak eski sistemin puanı ayrıca gösterilir.
+        "oynanabilirlik_skoru": round(_eski_oynanabilirlik, 1),
         "ornek": int(len(b)),
         "birlesik_ornek_medyan": ana["ornek"],
         "kullanilan_tolerans": float(ana["temsilci"]["tol"]),
@@ -9705,7 +9711,8 @@ else:
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#8fa0ba">📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
-                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {float(t.get('birlesik_puan', t.get('score', t.get('ana_p', 0))) or 0):.1f} puan</div>
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 Ana Puan: {float(t.get('birlesik_puan', t.get('score', t.get('ana_p', 0))) or 0):.1f}</div>
+                <div style="margin-top:4px;font-size:0.72rem;color:#9fd3a8">📈 Oynanabilirlik: {float(t.get('oynanabilirlik_skoru', t.get('ana_p', 0)) or 0):.1f}</div>
                 {stability_html}
               </div>
             </div>
