@@ -1631,14 +1631,14 @@ def bulten_cek(key, kodlar, t):
 
 
 
-ODDS_BULTEN_CACHE_TTL = 15 * 60  # 15 dakika
+ODDS_BULTEN_CACHE_TTL = 6 * 60 * 60  # 6 saat; filtre değişiklikleri API kredisi tüketmesin
 
 
 def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
     """
     Lig bazlı session cache kullanır.
 
-    - Aynı tarih + lig 15 dakika içinde tekrar API'ye gitmez.
+    - Aynı tarih + lig 6 saat içinde tekrar API'ye gitmez.
     - Yeni bir lig eklenirse yalnızca o lig çekilir.
     - Hassasiyet / minimum örnek / güven eşiği değişiklikleri API tüketmez.
     - zorla_yenile=True yalnızca seçili ligleri yeniden çeker.
@@ -1657,9 +1657,9 @@ def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
 
         if gecerli and not zorla_yenile:
             lig_df = kayit.get("df")
-            # Boş cache'i geçerli sayma. Geçici API sorunu sonrası 15 dakika
-            # boyunca "maç yok" görünmesine sebep olmasın.
-            if isinstance(lig_df, pd.DataFrame) and not lig_df.empty:
+            # Dolu veya boş fark etmez: aynı lig+tarih daha önce çekildiyse
+            # filtre/checkbox değişikliklerinde API'ye tekrar gitme.
+            if isinstance(lig_df, pd.DataFrame):
                 parcalar.append(lig_df.copy())
                 continue
 
@@ -1667,10 +1667,9 @@ def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
         lig_df = bulten_cek(key, [secili_kod], t)
         if not isinstance(lig_df, pd.DataFrame):
             lig_df = pd.DataFrame()
-        if not lig_df.empty:
-            cache[cache_key] = {"ts": simdi_ts, "df": lig_df.copy()}
-        else:
-            cache.pop(cache_key, None)
+        # Boş sonuçları da cache'le. Böylece fikstürü olmayan/yanıtı boş ligler
+        # her ÖRNEKLERİ GETİR tıklamasında yeniden kredi tüketmez.
+        cache[cache_key] = {"ts": simdi_ts, "df": lig_df.copy()}
         parcalar.append(lig_df)
 
     # Süresi dolmuş eski kayıtları ara sıra temizle.
@@ -1694,14 +1693,11 @@ def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
 
 
 def bulten_saglam_al(key, kodlar, t, zorla_yenile=False):
-    """Boş/stale cache'in Maç Analizi ve Geçmiş Örnekleri'ni kilitlemesini önler."""
+    """Aynı lig+tarih bültenini cache'ten kullanır; otomatik ikinci API çağrısı yapmaz."""
+    # API hatasında otomatik zorla-yenile kaldırıldı. Kullanıcı isterse yalnızca
+    # 'Oranları Yenile' butonuyla yeni çağrı yapar. Bu, checkbox/filtre değişimlerinde
+    # gereksiz çift kredi tüketimini engeller.
     df = bulten_guncel_al(key, kodlar, t, zorla_yenile=zorla_yenile)
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        return df
-    # HTTP/bağlantı hatası olduysa bir kez zorla yenile; gerçek fikstür yoksa ikinci kez tüketme.
-    if st.session_state.get("odds_api_last_error") and not zorla_yenile:
-        st.session_state["odds_api_last_error"] = None
-        df = bulten_guncel_al(key, kodlar, t, zorla_yenile=True)
     return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
 
@@ -7615,12 +7611,12 @@ with st.sidebar:
         kota_yazi = f"Kalan kredi: {kalan}"
         if kullanilan not in (None, ""):
             kota_yazi += f" · Kullanılan: {kullanilan}"
-    st.caption(f"🧠 Bülten cache: {cache_hazir}/{cache_toplam} lig · 15 dk · {kota_yazi}")
+    st.caption(f"🧠 Bülten cache: {cache_hazir}/{cache_toplam} lig · 6 saat · {kota_yazi}")
     if st.button(
         "🔄 Oranları Yenile",
         use_container_width=True,
         key="oranlari_zorla_yenile_btn",
-        help="Yalnızca seçili liglerin oranlarını yeniden API'den çeker. Normal analizlerde 15 dakikalık cache kullanılır.",
+        help="Yalnızca seçili liglerin oranlarını yeniden API'den çeker. Filtre/checkbox değişiklikleri 6 saatlik cache'i kullanır ve kredi tüketmez.",
     ):
         if not API_KEY or not secili_kodlar:
             st.warning("API key ve en az bir lig gerekli.")
