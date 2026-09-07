@@ -5823,6 +5823,18 @@ def gecmis_tablo_stili(tablo):
         stil = stil.map(kg_renk, subset=["KG"])
     if "İki yarı 1.5 Üst" in tablo.columns:
         stil = stil.map(evet_hayir_renk, subset=["İki yarı 1.5 Üst"])
+
+    # Oran Filtresi'ndeki ikili kombo sütunlarının Evet/Hayır sonuçlarını da renklendir.
+    kombo_kolonlari = [
+        c for c in tablo.columns
+        if str(c) in {"MS+KG", "MS+2.5", "KG+2.5", "Kombo"}
+        or str(c).startswith("MS+KG")
+        or str(c).startswith("MS+2.5")
+        or str(c).startswith("KG+2.5")
+    ]
+    if kombo_kolonlari:
+        stil = stil.map(evet_hayir_renk, subset=kombo_kolonlari)
+
     olay_kolonlari = [c for c in ["Özel olay", "Yüksek oran olayı"] if c in tablo.columns]
     if olay_kolonlari:
         stil = stil.map(olay_renk, subset=olay_kolonlari)
@@ -8725,8 +8737,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                             + (ornekler["REF_A"] if "REF_A" in ornekler.columns else ornekler["B365A"]).round(2).astype(str)
                         ),
                         "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
-                        "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
                         "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
+                        "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
                     }
 
                     # İki Yarı 1.5 Üst yalnızca maçın 11 hassasiyet ortak sonucunda
