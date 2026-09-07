@@ -1239,6 +1239,13 @@ def _hedef_sezon_baslangic_yili(m_row):
         now = datetime.now()
         return int(now.year) if int(now.month) >= 7 else int(now.year) - 1
 
+def recency_weighting_aktif():
+    """Canlı widget tercihini korurken backtest için geçici A/B override uygular."""
+    override = st.session_state.get("_recency_weighting_backtest_override", None)
+    if override is not None:
+        return bool(override)
+    return bool(st.session_state.get("recency_weighting_enabled", True))
+
 def sezon_agirlik_serisi(df, m_row):
     """Her geçmiş maça hedef sezona uzaklığına göre ağırlık verir.
 
@@ -1247,7 +1254,7 @@ def sezon_agirlik_serisi(df, m_row):
     """
     if df is None or getattr(df, "empty", True):
         return pd.Series(dtype="float64")
-    if not bool(st.session_state.get("recency_weighting_enabled", True)):
+    if not recency_weighting_aktif():
         return pd.Series(1.0, index=df.index, dtype="float64")
 
     hedef_yil = _hedef_sezon_baslangic_yili(m_row)
@@ -4036,7 +4043,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         f"Ortalama toplam gol {avg_goal:.2f} ({goal_profile}).",
         f"Maç tipi: {match_type}.",
     ]
-    if bool(st.session_state.get("recency_weighting_enabled", True)):
+    if recency_weighting_aktif():
         nedenler.append("Yakın sezon ağırlığı aktif: yeni sezonların benzer oran istatistiğine etkisi daha yüksek.")
     if belirsiz:
         nedenler.append("1/X/2 dağılımı birbirine çok yakın olduğu için maç belirsiz işaretlendi.")
@@ -4148,8 +4155,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "guven_badge_cls": gb_cls,
         "guven_badge_lbl": gb_lbl,
         "ornek": sample,
-        "sezon_agirlikli": bool(st.session_state.get("recency_weighting_enabled", True)),
-        "sezon_agirlik_profili": "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35" if bool(st.session_state.get("recency_weighting_enabled", True)) else "Eşit ağırlık",
+        "sezon_agirlikli": recency_weighting_aktif(),
+        "sezon_agirlik_profili": "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35" if recency_weighting_aktif() else "Eşit ağırlık",
         "ornek_durum": ornek_durum,
         "ornek_renk": ornek_renk,
         "onerilen_tolerans": rehber["onerilen_tolerans"],
@@ -8490,32 +8497,34 @@ if backtest_btn:
         # Aynı veri ve filtrelerle iki modeli arka arkaya çalıştır:
         # 1) bütün sezonlar eşit ağırlık, 2) yakın sezonlar daha değerli.
         # Böylece tek BACKTESTİ BAŞLAT tıklamasıyla gerçek A/B karşılaştırması oluşur.
-        _kullanici_sezon_agirlik_tercihi = bool(st.session_state.get("recency_weighting_enabled", True))
+        # Widget anahtarına dokunmuyoruz. Streamlit, widget oluşturulduktan sonra
+        # aynı key'in session_state değerinin değiştirilmesine izin vermez.
+        # A/B backtest için widget'tan bağımsız, geçici bir override kullanıyoruz.
+        try:
+            st.session_state["_recency_weighting_backtest_override"] = False
+            bt11_esit, bt_esit, uz_esit, tek_esit, tahmin_uz_esit = backtest_11_hassasiyet_calistir(
+                bt_gecmis,
+                backtest_sezonu,
+                TOLERANS,
+                min_ornek,
+                sadece_ayni_lig=sadece_ayni_lig,
+                lig_kodlari=secili_history_codes or None,
+                max_test=backtest_limit,
+            )
 
-        st.session_state["recency_weighting_enabled"] = False
-        bt11_esit, bt_esit, uz_esit, tek_esit, tahmin_uz_esit = backtest_11_hassasiyet_calistir(
-            bt_gecmis,
-            backtest_sezonu,
-            TOLERANS,
-            min_ornek,
-            sadece_ayni_lig=sadece_ayni_lig,
-            lig_kodlari=secili_history_codes or None,
-            max_test=backtest_limit,
-        )
-
-        st.session_state["recency_weighting_enabled"] = True
-        bt11_agir, bt_agir, uz_agir, tek_agir, tahmin_uz_agir = backtest_11_hassasiyet_calistir(
-            bt_gecmis,
-            backtest_sezonu,
-            TOLERANS,
-            min_ornek,
-            sadece_ayni_lig=sadece_ayni_lig,
-            lig_kodlari=secili_history_codes or None,
-            max_test=backtest_limit,
-        )
-
-        # Kullanıcının canlı analiz tercihini geri yükle.
-        st.session_state["recency_weighting_enabled"] = _kullanici_sezon_agirlik_tercihi
+            st.session_state["_recency_weighting_backtest_override"] = True
+            bt11_agir, bt_agir, uz_agir, tek_agir, tahmin_uz_agir = backtest_11_hassasiyet_calistir(
+                bt_gecmis,
+                backtest_sezonu,
+                TOLERANS,
+                min_ornek,
+                sadece_ayni_lig=sadece_ayni_lig,
+                lig_kodlari=secili_history_codes or None,
+                max_test=backtest_limit,
+            )
+        finally:
+            # Canlı analiz yeniden doğrudan checkbox tercihine döner.
+            st.session_state.pop("_recency_weighting_backtest_override", None)
 
         # Karşılaştırma için iki ham sonucu ayrı sakla.
         st.session_state["backtest_df_esit_sezon"] = bt_esit
