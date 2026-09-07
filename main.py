@@ -2573,7 +2573,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
     """Kalite eşiğini geçen seçimlerden tek bir Günün Kuponu üretir.
 
     Amaç kuponu 5-6 maça doldurmak değil, gerçekten güçlü seçimlerde durmaktır.
-    Aynı maçtan yalnızca bir seçim alınır. 2-6 seçim üretilebilir.
+    Aynı maçtan yalnızca bir seçim alınır. 1-6 seçim üretilebilir.
     Güven kadar 0.00-0.10 taramasındaki kararlılık da dikkate alınır.
     """
     simdi = datetime.now()
@@ -2743,9 +2743,10 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
         if len(secimler) >= int(maks):
             break
 
-    # Tek maç "kupon" üretmeyelim. Yeterli kalite yoksa kullanıcıya açıkça
-    # kupon bulunamadığını söylemek, zayıf seçim eklemekten daha doğrudur.
-    return secimler if len(secimler) >= 2 else []
+    # Kalite eşiğini geçen tek bir aday bile varsa Günün Kuponu'nu oluştur.
+    # Böylece aday havuzu oluştuğu günlerde sırf ikinci seçim bulunamadığı için
+    # kupon tamamen iptal edilmez.
+    return secimler
 
 
 KUPON_GECMISI_PATH = Path(__file__).with_name("vibe_kupon_gecmisi.json")
@@ -10861,7 +10862,7 @@ else:
             else:
                 kupon_mesaji = (
                     "warning",
-                    "Günün Kuponu için en az iki yeterince güvenilir ve kararlı seçim bulunamadı."
+                    "Günün Kuponu için yeterince güvenilir ve kararlı bir seçim bulunamadı."
                 )
 
         if gunun_kupon_btn:
