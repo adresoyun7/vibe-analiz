@@ -7437,6 +7437,7 @@ with st.sidebar:
             min-height:100% !important;
             max-height:none !important;
             overflow:visible !important;
+            padding-left:1rem !important;
             padding-bottom:6rem !important;
         }
 
@@ -7495,6 +7496,29 @@ with st.sidebar:
             """,
             unsafe_allow_html=True,
         )
+        if bool(st.session_state.get("koyu_mod", False)):
+            st.markdown(
+                """
+                <style>
+                .st-key-sidebar_system_clock {
+                    background:#0b1628 !important;
+                    border-color:#284977 !important;
+                    box-shadow:0 4px 14px rgba(0,0,0,.28) !important;
+                }
+                .st-key-sidebar_system_clock .system-clock-label,
+                .st-key-sidebar_system_clock .system-clock-label *,
+                .st-key-sidebar_system_clock .system-clock-time {
+                    color:#f8fafc !important;
+                    -webkit-text-fill-color:#f8fafc !important;
+                }
+                .st-key-sidebar_system_clock .system-clock-label > span:last-child {
+                    color:#9db2d1 !important;
+                    -webkit-text-fill-color:#9db2d1 !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
         sistem_bilgi_col, sistem_yenile_col = st.columns([1.55, 1], gap="small")
         with sistem_bilgi_col:
             st.markdown(
