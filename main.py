@@ -6765,6 +6765,14 @@ def uygula_tema_css(koyu_mod: bool):
         .stApp, [data-testid="stAppViewContainer"] {
             background:linear-gradient(180deg,#07111f 0%,#081426 48%,#0a1830 100%) !important;
         }
+
+        /* Sayfa dikey kaydırmasını hiçbir görünümde kilitleme. */
+        html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            overflow-y:auto !important;
+        }
+        [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+            min-height:100vh !important;
+        }
         [data-testid="stHeader"] {
             background:rgba(7,17,31,.94) !important;
         }
@@ -7763,17 +7771,20 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             z-index:999999 !important;
                             background:{tam_arka} !important;
                             padding:8px 12px !important;
-                            overflow:hidden !important;
+                            overflow-y:auto !important;
+                            overflow-x:hidden !important;
                         }}
                         .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] {{
                             width:100% !important;
                             max-width:none !important;
                             height:calc(100vh - 16px) !important;
-                            overflow:hidden !important;
+                            overflow-y:auto !important;
+                            overflow-x:hidden !important;
                         }}
                         .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] {{
                             height:calc(100vh - 62px) !important;
-                            overflow:hidden !important;
+                            overflow-y:auto !important;
+                            overflow-x:hidden !important;
                             padding:2px 4px 4px 4px !important;
                         }}
                         /* Tam ekranda tablo normal satır yüksekliğini korur.
