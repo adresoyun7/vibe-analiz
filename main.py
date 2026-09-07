@@ -1206,106 +1206,6 @@ def guven_metni(sample: int, tolerans: float):
     return "Riskli", "#e74c3c"
 
 
-# ==========================================================
-# YAKIN SEZON AĞIRLIKLANDIRMA
-# ==========================================================
-# Eski sezonlar modelden atılmaz; yalnızca yakın tarihli aynı oran/market
-# davranışına daha fazla ağırlık verilir. Backtestte hedef maçın sezonu
-# referans alınır; böylece gelecek sezon bilgisi sızmaz.
-SEZON_YAS_AGIRLIKLARI = {
-    0: 1.00,  # hedef / güncel sezon
-    1: 0.90,
-    2: 0.75,
-    3: 0.60,
-    4: 0.45,
-    5: 0.35,
-}
-
-def _sezon_baslangic_yili_koddan(kod):
-    try:
-        s = str(kod or "").strip()
-        if len(s) == 4 and s.isdigit():
-            return 2000 + int(s[:2])
-    except Exception:
-        pass
-    return None
-
-def _hedef_sezon_baslangic_yili(m_row):
-    try:
-        z = m_row.get("zaman") if hasattr(m_row, "get") else None
-        dt = parse_mac_datetime(z)
-        return int(dt.year) if int(dt.month) >= 7 else int(dt.year) - 1
-    except Exception:
-        now = datetime.now()
-        return int(now.year) if int(now.month) >= 7 else int(now.year) - 1
-
-def recency_weighting_aktif():
-    """Canlı widget tercihini korurken backtest için geçici A/B override uygular."""
-    override = st.session_state.get("_recency_weighting_backtest_override", None)
-    if override is not None:
-        return bool(override)
-    return bool(st.session_state.get("recency_weighting_enabled", True))
-
-def sezon_agirlik_serisi(df, m_row):
-    """Her geçmiş maça hedef sezona uzaklığına göre ağırlık verir.
-
-    recency_weighting_enabled kapalıysa klasik eşit ağırlık döner.
-    Örnek sayısı / minimum yeterlilik gerçek maç adediyle çalışmaya devam eder.
-    """
-    if df is None or getattr(df, "empty", True):
-        return pd.Series(dtype="float64")
-    if not recency_weighting_aktif():
-        return pd.Series(1.0, index=df.index, dtype="float64")
-
-    hedef_yil = _hedef_sezon_baslangic_yili(m_row)
-    if "season_code" not in df.columns:
-        return pd.Series(1.0, index=df.index, dtype="float64")
-
-    def _w(kod):
-        bas = _sezon_baslangic_yili_koddan(kod)
-        if bas is None:
-            return 0.35
-        yas = max(0, int(hedef_yil) - int(bas))
-        return float(SEZON_YAS_AGIRLIKLARI.get(yas, 0.35))
-
-    return df["season_code"].map(_w).astype(float)
-
-def agirlikli_ortalama(values, weights, default=0.0):
-    try:
-        v = pd.to_numeric(pd.Series(values), errors="coerce")
-        w = pd.to_numeric(pd.Series(weights, index=v.index), errors="coerce")
-        mask = v.notna() & w.notna() & (w > 0)
-        if not mask.any():
-            return float(default)
-        return float((v[mask] * w[mask]).sum() / w[mask].sum())
-    except Exception:
-        return float(default)
-
-def agirlikli_oran(mask, weights):
-    try:
-        m = pd.Series(mask).astype(float)
-        w = pd.Series(weights, index=m.index, dtype="float64")
-        valid = m.notna() & w.notna() & (w > 0)
-        if not valid.any():
-            return 0.0
-        return float((m[valid] * w[valid]).sum() / w[valid].sum())
-    except Exception:
-        return 0.0
-
-def agirlikli_value_counts(series, weights):
-    try:
-        s = pd.Series(series)
-        w = pd.Series(weights, index=s.index, dtype="float64")
-        valid = s.notna() & w.notna() & (w > 0)
-        if not valid.any():
-            return pd.Series(dtype="float64")
-        toplam = float(w[valid].sum())
-        if toplam <= 0:
-            return pd.Series(dtype="float64")
-        return w[valid].groupby(s[valid]).sum().sort_values(ascending=False) / toplam
-    except Exception:
-        return pd.Series(dtype="float64")
-
 def guven_renk(pct: int):
     if pct >= 70:
         return "#27ae60", "badge-yuksek", "Yüksek Güven"
@@ -3679,11 +3579,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     sample = len(b)
     toplam_gol = b["FTHG"] + b["FTAG"]
 
-    # İstatistik yüzdeleri yakın sezon ağırlığıyla hesaplanır; sample ise gerçek
-    # maç adedi olarak kalır. Böylece güncel davranış daha hızlı yakalanırken
-    # küçük örneklem korumaları bozulmaz.
-    sezon_w = sezon_agirlik_serisi(b, m_row)
-    ms_vc = agirlikli_value_counts(b["FTR"], sezon_w)
+    ms_vc = b["FTR"].value_counts(normalize=True)
 
     ms_mod = ms_vc.idxmax() if not ms_vc.empty else "D"
     ms_raw = float(ms_vc.get(ms_mod, 0))
@@ -3693,10 +3589,10 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     msx_raw = float(ms_vc.get("D", 0))
     ms2_raw = float(ms_vc.get("A", 0))
 
-    ms25_raw = agirlikli_oran(toplam_gol >= 3, sezon_w)
-    ms35_raw = agirlikli_oran(toplam_gol >= 4, sezon_w)
-    ms15_raw = agirlikli_oran(toplam_gol >= 2, sezon_w)
-    kg_raw = agirlikli_oran((b["FTHG"] > 0) & (b["FTAG"] > 0), sezon_w)
+    ms25_raw = float((toplam_gol >= 3).mean())
+    ms35_raw = float((toplam_gol >= 4).mean())
+    ms15_raw = float((toplam_gol >= 2).mean())
+    kg_raw = float(((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
 
     # İlk-yarı/HTFT yalnızca gerçekten HT verisi bulunan alt kümeden hesaplanır.
     if all(c in b.columns for c in ["HTHG", "HTAG", "HTR"]):
@@ -3706,18 +3602,16 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
     if not b_ht.empty:
         ilk_yari_gol = b_ht["HTHG"] + b_ht["HTAG"]
-        sezon_w_ht = sezon_w.reindex(b_ht.index).fillna(0.35)
-        iy_vc = agirlikli_value_counts(b_ht["HTR"], sezon_w_ht)
-        iy05_raw = agirlikli_oran(ilk_yari_gol >= 1, sezon_w_ht)
-        iy15_raw = agirlikli_oran(ilk_yari_gol >= 2, sezon_w_ht)
+        iy_vc = b_ht["HTR"].value_counts(normalize=True)
+        iy05_raw = float((ilk_yari_gol >= 1).mean())
+        iy15_raw = float((ilk_yari_gol >= 2).mean())
         htft_s = (
             b_ht["HTR"].replace({"H": "1", "A": "2", "D": "X"})
             + "/"
             + b_ht["FTR"].replace({"H": "1", "A": "2", "D": "X"})
         )
-        htft_vc = agirlikli_value_counts(htft_s, sezon_w_ht)
-        htft_mod = htft_vc.index[0] if not htft_vc.empty else "-"
-        htft_raw = float(htft_vc.get(htft_mod, 0)) if not htft_vc.empty else 0.0
+        htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
+        htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
     else:
         # HT verisi olmayan extra/worldwide liglerde ilk-yarı marketlerini
         # sıfırla; full-time MS/KG/Üst analizleri çalışmaya devam etsin.
@@ -3725,7 +3619,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         iy05_raw = 0.0
         iy15_raw = 0.0
         htft_s = pd.Series(dtype="object")
-        htft_vc = pd.Series(dtype="float64")
         htft_mod = "-"
         htft_raw = 0.0
 
@@ -3880,7 +3773,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     raw_combo_list = []
     for combo_label, combo_cond, combo_type in combo_defs:
         combo_hit = int(combo_cond.sum())
-        combo_raw = agirlikli_oran(combo_cond, sezon_w)
+        combo_raw = float(combo_cond.mean())
         combo_conf = min(combo_raw * guven_carpani * combo_bias * form_market_carpani(combo_label, form_profili), 0.99)
         combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, sample, float(tolerans))
 
@@ -3901,7 +3794,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
                 "type": combo_type,
             })
 
-    htft_counts = htft_vc.copy() if 'htft_vc' in locals() else pd.Series(dtype="float64")
+    htft_counts = htft_series.value_counts(normalize=True)
     for htft_label, htft_raw_prob in htft_counts.items():
         htft_hit = int((htft_series == htft_label).sum())
         htft_conf = min(float(htft_raw_prob) * guven_carpani * combo_bias * form_market_carpani(f"HT/FT {htft_label}", form_profili), 0.99)
@@ -4013,11 +3906,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         canli_label, canli_p = "Canlı İzle", 50
         canli_strateji = "İlk 10-15 dakikada baskı, şut ve korner üstünlüğü hangi taraftaysa sadece o yönde canlı giriş düşün."
 
-    if "HTR" in b.columns:
-        flip_mask = (((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H")))
-        flip_p = agirlikli_oran(flip_mask, sezon_w)
-    else:
-        flip_p = 0.0
+    flip_p = float((((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H"))).mean())
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
@@ -4034,7 +3923,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     else:
         tavsiye = "Uygun"
 
-    avg_goal = agirlikli_ortalama(toplam_gol, sezon_w, default=float(toplam_gol.mean()))
+    avg_goal = float(toplam_gol.mean())
     goal_profile = gol_profili(avg_goal)
 
     nedenler = [
@@ -4043,8 +3932,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         f"Ortalama toplam gol {avg_goal:.2f} ({goal_profile}).",
         f"Maç tipi: {match_type}.",
     ]
-    if recency_weighting_aktif():
-        nedenler.append("Yakın sezon ağırlığı aktif: yeni sezonların benzer oran istatistiğine etkisi daha yüksek.")
     if belirsiz:
         nedenler.append("1/X/2 dağılımı birbirine çok yakın olduğu için maç belirsiz işaretlendi.")
     if combo_var:
@@ -4155,8 +4042,6 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "guven_badge_cls": gb_cls,
         "guven_badge_lbl": gb_lbl,
         "ornek": sample,
-        "sezon_agirlikli": recency_weighting_aktif(),
-        "sezon_agirlik_profili": "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35" if recency_weighting_aktif() else "Eşit ağırlık",
         "ornek_durum": ornek_durum,
         "ornek_renk": ornek_renk,
         "onerilen_tolerans": rehber["onerilen_tolerans"],
@@ -4279,7 +4164,6 @@ def hassasiyet_birlesik_hesapla(
       - Örnek sayısı: puan vermez; yalnızca yeterlilik şartıdır.
       - Çok az medyan örnekte ayrıca ceza uygulanır.
       - Marketin geçmiş backtest başarısı güvene küçük bir düzeltme yapar.
-      - İsteğe bağlı yakın-sezon ağırlığı, ham oran/market yüzdelerini güncele yaklaştırır.
     """
     market_alanlari = {
         "MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
@@ -6572,10 +6456,6 @@ def sync_ayni_lig_gecmisten_globale():
 def clear_backtest_on_change():
     st.session_state.backtest_df = None
     st.session_state.backtest_11_df = None
-    st.session_state["backtest_df_esit_sezon"] = None
-    st.session_state["backtest_df_yakin_sezon"] = None
-    st.session_state["backtest_11_df_esit_sezon"] = None
-    st.session_state["backtest_11_df_yakin_sezon"] = None
     clear_detail_on_filter_change()
 
 
@@ -6775,16 +6655,6 @@ with st.container(key="sticky_analysis_controls"):
             yillar = st.multiselect(
                 "Sezonlar", options=sezon_secenekleri, default=sezon_secenekleri,
                 key="top_seasons", on_change=clear_backtest_on_change,
-            )
-            st.checkbox(
-                "Yakın sezonları daha değerli say",
-                value=True,
-                key="recency_weighting_enabled",
-                help=(
-                    "Açıkken aynı oranlı geçmiş maçlarda hedef sezona yakın sezonlar daha fazla ağırlık alır: "
-                    "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35. Eski sezonlar silinmez; örnek sayısı gerçek maç adedi olarak kalır."
-                ),
-                on_change=clear_backtest_on_change,
             )
             sadece_ayni_lig = st.checkbox(
                 "Sadece aynı lig verilerini kullan", value=False,
@@ -7536,10 +7406,6 @@ with st.sidebar:
 
 legal_sidebar_sections()
 
-# Backtest ekranındaki ikinci A/B butonu yalnız Backtest modunda oluşturulur.
-# Diğer sayfalarda NameError oluşmaması için varsayılanı burada tanımla.
-sezon_test_btn = False
-
 # Ana analiz eylemi, sık kullanılan ayarlarla aynı üst satırda gösterilir.
 if st.session_state.get('sayfa_modu') in ['Maç Analizi', 'Top 50 Market']:
     with ust_analiz_buton_alani.container():
@@ -7562,21 +7428,12 @@ elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
 elif st.session_state.get('sayfa_modu') == 'Backtest':
     with ust_analiz_buton_alani.container():
         st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        _btcol1, _btcol2 = st.columns(2, gap='small')
-        with _btcol1:
-            backtest_btn = st.button(
-                '🧪 BACKTESTİ BAŞLAT',
-                use_container_width=True,
-                type='primary',
-                key='backtest_baslat_btn',
-            )
-        with _btcol2:
-            sezon_test_btn = st.button(
-                '⚖️ SEZON AĞIRLIK TESTİ',
-                use_container_width=True,
-                key='sezon_agirlik_test_btn',
-                help='Eşit sezon ağırlığı ile yakın sezon ağırlığını aynı veri ve filtrelerde yan yana test eder.',
-            )
+        backtest_btn = st.button(
+            '🧪 BACKTESTİ BAŞLAT',
+            use_container_width=True,
+            type='primary',
+            key='backtest_baslat_btn',
+        )
 elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
     with ust_analiz_buton_alani.container():
         st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
@@ -8496,14 +8353,8 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     st.stop()
 
 
-if backtest_btn or sezon_test_btn:
-    _ab_istegi = bool(sezon_test_btn)
-    _spinner_text = (
-        "⚖️ Eşit sezon ve yakın sezon ağırlıklı sistemler karşılaştırılıyor..."
-        if _ab_istegi else
-        "🧪 11 hassasiyet test ediliyor (0.00–0.10)..."
-    )
-    with st.spinner(_spinner_text):
+if backtest_btn:
+    with st.spinner("🧪 11 hassasiyet test ediliyor (0.00–0.10)..."):
         bt_sezonlar = list(dict.fromkeys(list(yillar) + [backtest_sezonu]))
         # Backtest başlatılırken Football-Data'yı zorla yenile ve eski cache ile birleştir.
         futbol_veri_motoru.clear()
@@ -8513,55 +8364,15 @@ if backtest_btn or sezon_test_btn:
             if pd.notna(_bt_son_tarih):
                 st.session_state["backtest_veri_son_tarih"] = _bt_son_tarih.strftime("%d.%m.%Y")
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
-        # Aynı veri ve filtrelerle iki modeli arka arkaya çalıştır:
-        # 1) bütün sezonlar eşit ağırlık, 2) yakın sezonlar daha değerli.
-        # Böylece tek BACKTESTİ BAŞLAT tıklamasıyla gerçek A/B karşılaştırması oluşur.
-        # Widget anahtarına dokunmuyoruz. Streamlit, widget oluşturulduktan sonra
-        # aynı key'in session_state değerinin değiştirilmesine izin vermez.
-        # A/B backtest için widget'tan bağımsız, geçici bir override kullanıyoruz.
-        try:
-            st.session_state["_recency_weighting_backtest_override"] = False
-            bt11_esit, bt_esit, uz_esit, tek_esit, tahmin_uz_esit = backtest_11_hassasiyet_calistir(
-                bt_gecmis,
-                backtest_sezonu,
-                TOLERANS,
-                min_ornek,
-                sadece_ayni_lig=sadece_ayni_lig,
-                lig_kodlari=secili_history_codes or None,
-                max_test=backtest_limit,
-            )
-
-            st.session_state["_recency_weighting_backtest_override"] = True
-            bt11_agir, bt_agir, uz_agir, tek_agir, tahmin_uz_agir = backtest_11_hassasiyet_calistir(
-                bt_gecmis,
-                backtest_sezonu,
-                TOLERANS,
-                min_ornek,
-                sadece_ayni_lig=sadece_ayni_lig,
-                lig_kodlari=secili_history_codes or None,
-                max_test=backtest_limit,
-            )
-        finally:
-            # Canlı analiz yeniden doğrudan checkbox tercihine döner.
-            st.session_state.pop("_recency_weighting_backtest_override", None)
-
-        # Karşılaştırma için iki ham sonucu ayrı sakla.
-        st.session_state["backtest_df_esit_sezon"] = bt_esit
-        st.session_state["backtest_df_yakin_sezon"] = bt_agir
-        st.session_state["backtest_11_df_esit_sezon"] = bt11_esit
-        st.session_state["backtest_11_df_yakin_sezon"] = bt11_agir
-
-        # Alttaki mevcut ayrıntılı backtest tabloları, kullanıcının üstte seçtiği
-        # canlı model tercihiyle aynı sistemi göstersin.
-        if _kullanici_sezon_agirlik_tercihi:
-            bt11, bt_secili, bt_uzlasi, bt_tek_uzlasi, bt_tahmin_uzlasi = (
-                bt11_agir, bt_agir, uz_agir, tek_agir, tahmin_uz_agir
-            )
-        else:
-            bt11, bt_secili, bt_uzlasi, bt_tek_uzlasi, bt_tahmin_uzlasi = (
-                bt11_esit, bt_esit, uz_esit, tek_esit, tahmin_uz_esit
-            )
-
+        bt11, bt_secili, bt_uzlasi, bt_tek_uzlasi, bt_tahmin_uzlasi = backtest_11_hassasiyet_calistir(
+            bt_gecmis,
+            backtest_sezonu,
+            TOLERANS,
+            min_ornek,
+            sadece_ayni_lig=sadece_ayni_lig,
+            lig_kodlari=secili_history_codes or None,
+            max_test=backtest_limit,
+        )
         st.session_state.backtest_11_df = bt11
         st.session_state.backtest_uzlasi_df = bt_uzlasi
         st.session_state.backtest_tek_uzlasi_df = bt_tek_uzlasi
@@ -8630,57 +8441,6 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     _bt_veri_tarihi = st.session_state.get("backtest_veri_son_tarih")
     if _bt_veri_tarihi:
         st.caption(f"📅 Backtest veri setindeki son tamamlanmış maç tarihi: {_bt_veri_tarihi}")
-
-    st.markdown("### ⚖️ Sezon Ağırlık Testi")
-    st.caption(
-        "Üstteki **⚖️ SEZON AĞIRLIK TESTİ** butonuna basınca aynı backtest, "
-        "Eşit Sezon ve Yakın Sezon Ağırlıklı olarak iki kez çalıştırılır ve sonuçlar burada yan yana gösterilir."
-    )
-
-    # === EŞİT SEZON vs YAKIN SEZON AĞIRLIKLI A/B KARŞILAŞTIRMASI ===
-    _bt_esit_cmp = st.session_state.get("backtest_df_esit_sezon")
-    _bt_agir_cmp = st.session_state.get("backtest_df_yakin_sezon")
-    if _bt_esit_cmp is None or _bt_agir_cmp is None:
-        st.info("Henüz sezon ağırlık karşılaştırması çalıştırılmadı. Üstteki ⚖️ SEZON AĞIRLIK TESTİ butonuna bas.")
-    if _bt_esit_cmp is not None and _bt_agir_cmp is not None:
-        def _ab_ozet(_df, _ad):
-            if _df is None or getattr(_df, "empty", True):
-                return {"Sistem": _ad, "Tahmin": 0, "Tuttu": 0, "Başarı %": 0.0, "MS ROI %": None}
-            _n = int(len(_df))
-            _w = int(_df["Tuttu"].sum()) if "Tuttu" in _df.columns else 0
-            _bas = (_w / _n * 100.0) if _n else 0.0
-            _ms = _df[_df["Kâr (100 TL)"].notna()].copy() if "Kâr (100 TL)" in _df.columns else pd.DataFrame()
-            _roi = None
-            if not _ms.empty:
-                _roi = float(_ms["Kâr (100 TL)"].sum()) / (len(_ms) * 100.0) * 100.0
-            return {"Sistem": _ad, "Tahmin": _n, "Tuttu": _w, "Başarı %": round(_bas, 1), "MS ROI %": round(_roi, 1) if _roi is not None else None}
-
-        _r_esit = _ab_ozet(_bt_esit_cmp, "Eşit Sezon")
-        _r_agir = _ab_ozet(_bt_agir_cmp, "📈 Yakın Sezon Ağırlıklı")
-        _roi_fark = None
-        if _r_esit["MS ROI %"] is not None and _r_agir["MS ROI %"] is not None:
-            _roi_fark = round(_r_agir["MS ROI %"] - _r_esit["MS ROI %"], 1)
-        _r_fark = {
-            "Sistem": "Fark (Ağırlıklı − Eşit)",
-            "Tahmin": int(_r_agir["Tahmin"] - _r_esit["Tahmin"]),
-            "Tuttu": int(_r_agir["Tuttu"] - _r_esit["Tuttu"]),
-            "Başarı %": round(_r_agir["Başarı %"] - _r_esit["Başarı %"], 1),
-            "MS ROI %": _roi_fark,
-        }
-        _ab_df = pd.DataFrame([_r_esit, _r_agir, _r_fark])
-        st.markdown("### ⚖️ Sezon Ağırlığı Karşılaştırması")
-        st.caption(
-            "Tek backtest çalıştırmasında aynı maçlar ve aynı filtreler iki kez test edilir. "
-            "Eşit Sezon tüm geçmiş sezonlara aynı ağırlığı verir; Yakın Sezon Ağırlıklı ise "
-            "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35 profilini kullanır. "
-            "Fark satırı ağırlıklı sistem eksi eşit sistemdir."
-        )
-        st.dataframe(_ab_df, use_container_width=True, hide_index=True)
-
-        _bas_fark = float(_r_fark["Başarı %"])
-        _roi_txt = "—" if _roi_fark is None else f"{_roi_fark:+.1f} puan"
-        _yorum = "Ağırlıklı sistem daha iyi" if _bas_fark > 0 else "Eşit sistem daha iyi" if _bas_fark < 0 else "Başarı oranları eşit"
-        st.info(f"{_yorum}: başarı farkı {_bas_fark:+.1f} puan · MS ROI farkı {_roi_txt}.")
 
     bt = st.session_state.get("backtest_df")
     if bt is None:
