@@ -6949,6 +6949,11 @@ def uygula_tema_css(koyu_mod: bool):
             min-height:100vh !important;
             max-height:100vh !important;
             overflow:hidden !important;
+            position:sticky !important;
+            position:-webkit-sticky !important;
+            top:0 !important;
+            align-self:flex-start !important;
+            z-index:100 !important;
         }
         section[data-testid="stSidebar"] > div,
         section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
