@@ -5495,7 +5495,51 @@ def _backtest_uzlasi_ozeti(tolerans_sonuclari):
             "MS Tahmin": int(len(ms)),
             "MS ROI %": round(roi, 1) if roi is not None else None,
         })
-    return pd.DataFrame(rows)
+    ozet = pd.DataFrame(rows)
+
+    # Detay tablolarını attrs içinde taşı: mevcut fonksiyon imzasını bozmayalım.
+    # 1) 11/11 -> 1/11 tek tek uzlaşı performansı
+    tek_rows = []
+    for n in range(11, 0, -1):
+        z = d[d["Uzlaşı"] == n]
+        if z.empty:
+            continue
+        ms = z[z["Kâr (100 TL)"].notna()]
+        roi = float(ms["Kâr (100 TL)"].sum()) / (len(ms) * 100.0) * 100.0 if len(ms) else None
+        tek_rows.append({
+            "Uzlaşı": f"{n}/11",
+            "Tahmin": int(len(z)),
+            "Kazanan": int(z["Tuttu"].sum()),
+            "Başarı %": round(float(z["Tuttu"].mean() * 100.0), 1),
+            "MS Tahmin": int(len(ms)),
+            "MS ROI %": round(roi, 1) if roi is not None else None,
+        })
+    tek_df = pd.DataFrame(tek_rows)
+
+    # 2) Tahmin türü x uzlaşı: hangi market/tahmin hangi uzlaşı seviyesinde güçlü?
+    capraz_rows = []
+    for (label, n), z in d.groupby(["Uzlaşı Tahmini", "Uzlaşı"], dropna=False):
+        if z.empty:
+            continue
+        ms = z[z["Kâr (100 TL)"].notna()]
+        roi = float(ms["Kâr (100 TL)"].sum()) / (len(ms) * 100.0) * 100.0 if len(ms) else None
+        capraz_rows.append({
+            "Tahmin": str(label),
+            "Uzlaşı": f"{int(n)}/11",
+            "Örnek": int(len(z)),
+            "Kazanan": int(z["Tuttu"].sum()),
+            "Başarı %": round(float(z["Tuttu"].mean() * 100.0), 1),
+            "MS Tahmin": int(len(ms)),
+            "MS ROI %": round(roi, 1) if roi is not None else None,
+        })
+    capraz_df = pd.DataFrame(capraz_rows)
+    if not capraz_df.empty:
+        capraz_df["_uz"] = capraz_df["Uzlaşı"].str.extract(r"(\d+)")[0].astype(int)
+        capraz_df = capraz_df.sort_values(["_uz", "Örnek", "Başarı %"], ascending=[False, False, False]).drop(columns=["_uz"])
+
+    ozet.attrs["tek_uzlasi_df"] = tek_df
+    ozet.attrs["tahmin_uzlasi_df"] = capraz_df
+    return ozet
 
 
 def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min_ornek,
@@ -8428,6 +8472,18 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                     "uzlaşı yükseldikçe başarı da yükseliyorsa bunu yeni bir kararlılık sinyali olarak kullanabiliriz."
                 )
                 st.dataframe(backtest_stili(uzlasi), use_container_width=True, hide_index=True)
+
+                tek_uzlasi = uzlasi.attrs.get("tek_uzlasi_df")
+                if tek_uzlasi is not None and not tek_uzlasi.empty:
+                    st.markdown("#### Tek Tek Uzlaşı (11/11 → 1/11)")
+                    st.caption("9–10/11 grubunu ayırır; başarıyı 9/11 mi yoksa 10/11 mi taşıyor doğrudan görürüz.")
+                    st.dataframe(backtest_stili(tek_uzlasi), use_container_width=True, hide_index=True)
+
+                tahmin_uzlasi = uzlasi.attrs.get("tahmin_uzlasi_df")
+                if tahmin_uzlasi is not None and not tahmin_uzlasi.empty:
+                    st.markdown("#### Tahmin × Uzlaşı Performansı")
+                    st.caption("MS1, MS2, KG Var, 2.5 Üst/Alt gibi ana tahminlerin her uzlaşı seviyesindeki gerçek başarısını gösterir. Az örnekli satırları tek başına güçlü sinyal sayma.")
+                    st.dataframe(backtest_stili(tahmin_uzlasi), use_container_width=True, hide_index=True, height=420)
 
         # Birleşik oynanabilirlik puanı gerçekten ayırt edici mi?
         # Puan yükseldikçe başarının da yükselmesi beklenir.
