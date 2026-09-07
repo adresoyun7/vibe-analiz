@@ -6565,6 +6565,10 @@ def sync_ayni_lig_gecmisten_globale():
 def clear_backtest_on_change():
     st.session_state.backtest_df = None
     st.session_state.backtest_11_df = None
+    st.session_state["backtest_df_esit_sezon"] = None
+    st.session_state["backtest_df_yakin_sezon"] = None
+    st.session_state["backtest_11_df_esit_sezon"] = None
+    st.session_state["backtest_11_df_yakin_sezon"] = None
     clear_detail_on_filter_change()
 
 
@@ -8483,7 +8487,13 @@ if backtest_btn:
             if pd.notna(_bt_son_tarih):
                 st.session_state["backtest_veri_son_tarih"] = _bt_son_tarih.strftime("%d.%m.%Y")
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
-        bt11, bt_secili, bt_uzlasi, bt_tek_uzlasi, bt_tahmin_uzlasi = backtest_11_hassasiyet_calistir(
+        # Aynı veri ve filtrelerle iki modeli arka arkaya çalıştır:
+        # 1) bütün sezonlar eşit ağırlık, 2) yakın sezonlar daha değerli.
+        # Böylece tek BACKTESTİ BAŞLAT tıklamasıyla gerçek A/B karşılaştırması oluşur.
+        _kullanici_sezon_agirlik_tercihi = bool(st.session_state.get("recency_weighting_enabled", True))
+
+        st.session_state["recency_weighting_enabled"] = False
+        bt11_esit, bt_esit, uz_esit, tek_esit, tahmin_uz_esit = backtest_11_hassasiyet_calistir(
             bt_gecmis,
             backtest_sezonu,
             TOLERANS,
@@ -8492,6 +8502,38 @@ if backtest_btn:
             lig_kodlari=secili_history_codes or None,
             max_test=backtest_limit,
         )
+
+        st.session_state["recency_weighting_enabled"] = True
+        bt11_agir, bt_agir, uz_agir, tek_agir, tahmin_uz_agir = backtest_11_hassasiyet_calistir(
+            bt_gecmis,
+            backtest_sezonu,
+            TOLERANS,
+            min_ornek,
+            sadece_ayni_lig=sadece_ayni_lig,
+            lig_kodlari=secili_history_codes or None,
+            max_test=backtest_limit,
+        )
+
+        # Kullanıcının canlı analiz tercihini geri yükle.
+        st.session_state["recency_weighting_enabled"] = _kullanici_sezon_agirlik_tercihi
+
+        # Karşılaştırma için iki ham sonucu ayrı sakla.
+        st.session_state["backtest_df_esit_sezon"] = bt_esit
+        st.session_state["backtest_df_yakin_sezon"] = bt_agir
+        st.session_state["backtest_11_df_esit_sezon"] = bt11_esit
+        st.session_state["backtest_11_df_yakin_sezon"] = bt11_agir
+
+        # Alttaki mevcut ayrıntılı backtest tabloları, kullanıcının üstte seçtiği
+        # canlı model tercihiyle aynı sistemi göstersin.
+        if _kullanici_sezon_agirlik_tercihi:
+            bt11, bt_secili, bt_uzlasi, bt_tek_uzlasi, bt_tahmin_uzlasi = (
+                bt11_agir, bt_agir, uz_agir, tek_agir, tahmin_uz_agir
+            )
+        else:
+            bt11, bt_secili, bt_uzlasi, bt_tek_uzlasi, bt_tahmin_uzlasi = (
+                bt11_esit, bt_esit, uz_esit, tek_esit, tahmin_uz_esit
+            )
+
         st.session_state.backtest_11_df = bt11
         st.session_state.backtest_uzlasi_df = bt_uzlasi
         st.session_state.backtest_tek_uzlasi_df = bt_tek_uzlasi
@@ -8560,6 +8602,49 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     _bt_veri_tarihi = st.session_state.get("backtest_veri_son_tarih")
     if _bt_veri_tarihi:
         st.caption(f"📅 Backtest veri setindeki son tamamlanmış maç tarihi: {_bt_veri_tarihi}")
+
+    # === EŞİT SEZON vs YAKIN SEZON AĞIRLIKLI A/B KARŞILAŞTIRMASI ===
+    _bt_esit_cmp = st.session_state.get("backtest_df_esit_sezon")
+    _bt_agir_cmp = st.session_state.get("backtest_df_yakin_sezon")
+    if _bt_esit_cmp is not None and _bt_agir_cmp is not None:
+        def _ab_ozet(_df, _ad):
+            if _df is None or getattr(_df, "empty", True):
+                return {"Sistem": _ad, "Tahmin": 0, "Tuttu": 0, "Başarı %": 0.0, "MS ROI %": None}
+            _n = int(len(_df))
+            _w = int(_df["Tuttu"].sum()) if "Tuttu" in _df.columns else 0
+            _bas = (_w / _n * 100.0) if _n else 0.0
+            _ms = _df[_df["Kâr (100 TL)"].notna()].copy() if "Kâr (100 TL)" in _df.columns else pd.DataFrame()
+            _roi = None
+            if not _ms.empty:
+                _roi = float(_ms["Kâr (100 TL)"].sum()) / (len(_ms) * 100.0) * 100.0
+            return {"Sistem": _ad, "Tahmin": _n, "Tuttu": _w, "Başarı %": round(_bas, 1), "MS ROI %": round(_roi, 1) if _roi is not None else None}
+
+        _r_esit = _ab_ozet(_bt_esit_cmp, "Eşit Sezon")
+        _r_agir = _ab_ozet(_bt_agir_cmp, "📈 Yakın Sezon Ağırlıklı")
+        _roi_fark = None
+        if _r_esit["MS ROI %"] is not None and _r_agir["MS ROI %"] is not None:
+            _roi_fark = round(_r_agir["MS ROI %"] - _r_esit["MS ROI %"], 1)
+        _r_fark = {
+            "Sistem": "Fark (Ağırlıklı − Eşit)",
+            "Tahmin": int(_r_agir["Tahmin"] - _r_esit["Tahmin"]),
+            "Tuttu": int(_r_agir["Tuttu"] - _r_esit["Tuttu"]),
+            "Başarı %": round(_r_agir["Başarı %"] - _r_esit["Başarı %"], 1),
+            "MS ROI %": _roi_fark,
+        }
+        _ab_df = pd.DataFrame([_r_esit, _r_agir, _r_fark])
+        st.markdown("### ⚖️ Sezon Ağırlığı Karşılaştırması")
+        st.caption(
+            "Tek backtest çalıştırmasında aynı maçlar ve aynı filtreler iki kez test edilir. "
+            "Eşit Sezon tüm geçmiş sezonlara aynı ağırlığı verir; Yakın Sezon Ağırlıklı ise "
+            "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35 profilini kullanır. "
+            "Fark satırı ağırlıklı sistem eksi eşit sistemdir."
+        )
+        st.dataframe(_ab_df, use_container_width=True, hide_index=True)
+
+        _bas_fark = float(_r_fark["Başarı %"])
+        _roi_txt = "—" if _roi_fark is None else f"{_roi_fark:+.1f} puan"
+        _yorum = "Ağırlıklı sistem daha iyi" if _bas_fark > 0 else "Eşit sistem daha iyi" if _bas_fark < 0 else "Başarı oranları eşit"
+        st.info(f"{_yorum}: başarı farkı {_bas_fark:+.1f} puan · MS ROI farkı {_roi_txt}.")
 
     bt = st.session_state.get("backtest_df")
     if bt is None:
