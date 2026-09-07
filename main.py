@@ -6942,10 +6942,23 @@ def uygula_tema_css(koyu_mod: bool):
         }
 
         /* Sidebar */
-        section[data-testid="stSidebar"],
-        section[data-testid="stSidebar"] > div {
+        section[data-testid="stSidebar"] {
             background:#091526 !important;
             border-color:#223c63 !important;
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+        }
+        section[data-testid="stSidebar"] > div,
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            background:#091526 !important;
+            border-color:#223c63 !important;
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow-y:auto !important;
+            overflow-x:hidden !important;
         }
         section[data-testid="stSidebar"] label,
         section[data-testid="stSidebar"] label *,
