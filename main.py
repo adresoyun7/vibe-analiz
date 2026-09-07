@@ -11206,6 +11206,40 @@ else:
                 "Dengeli": ("#12345b", "#60a5fa", "🔵"),
                 "Yüksek Oran": ("#4a2b12", "#f59e0b", "🟠"),
             }
+            def _otomatik_secim_kalite(secim):
+                """Kupon görünümünde seçimleri ortak kalite ölçüsünde sıralar."""
+                if not isinstance(secim, dict):
+                    return 0.0
+                if secim.get("gunun_puani") is not None:
+                    try:
+                        return float(secim.get("gunun_puani"))
+                    except Exception:
+                        pass
+                guven = float(secim.get("guven", 0) or 0)
+                stabil = int(secim.get("hassasiyet_sayisi", 0) or 0)
+                if stabil <= 0:
+                    stabil = len(_secim_hassasiyetleri(secim))
+                return guven + stabil * 1.8
+
+            def _otomatik_kupon_kalite_anahtari(kayit):
+                """Maç sayısından bağımsız olarak kuponun ortalama kalitesini ölçer."""
+                secimler = [x for x in kayit.get("secimler", []) if isinstance(x, dict)] if isinstance(kayit, dict) else []
+                if not secimler:
+                    return (0.0, 0.0, 0.0)
+                kaliteler = [_otomatik_secim_kalite(x) for x in secimler]
+                guvenler = [float(x.get("guven", 0) or 0) for x in secimler]
+                stabiliteler = []
+                for x in secimler:
+                    stabil = int(x.get("hassasiyet_sayisi", 0) or 0)
+                    if stabil <= 0:
+                        stabil = len(_secim_hassasiyetleri(x))
+                    stabiliteler.append(stabil)
+                return (
+                    sum(kaliteler) / len(kaliteler),
+                    sum(guvenler) / len(guvenler),
+                    sum(stabiliteler) / len(stabiliteler),
+                )
+
             profil_sutunlari = st.columns(5, gap="small")
             for profil_col, profil_adi in zip(
                 profil_sutunlari[:4],
@@ -11225,6 +11259,9 @@ else:
                         unsafe_allow_html=True,
                     )
                     profil_kayitlari = [x for x in kupon_gecmisi if x.get("profil") == profil_adi]
+                    # Günün Kuponu dahil tüm otomatik profillerde en güçlü kupon üstte.
+                    # Maç sayısı avantaj sağlamasın diye toplam değil ortalama kalite kullanılır.
+                    profil_kayitlari.sort(key=_otomatik_kupon_kalite_anahtari, reverse=True)
                     if not profil_kayitlari:
                         st.info(f"Henüz {profil_adi} kupon kaydı yok.")
                         continue
@@ -11255,7 +11292,17 @@ else:
                             unsafe_allow_html=True,
                         )
 
-                        for secim_no, secim in enumerate(kayit.get("secimler", [])):
+                        # Kuponun içindeki maçlar da en güçlü seçimden daha zayıfa doğru gösterilir.
+                        gorunen_secimler = sorted(
+                            [x for x in kayit.get("secimler", []) if isinstance(x, dict)],
+                            key=lambda x: (
+                                _otomatik_secim_kalite(x),
+                                float(x.get("guven", 0) or 0),
+                                len(_secim_hassasiyetleri(x)),
+                            ),
+                            reverse=True,
+                        )
+                        for secim_no, secim in enumerate(gorunen_secimler):
                             destekler = _secim_hassasiyetleri(secim)
                             destek_yazi = ", ".join(f"{float(x):.2f}" for x in destekler)
                             hassasiyet_alt = (
