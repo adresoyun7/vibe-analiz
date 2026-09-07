@@ -203,7 +203,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 88
+APP_SCHEMA_VERSION = 89
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     st.session_state.clear()
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
@@ -5415,16 +5415,95 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
 
 
 
+def _backtest_uzlasi_ozeti(tolerans_sonuclari):
+    """11 tekil hassasiyetin aynı maçta aynı ana tahminde birleşmesini ölçer.
+
+    Not: Tekil backtest yalnızca güveni %60 üstü tahminleri döndürdüğü için bu analiz
+    'oynanabilir tahmin uzlaşısı'nı ölçer. Bir hassasiyette oynanabilir tahmin yoksa
+    11 üzerinden uzlaşı sayısına katkı yapmaz.
+    """
+    kayitlar = []
+    for tol, bt in tolerans_sonuclari.items():
+        if bt is None or bt.empty:
+            continue
+        x = bt.copy()
+        x["_tol"] = float(tol)
+        kayitlar.append(x)
+    if not kayitlar:
+        return pd.DataFrame()
+
+    tum = pd.concat(kayitlar, ignore_index=True)
+    anahtar = ["Tarih", "Lig", "Maç"]
+    detay = []
+    for key, g in tum.groupby(anahtar, dropna=False):
+        labels = g["Tahmin"].fillna("").astype(str).str.strip()
+        labels = labels[labels.ne("")]
+        if labels.empty:
+            continue
+        sayim = labels.value_counts()
+        ana_label = str(sayim.index[0])
+        uzlasi = int(sayim.iloc[0])
+
+        # 0.05–0.10 bandında aynı ana label kaç kez çıktı? (maksimum 6)
+        yuksek = g[(g["_tol"] >= 0.05) & (g["_tol"] <= 0.10)].copy()
+        yuksek_labels = yuksek["Tahmin"].fillna("").astype(str).str.strip()
+        yuksek_uzlasi = int((yuksek_labels == ana_label).sum()) if not yuksek.empty else 0
+
+        temsil = g[g["Tahmin"].astype(str) == ana_label].copy()
+        if temsil.empty:
+            continue
+        temsil = temsil.sort_values(["Güven", "Örnek"], ascending=[False, False]).iloc[0]
+        tuttu = bool(temsil["Tuttu"])
+        oran = pd.to_numeric(pd.Series([temsil.get("Oran")]), errors="coerce").iloc[0]
+        kar = ((float(oran) - 1.0) * 100.0 if tuttu else -100.0) if pd.notna(oran) else None
+
+        detay.append({
+            "Tarih": key[0], "Lig": key[1], "Maç": key[2],
+            "Uzlaşı Tahmini": ana_label,
+            "Uzlaşı": uzlasi,
+            "Yüksek Bant Uzlaşı": yuksek_uzlasi,
+            "Tuttu": tuttu,
+            "Oran": float(oran) if pd.notna(oran) else None,
+            "Kâr (100 TL)": kar,
+        })
+    if not detay:
+        return pd.DataFrame()
+
+    d = pd.DataFrame(detay)
+    def grup(n):
+        if n == 11: return "11/11"
+        if n >= 9: return "9–10/11"
+        if n >= 7: return "7–8/11"
+        if n >= 5: return "5–6/11"
+        if n >= 3: return "3–4/11"
+        return "1–2/11"
+    d["Uzlaşı Grubu"] = d["Uzlaşı"].apply(grup)
+
+    rows = []
+    sira = ["11/11", "9–10/11", "7–8/11", "5–6/11", "3–4/11", "1–2/11"]
+    for grp in sira:
+        z = d[d["Uzlaşı Grubu"] == grp]
+        if z.empty:
+            continue
+        ms = z[z["Kâr (100 TL)"].notna()]
+        roi = float(ms["Kâr (100 TL)"].sum()) / (len(ms) * 100.0) * 100.0 if len(ms) else None
+        rows.append({
+            "Uzlaşı": grp,
+            "Tahmin": int(len(z)),
+            "Kazanan": int(z["Tuttu"].sum()),
+            "Başarı %": round(float(z["Tuttu"].mean() * 100.0), 1),
+            "MS Tahmin": int(len(ms)),
+            "MS ROI %": round(roi, 1) if roi is not None else None,
+        })
+    return pd.DataFrame(rows)
+
+
 def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min_ornek,
                                     sadece_ayni_lig=False, lig_kodlari=None, max_test=500):
-    """0.00–0.10 arasındaki 11 toleransı tek kronolojik geçişte test eder.
-    Form ve Value/Edge kullanılmaz.
-    """
+    """0.00–0.10 arasındaki 11 toleransı test eder ve uzlaşı performansını ölçer."""
     toleranslar = [round(i / 100.0, 2) for i in range(11)]
-    # Her toleransı aynı tarih sıralı backtest mantığıyla çalıştır.
-    # Özet sade tutulur; hiçbir hassasiyet otomatik sabitlenmez.
     satirlar = []
-    secili_df = None
+    tolerans_sonuclari = {}
     for tol in toleranslar:
         bt = backtest_calistir(
             gecmis_df, test_sezonu, tol, min_ornek,
@@ -5432,6 +5511,7 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             lig_kodlari=lig_kodlari,
             max_test=max_test,
         )
+        tolerans_sonuclari[tol] = bt
         if bt is None or bt.empty:
             satirlar.append({
                 "Hassasiyet": f"{tol:.2f}", "Tahmin": 0,
@@ -5449,16 +5529,16 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             "MS Tahmin": int(len(ms)),
             "MS ROI %": round(ms_roi, 1) if ms_roi is not None else None,
         })
-    # Ana backtest, canlı analizde kullanılan birleşik 0.00–0.10 modelidir.
-    # Üstteki 11 satır tekil hassasiyetleri yalnızca karşılaştırma için gösterir.
+
+    uzlasi_df = _backtest_uzlasi_ozeti(tolerans_sonuclari)
+
     secili_df = backtest_calistir(
         gecmis_df, test_sezonu, secili_tolerans, min_ornek,
         sadece_ayni_lig=sadece_ayni_lig,
         lig_kodlari=lig_kodlari, max_test=max_test,
         birlesik_hassasiyet=True,
     )
-    return pd.DataFrame(satirlar), secili_df
-
+    return pd.DataFrame(satirlar), secili_df, uzlasi_df
 
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
@@ -5758,6 +5838,7 @@ for key, default in [
     ("last_bulten_df", None),
     ("backtest_df", None),
     ("backtest_11_df", None),
+    ("backtest_uzlasi_df", None),
     ("gecmis_inceleme_list", None),
     ("gecmis_tam_ekran_sira", None),
     ("yuksek_oran_list", None),
@@ -8198,7 +8279,7 @@ if backtest_btn:
             if pd.notna(_bt_son_tarih):
                 st.session_state["backtest_veri_son_tarih"] = _bt_son_tarih.strftime("%d.%m.%Y")
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
-        bt11, bt_secili = backtest_11_hassasiyet_calistir(
+        bt11, bt_secili, bt_uzlasi = backtest_11_hassasiyet_calistir(
             bt_gecmis,
             backtest_sezonu,
             TOLERANS,
@@ -8208,6 +8289,7 @@ if backtest_btn:
             max_test=backtest_limit,
         )
         st.session_state.backtest_11_df = bt11
+        st.session_state.backtest_uzlasi_df = bt_uzlasi
         st.session_state.backtest_df = bt_secili
         st.rerun()
 
@@ -8336,6 +8418,16 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                     ic3.metric("En yüksek MS ROI hass.", f"{en_roi['Hassasiyet']} · %{float(en_roi['MS ROI %']):.1f}")
                 else:
                     ic3.metric("En yüksek MS ROI hass.", "—")
+
+            uzlasi = st.session_state.get("backtest_uzlasi_df")
+            if uzlasi is not None and not uzlasi.empty:
+                st.markdown("### 11 Hassasiyet Uzlaşı Performansı")
+                st.caption(
+                    "Aynı maçta 0.00–0.10 arasındaki oynanabilir (%60 üstü güven) tekil modellerin "
+                    "aynı ana tahminde kaç kez birleştiğini ölçer. Hassasiyetler iptal edilmez; "
+                    "uzlaşı yükseldikçe başarı da yükseliyorsa bunu yeni bir kararlılık sinyali olarak kullanabiliriz."
+                )
+                st.dataframe(backtest_stili(uzlasi), use_container_width=True, hide_index=True)
 
         # Birleşik oynanabilirlik puanı gerçekten ayırt edici mi?
         # Puan yükseldikçe başarının da yükselmesi beklenir.
