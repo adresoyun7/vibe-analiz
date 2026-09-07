@@ -7536,6 +7536,15 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             type='primary',
             key='oran_filtresi_btn',
         )
+elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        yuksek_oran_btn = st.button(
+            '🔎 ÖRNEKLERİ GETİR',
+            use_container_width=True,
+            type='primary',
+            key='yuksek_oran_getir_btn',
+        )
 
 # Oran filtresi yalnızca kullanıcı ÖRNEKLERİ GETİR'e bastığında yeniden hesaplanır.
 if oran_filtresi_btn:
@@ -7580,6 +7589,58 @@ if oran_filtresi_btn:
                 reverse=True,
             )
             st.session_state.oran_filtresi_list = oran_filtresi_list
+            st.rerun()
+
+
+# Yüksek oran filtresi de yalnızca kullanıcı ÖRNEKLERİ GETİR'e bastığında yeniden hesaplanır.
+if yuksek_oran_btn:
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
+    elif not (yuksek_filtre_12 or yuksek_filtre_21 or yuksek_filtre_cift_yari_kg):
+        st.error("⚠️ En az bir yüksek oran marketi seçin.")
+    else:
+        with st.spinner("💎 1/2, 2/1 ve iki yarıda da KG örnekleri taranıyor..."):
+            yo_gecmis = futbol_veri_motoru(tuple(yillar))
+            yo_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            yuksek_liste = []
+            for _, yo_mac in yo_bulten.iterrows():
+                tum_ornekler = gecmis_ornekleri_bul(
+                    yo_gecmis,
+                    yo_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    limit=100000,
+                )
+                ornekler = gecmis_ornekleri_bul(
+                    yo_gecmis,
+                    yo_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    filtre_12=yuksek_filtre_12,
+                    filtre_21=yuksek_filtre_21,
+                    filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
+                    limit=yuksek_limit,
+                )
+                if not ornekler.empty:
+                    istatistikler, en_iyi, oneri = yuksek_oran_istatistikleri(
+                        tum_ornekler,
+                        filtre_12=yuksek_filtre_12,
+                        filtre_21=yuksek_filtre_21,
+                        filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
+                    )
+                    yuksek_liste.append({
+                        "m": yo_mac.to_dict(),
+                        "ornekler": ornekler,
+                        "istatistikler": istatistikler,
+                        "en_iyi": en_iyi,
+                        "oneri": oneri,
+                        "toplam_benzer": len(tum_ornekler),
+                    })
+            yuksek_liste.sort(
+                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
+                reverse=True,
+            )
+            st.session_state.yuksek_oran_list = yuksek_liste
             st.rerun()
 
 elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
@@ -7796,7 +7857,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
 if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
     yuksek_liste = st.session_state.get("yuksek_oran_list")
     if yuksek_liste is None:
-        st.info("Lig, tarih ve marketleri seçip YÜKSEK ORANLILARI BUL butonuna bas.")
+        st.info("Lig, tarih ve marketleri seçip ÖRNEKLERİ GETİR butonuna bas.")
     elif not yuksek_liste:
         st.warning("Seçilen koşullarda 1/2, 2/1 veya iki yarıda da KG geçmiş örneği bulunan güncel maç yok.")
     else:
