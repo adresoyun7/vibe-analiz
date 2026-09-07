@@ -2152,6 +2152,85 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
 
 
 
+def gunun_kuponunu_profil_adaylarindan_olustur(gecmis_df, bulten_df, min_ornek=5, sadece_ayni_lig=False, maks=6):
+    """Günün Kuponu sıkı filtresi boş kalırsa profil adaylarından tek kupon üretir.
+
+    Temkinli, Dengeli ve Yüksek Oran aday havuzları ayrı ayrı oluşturulur.
+    Aynı maçtan yalnızca en güçlü tek seçim alınır. Böylece profil adayları mevcutsa
+    Günün Kuponu tamamen boş kalmaz.
+    """
+    profil_onceligi = {"Temkinli": 3, "Dengeli": 2, "Yüksek Oran": 1}
+    tum_adaylar = []
+
+    for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
+        kaynak = gunun_en_iyi_10_uret(
+            gecmis_df,
+            bulten_df,
+            min_ornek=min_ornek,
+            limit=500,
+            sadece_ayni_lig=sadece_ayni_lig,
+            kupon_modu=True,
+            kupon_profili=profil_adi,
+            tum_marketler=True,
+        )
+        kullanilan = set()
+        while True:
+            parca = gunun_kuponunu_olustur(
+                kaynak, profil_adi, haric_secimler=kullanilan, aday_listesi_modu=True
+            )
+            if not parca:
+                break
+            yeni = False
+            for secim in parca:
+                secim_key = (
+                    f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
+                    secim.get("tahmin", ""),
+                )
+                if secim_key in kullanilan:
+                    continue
+                kullanilan.add(secim_key)
+                aday = dict(secim)
+                aday["kaynak_profil"] = profil_adi
+                tum_adaylar.append(aday)
+                yeni = True
+            if not yeni:
+                break
+
+    # Güven ve 11 hassasiyetteki kararlılık ana sıralama ölçütü; profil yalnızca
+    # yakın/eşit adaylarda daha temkinli olanı öne almak için eşitlik bozucudur.
+    tum_adaylar.sort(
+        key=lambda x: (
+            int(x.get("guven", 0) or 0),
+            int(x.get("hassasiyet_sayisi", 0) or 0),
+            profil_onceligi.get(x.get("kaynak_profil"), 0),
+            float(x.get("oran", 0) or 0),
+        ),
+        reverse=True,
+    )
+
+    secimler = []
+    kullanilan_maclar = set()
+    for aday in tum_adaylar:
+        mac_id = (
+            str(aday.get("ev", "")),
+            str(aday.get("dep", "")),
+            str(aday.get("zaman_iso", ""))[:16],
+        )
+        if mac_id in kullanilan_maclar:
+            continue
+        secim = dict(aday)
+        secim.pop("kaynak_profil", None)
+        secim["profil"] = "Günün Kuponu"
+        secim["otomatik"] = True
+        secim["profil_aday_fallback"] = True
+        secimler.append(secim)
+        kullanilan_maclar.add(mac_id)
+        if len(secimler) >= int(maks):
+            break
+
+    return secimler
+
+
 def _secim_skorla_tuttu_mu(label, ev_gol, dep_gol, current_home_is_row_home=True):
     """Bir market etiketini skor üzerinde değerlendirir; H2H'de mevcut ev takımına göre yönü korur."""
     label = str(label or "").strip()
@@ -10851,18 +10930,38 @@ else:
                 gunun_kaynagi, maks=6, min_guven=72,
                 gecmis_df=st.session_state.get("last_gecmis_df")
             )
+            # Günün Kuponu'nun kendi sıkı kalite filtresi boş kalırsa, ekranda
+            # aday üretebilen Temkinli / Dengeli / Yüksek Oran havuzlarını kullan.
+            # Böylece profil adayları bulunduğu halde Günün Kuponu boş kalmaz.
+            profil_aday_fallback = False
+            if not gunun_secimleri:
+                gunun_secimleri = gunun_kuponunu_profil_adaylarindan_olustur(
+                    st.session_state.get("last_gecmis_df"),
+                    st.session_state.get("last_bulten_df"),
+                    min_ornek=min_ornek,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    maks=6,
+                )
+                profil_aday_fallback = bool(gunun_secimleri)
+
             if gunun_secimleri:
                 kupon_gecmisine_ekle(gunun_secimleri, "Günün Kuponu", "0.00–0.10 tarama")
                 st.session_state.coupon_popup_open = True
                 st.session_state.scroll_to_coupon = True
-                kupon_mesaji = (
-                    "success",
-                    f"⭐ Günün Kuponu oluşturuldu: kalite eşiğini geçen {len(gunun_secimleri)} güçlü seçim tek kupona eklendi."
-                )
+                if profil_aday_fallback:
+                    kupon_mesaji = (
+                        "success",
+                        f"⭐ Günün Kuponu oluşturuldu: sıkı Günün Kuponu filtresi boş kaldığı için profil adaylarından en güçlü {len(gunun_secimleri)} seçim kullanıldı."
+                    )
+                else:
+                    kupon_mesaji = (
+                        "success",
+                        f"⭐ Günün Kuponu oluşturuldu: kalite eşiğini geçen {len(gunun_secimleri)} güçlü seçim tek kupona eklendi."
+                    )
             else:
                 kupon_mesaji = (
                     "warning",
-                    "Günün Kuponu için yeterince güvenilir ve kararlı bir seçim bulunamadı."
+                    "Günün Kuponu oluşturulamadı; Temkinli, Dengeli ve Yüksek Oran aday havuzlarında da uygun seçim yok."
                 )
 
         if gunun_kupon_btn:
