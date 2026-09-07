@@ -7821,7 +7821,7 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -7854,6 +7854,7 @@ with st.sidebar:
     gecmis_btn = False
     oran_filtresi_btn = False
     yuksek_oran_btn = False
+    spor_toto_btn = False
     canli_yenile_btn = False
     canli_otomatik = False
     sonuc_yenile_btn = False
@@ -7902,6 +7903,31 @@ with st.sidebar:
             )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
         yuksek_oran_btn = False
+    elif st.session_state.get('sayfa_modu') == 'Spor Toto':
+        st.caption('15 maçı manuel tut; oranlar seçili liglerin The Odds API bülteninden eşleştirilir.')
+        _spor_toto_varsayilan = '''11.09.2026 20:00 | Beşiktaş A.Ş. | Erzurumspor FK
+12.09.2026 17:00 | Eyüpspor | Çaykur Rizespor A.Ş.
+12.09.2026 17:00 | Samsunspor A.Ş. | Çorum FK
+12.09.2026 20:00 | Alanyaspor | Göztepe A.Ş.
+12.09.2026 20:00 | Konyaspor | Trabzonspor A.Ş.
+13.09.2026 17:00 | Gençlerbirliği | Kasımpaşa A.Ş.
+13.09.2026 20:00 | Amed Sportif | Başakşehir FK
+13.09.2026 20:00 | Galatasaray A.Ş. | Kocaelispor
+14.09.2026 20:00 | Gaziantep F.K. A.Ş. | Fenerbahçe A.Ş.
+12.09.2026 16:30 | Augsburg | B. Leverkusen
+11.09.2026 21:45 | Rennes | Marsilya
+12.09.2026 17:00 | Chelsea | Hull City
+13.09.2026 18:30 | Manchester United | Manchester City
+14.09.2026 17:15 | Levante | Barcelona
+12.09.2026 19:00 | Lazio | AC Milan'''
+        spor_toto_metin = st.text_area(
+            'Spor Toto maçları',
+            value=st.session_state.get('spor_toto_metin', _spor_toto_varsayilan),
+            height=330,
+            key='spor_toto_metin',
+            help='Her satır: GG.AA.YYYY SS:DD | Ev sahibi | Deplasman',
+        )
+        st.caption('Format: tarih saat | ev sahibi | deplasman · Haftalık yalnızca bu 15 satırı değiştirmen yeterli.')
     elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         st.caption("Kaydedilen analizlerin sonuçlarını buradan yenileyebilirsin.")
     elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
@@ -7970,6 +7996,15 @@ elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
             type='primary',
             key='yuksek_oran_getir_btn',
         )
+elif st.session_state.get('sayfa_modu') == 'Spor Toto':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        spor_toto_btn = st.button(
+            '⚽ SPOR TOTO ANALİZ ET',
+            use_container_width=True,
+            type='primary',
+            key='spor_toto_analiz_btn',
+        )
 elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     with ust_analiz_buton_alani.container():
         st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
@@ -7979,6 +8014,204 @@ elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             type='primary',
             key='sonuclari_yenile_btn',
         )
+
+def _spor_toto_satirlari_parse(metin):
+    satirlar = []
+    for no, raw in enumerate(str(metin or "").splitlines(), start=1):
+        raw = raw.strip()
+        if not raw:
+            continue
+        parca = [x.strip() for x in raw.split("|")]
+        if len(parca) < 3:
+            continue
+        try:
+            dt = datetime.strptime(parca[0], "%d.%m.%Y %H:%M")
+        except Exception:
+            try:
+                dt = datetime.strptime(parca[0], "%d.%m.%Y")
+            except Exception:
+                continue
+        satirlar.append({"no": no, "zaman": dt, "ev": parca[1], "dep": parca[2]})
+    return satirlar
+
+
+def _spor_toto_takim_benzerlik(a, b):
+    ka = takim_anahtari(a)
+    kb = takim_anahtari(b)
+    if not ka or not kb:
+        return 0.0
+    if ka == kb:
+        return 1.0
+    if ka in kb or kb in ka:
+        return 0.92
+    return SequenceMatcher(None, ka, kb).ratio()
+
+
+def _spor_toto_eslestir(mac, bulten):
+    if bulten is None or getattr(bulten, "empty", True):
+        return None, 0.0
+    aday = bulten.copy()
+    if "zaman" in aday.columns:
+        try:
+            aday = aday[aday["zaman"].apply(lambda x: parse_mac_datetime(x).date() == mac["zaman"].date())]
+        except Exception:
+            pass
+    en_iyi = None
+    en_skor = 0.0
+    for _, row in aday.iterrows():
+        evs = _spor_toto_takim_benzerlik(mac["ev"], row.get("ev", ""))
+        deps = _spor_toto_takim_benzerlik(mac["dep"], row.get("dep", ""))
+        skor = (evs + deps) / 2.0
+        if skor > en_skor:
+            en_skor = skor
+            en_iyi = row
+    if en_skor < 0.60:
+        return None, en_skor
+    return en_iyi, en_skor
+
+
+def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
+    taramalar = []
+    for i in range(11):
+        tol = i / 100.0
+        try:
+            _t, b_det = hesapla(
+                gecmis_df, mac_row, tol,
+                sadece_ayni_lig=ayni_lig,
+                form_aktif=False,
+                kalibrasyon_aktif=False,
+            )
+        except Exception:
+            continue
+        if b_det is None or getattr(b_det, "empty", True) or "FTR" not in b_det.columns:
+            continue
+        try:
+            seri = b_det["FTR"].dropna().astype(str)
+        except Exception:
+            continue
+        if len(seri) < max(1, int(min_ornek_val or 1)):
+            continue
+        vc = seri.value_counts(normalize=True)
+        taraf_map = {"H": "1", "D": "X", "A": "2"}
+        mod = str(vc.idxmax()) if not vc.empty else "D"
+        taraf = taraf_map.get(mod, "X")
+        yuzde = float(vc.get(mod, 0.0)) * 100.0
+        taramalar.append({"tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
+    if not taramalar:
+        return None
+    sayim = pd.Series([x["taraf"] for x in taramalar]).value_counts()
+    en_cok = int(sayim.max())
+    aday_taraflar = list(sayim[sayim == en_cok].index)
+    def _ort(taraf):
+        vals = [x["yuzde"] for x in taramalar if x["taraf"] == taraf]
+        return sum(vals) / len(vals) if vals else 0.0
+    secim = max(aday_taraflar, key=_ort)
+    secim_kayitlari = [x for x in taramalar if x["taraf"] == secim]
+    return {
+        "secim": secim,
+        "guven": round(sum(x["yuzde"] for x in secim_kayitlari) / max(len(secim_kayitlari), 1), 1),
+        "kararlilik": len(secim_kayitlari),
+        "gecerli": len(taramalar),
+        "ornek": max(x["ornek"] for x in secim_kayitlari),
+        "hass": [x["tol"] for x in secim_kayitlari],
+    }
+
+
+if spor_toto_btn:
+    spor_maclar = _spor_toto_satirlari_parse(st.session_state.get('spor_toto_metin', ''))
+    if len(spor_maclar) != 15:
+        st.warning(f"Spor Toto için 15 geçerli maç bekleniyor; şu an {len(spor_maclar)} satır okundu.")
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ Oranları eşleştirmek için API Key ve ilgili ligleri seçin.")
+    elif spor_maclar:
+        with st.spinner("⚽ Spor Toto maçları bültenle eşleştiriliyor ve 11 hassasiyet taranıyor..."):
+            gecmis_st = futbol_veri_motoru(tuple(yillar))
+            tarih_bultenleri = []
+            for gun in sorted({x["zaman"].date() for x in spor_maclar}):
+                df_gun = bulten_saglam_al(API_KEY, secili_kodlar, gun)
+                if isinstance(df_gun, pd.DataFrame) and not df_gun.empty:
+                    tarih_bultenleri.append(df_gun)
+            st_bulten = pd.concat(tarih_bultenleri, ignore_index=True) if tarih_bultenleri else pd.DataFrame()
+            if not st_bulten.empty and all(c in st_bulten.columns for c in ["ev", "dep", "zaman"]):
+                st_bulten = st_bulten.drop_duplicates(subset=["ev", "dep", "zaman"])
+            sonuclar = []
+            for sm in spor_maclar:
+                es, es_skor = _spor_toto_eslestir(sm, st_bulten)
+                if es is None:
+                    sonuclar.append({**sm, "durum": "Eşleşmedi", "es_skor": es_skor})
+                    continue
+                ist = _spor_toto_ms_11_hesapla(gecmis_st, es, min_ornek, sadece_ayni_lig)
+                if ist is None:
+                    sonuclar.append({**sm, "durum": "Örnek yok", "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep")})
+                    continue
+                sonuclar.append({**sm, "durum": "Tamam", "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep"), **ist})
+            st.session_state['spor_toto_sonuclar'] = sonuclar
+        st.rerun()
+
+if st.session_state.get('sayfa_modu') == 'Spor Toto':
+    st.markdown("### ⚽ Spor Toto · 15 Maç")
+    st.caption("Maç adları manuel; oranlar seçili liglerin cache'lenmiş The Odds API bülteninden eşleştirilir. Tahmin yalnızca MS 1/X/2 için 0.00–0.10 taramasıdır.")
+    _st_sonuclar = st.session_state.get('spor_toto_sonuclar', [])
+    if not _st_sonuclar:
+        st.info("15 maçı kontrol ettikten sonra **⚽ SPOR TOTO ANALİZ ET** butonuna bas.")
+    else:
+        tablo = []
+        for r in _st_sonuclar:
+            if r.get('durum') == 'Tamam':
+                tahmin = str(r.get('secim', '—'))
+                guven = f"%{float(r.get('guven', 0)):.1f}"
+                kar = f"{int(r.get('kararlilik',0))}/11"
+                oranlar = ''
+            else:
+                tahmin, guven, kar = '—', '—', '—'
+            tablo.append({
+                '#': r.get('no'),
+                'Tarih': r.get('zaman').strftime('%d.%m.%Y %H:%M') if r.get('zaman') else '',
+                'Maç': f"{r.get('ev')} - {r.get('dep')}",
+                'Tahmin': tahmin,
+                'Güven': guven,
+                'Kararlılık': kar,
+                'Örnek': r.get('ornek', '—'),
+                'Durum': r.get('durum', ''),
+            })
+        st.dataframe(pd.DataFrame(tablo), use_container_width=True, hide_index=True)
+
+        tamam = [r for r in _st_sonuclar if r.get('durum') == 'Tamam']
+        if tamam:
+            st.markdown("#### Kolon önerileri")
+            # 1. kolon: modelin en güçlü tek tahmini.
+            # Diğer kolonlar: en düşük güvenli maçlardan başlayarak 2. ve 3. olası MS tarafına çeşitlilik verir.
+            kolonlar = {1: {}, 2: {}, 3: {}, 4: {}}
+            for r in tamam:
+                sec = str(r.get('secim'))
+                for k in kolonlar:
+                    kolonlar[k][r['no']] = sec
+            # Alternatif üretmek için gerçek piyasa 1/X/2 oran sırasını yalnızca çeşitlendirme sinyali olarak kullan.
+            # Ana kolon model tahminini korur; 2-4 kolon düşük güvenlilerde farklılaşır.
+            zayif = sorted(tamam, key=lambda r: (float(r.get('guven',0)), int(r.get('kararlilik',0))))
+            alternatif_dongu = {'1':['X','2'], 'X':['1','2'], '2':['X','1']}
+            for idx, r in enumerate(zayif[:6]):
+                alt = alternatif_dongu.get(str(r.get('secim')), ['X','2'])
+                if idx % 3 == 0:
+                    kolonlar[2][r['no']] = alt[0]
+                elif idx % 3 == 1:
+                    kolonlar[3][r['no']] = alt[0]
+                else:
+                    kolonlar[4][r['no']] = alt[0]
+            gor = []
+            for r in _st_sonuclar:
+                if r.get('durum') != 'Tamam':
+                    continue
+                gor.append({
+                    '#': r['no'], 'Maç': f"{r['ev']} - {r['dep']}",
+                    '1. Kolon': kolonlar[1].get(r['no'],'—'),
+                    '2. Kolon': kolonlar[2].get(r['no'],'—'),
+                    '3. Kolon': kolonlar[3].get(r['no'],'—'),
+                    '4. Kolon': kolonlar[4].get(r['no'],'—'),
+                })
+            st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
+    legal_footer()
+    st.stop()
 
 if gecmis_btn:
     if not API_KEY or not secili_kodlar:
