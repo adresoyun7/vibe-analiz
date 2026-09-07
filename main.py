@@ -5926,8 +5926,8 @@ def oran_filtresi_istatistikleri(tum_ornekler, goster_ms=True, goster_kg=True,
         ikinci_yari_gol = (b["FTHG"] - b["HTHG"]) + (b["FTAG"] - b["HTAG"])
         iki_yari_15 = (ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)
         tanimlar.extend([
-            ("Her iki yarı 1.5 Üst Evet", iki_yari_15, "Yarılar"),
-            ("Her iki yarı 1.5 Üst Hayır", ~iki_yari_15, "Yarılar"),
+            ("İki Yarı 1.5 Üst Evet", iki_yari_15, "Yarılar"),
+            ("İki Yarı 1.5 Üst Hayır", ~iki_yari_15, "Yarılar"),
         ])
 
     istatistikler = []
@@ -7585,7 +7585,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                 en_iyi_grup = max(adaylar, key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("hit", 0) or 0)))
                 label = str(en_iyi_grup.get("label", "—"))
                 if grup == "Yarılar":
-                    label = label.replace("Her iki yarı 1.5 Üst ", "İY 1.5 ")
+                    label = label.replace("İki Yarı 1.5 Üst ", "İki Yarı 1.5 Üst ")
                 grup_en_iyiler.append((label, float(en_iyi_grup.get("oran", 0) or 0)))
 
             # Gruplar arasındaki en yüksek yüzde sarı, diğerleri camgöbeği.
@@ -7673,7 +7673,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                 ):
                     ist_map = {x.get("label"): x for x in istatistikler}
 
-                    # Açılır bölümde de her market grubunda yalnızca en yüksek yüzdeyi göster.
+                    # Açılır bölümde tüm seçili market gruplarını tek satırda, yan yana göster.
+                    detay_kartlari = []
                     for grup, baslik, ikon in [
                         ("MS", "Maç Sonucu", "⚽"),
                         ("KG", "Karşılıklı Gol", "🔁"),
@@ -7689,14 +7690,20 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         )
                         detay_label = str(en_iyi_detay.get("label", "—"))
                         if grup == "Yarılar":
-                            detay_label = detay_label.replace("Her iki yarı 1.5 Üst ", "")
-                        st.markdown(f"#### {ikon} {baslik}")
-                        st.metric(
-                            detay_label,
-                            f"%{float(en_iyi_detay.get('oran', 0) or 0):.1f}",
-                            f"{int(en_iyi_detay.get('hit', 0) or 0)}/{toplam_benzer} maç",
-                            delta_color="off",
-                        )
+                            detay_label = detay_label.replace("İki Yarı 1.5 Üst ", "")
+                        detay_kartlari.append((baslik, ikon, detay_label, en_iyi_detay))
+
+                    if detay_kartlari:
+                        detay_cols = st.columns(len(detay_kartlari), gap="small")
+                        for col, (baslik, ikon, detay_label, en_iyi_detay) in zip(detay_cols, detay_kartlari):
+                            with col:
+                                st.markdown(f"**{ikon} {baslik}**")
+                                st.metric(
+                                    detay_label,
+                                    f"%{float(en_iyi_detay.get('oran', 0) or 0):.1f}",
+                                    f"{int(en_iyi_detay.get('hit', 0) or 0)}/{toplam_benzer} maç",
+                                    delta_color="off",
+                                )
 
                     try:
                         ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
