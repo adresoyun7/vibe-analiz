@@ -8609,7 +8609,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                     except Exception:
                         iki_yari_15_txt = pd.Series("—", index=ornekler.index)
 
-                    tablo = pd.DataFrame({
+                    tablo_veri = {
                         "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
                         "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
                         "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
@@ -8623,8 +8623,19 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
                         "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
                         "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
-                        "İki yarı 1.5 Üst": iki_yari_15_txt,
-                    })
+                    }
+
+                    # İki Yarı 1.5 Üst yalnızca maçın 11 hassasiyet ortak sonucunda
+                    # Evet yüzdesi %50 veya üzerindeyse detaylı geçmiş tabloda da gösterilsin.
+                    # %50'nin altındaysa Evet/Hayır sütunu tamamen gizlenir.
+                    yarilar_stat = next(
+                        (x for x in istatistikler if x.get("grup") == "Yarılar" and float(x.get("oran", 0) or 0) >= 50.0),
+                        None,
+                    )
+                    if yarilar_stat is not None:
+                        tablo_veri["İki yarı 1.5 Üst"] = iki_yari_15_txt
+
+                    tablo = pd.DataFrame(tablo_veri)
                     st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
