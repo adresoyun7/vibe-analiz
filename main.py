@@ -7042,6 +7042,24 @@ def uygula_tema_css(koyu_mod: bool):
             -webkit-text-fill-color:#cbd5e1 !important;
         }
 
+        /* Sabit filtre checkboxları: Top 50 görünümü gibi kırmızı kutu + beyaz tik */
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child,
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] span:first-child {
+            border-radius:4px !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked ~ div:first-of-type,
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked + div {
+            background:#ff4b55 !important;
+            background-color:#ff4b55 !important;
+            border-color:#ff4b55 !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked ~ div:first-of-type svg,
+        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked + div svg {
+            color:#fff !important;
+            fill:#fff !important;
+            stroke:#fff !important;
+        }
+
         /* Sabit filtre checkbox tikleri kırmızı */
         section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input:checked + div {
             background-color:#ef4444 !important;
@@ -7484,14 +7502,14 @@ with st.sidebar:
         st.session_state['oran_filter_cift_yari_15'] = True
         of1, of2 = st.columns(2)
         with of1:
-            oran_filter_ms = st.checkbox('Maç Sonucu', key='oran_filter_ms', disabled=True)
+            oran_filter_ms = st.checkbox('Maç Sonucu', key='oran_filter_ms')
         with of2:
-            oran_filter_kg = st.checkbox('Karşılıklı Gol', key='oran_filter_kg', disabled=True)
+            oran_filter_kg = st.checkbox('Karşılıklı Gol', key='oran_filter_kg')
         of3, of4 = st.columns(2)
         with of3:
-            oran_filter_25 = st.checkbox('2.5 Alt / Üst', key='oran_filter_25', disabled=True)
+            oran_filter_25 = st.checkbox('2.5 Alt / Üst', key='oran_filter_25')
         with of4:
-            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', key='oran_filter_cift_yari_15', disabled=True)
+            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', key='oran_filter_cift_yari_15')
         oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
         oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
@@ -7501,11 +7519,11 @@ with st.sidebar:
         st.session_state['yuksek_filtre_cift_yari_kg'] = True
         yf1, yf2 = st.columns(2)
         with yf1:
-            yuksek_filtre_12 = st.checkbox('1/2', key='yuksek_filtre_12', disabled=True)
+            yuksek_filtre_12 = st.checkbox('1/2', key='yuksek_filtre_12')
         with yf2:
-            yuksek_filtre_21 = st.checkbox('2/1', key='yuksek_filtre_21', disabled=True)
+            yuksek_filtre_21 = st.checkbox('2/1', key='yuksek_filtre_21')
         yuksek_filtre_cift_yari_kg = st.checkbox(
-            'İki yarıda da karşılıklı gol', key='yuksek_filtre_cift_yari_kg', disabled=True
+            'İki yarıda da karşılıklı gol', key='yuksek_filtre_cift_yari_kg'
         )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
         yuksek_oran_btn = False
