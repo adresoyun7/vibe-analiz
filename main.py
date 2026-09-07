@@ -5884,7 +5884,7 @@ def oran_filtresi_istatistikleri(tum_ornekler, goster_ms=True, goster_kg=True,
     - Maç Sonucu: 1 / X / 2
     - Karşılıklı Gol: Var / Yok
     - 2.5 Gol: Üst / Alt
-    - Her iki yarıda da 1.5 Üst: ilk yarı >=2 VE ikinci yarı >=2 gol
+    - İki Yarı 1.5 Üst: ilk yarı >=2 VE ikinci yarı >=2 gol
     """
     if tum_ornekler is None or getattr(tum_ornekler, "empty", True):
         return [], {"label": "—", "oran": 0.0, "hit": 0, "toplam": 0, "puan": 0.0}
@@ -7528,6 +7528,61 @@ elif st.session_state.get('sayfa_modu') == 'Backtest':
             key='backtest_baslat_btn',
         )
 elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        oran_filtresi_btn = st.button(
+            '🔎 ÖRNEKLERİ GETİR',
+            use_container_width=True,
+            type='primary',
+            key='oran_filtresi_btn',
+        )
+
+# Oran filtresi yalnızca kullanıcı ÖRNEKLERİ GETİR'e bastığında yeniden hesaplanır.
+if oran_filtresi_btn:
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
+    elif not (oran_filter_ms or oran_filter_kg or oran_filter_25 or oran_filter_cift_yari_15):
+        st.error("⚠️ En az bir market seçin.")
+    else:
+        with st.spinner("📊 Benzer oranlı geçmiş maçlar taranıyor..."):
+            of_gecmis = futbol_veri_motoru(tuple(yillar))
+            of_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            oran_filtresi_list = []
+            for _, of_mac in of_bulten.iterrows():
+                tum_ornekler = gecmis_ornekleri_bul(
+                    of_gecmis,
+                    of_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    limit=100000,
+                )
+                toplam_benzer = int(len(tum_ornekler))
+                if tum_ornekler.empty or toplam_benzer < int(oran_filter_min_ornek):
+                    continue
+                istatistikler, en_iyi = oran_filtresi_istatistikleri(
+                    tum_ornekler,
+                    goster_ms=oran_filter_ms,
+                    goster_kg=oran_filter_kg,
+                    goster_25=oran_filter_25,
+                    goster_cift_yari_15=oran_filter_cift_yari_15,
+                )
+                if not istatistikler:
+                    continue
+                oran_filtresi_list.append({
+                    "m": of_mac.to_dict(),
+                    "ornekler": tum_ornekler,
+                    "istatistikler": istatistikler,
+                    "en_iyi": en_iyi,
+                    "toplam_benzer": toplam_benzer,
+                })
+            oran_filtresi_list.sort(
+                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
+                reverse=True,
+            )
+            st.session_state.oran_filtresi_list = oran_filtresi_list
+            st.rerun()
+
+elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
     oran_liste = st.session_state.get("oran_filtresi_list")
     if oran_liste is None:
         st.info("Lig, tarih ve marketleri seçip ORAN FİLTRESİNİ ÇALIŞTIR butonuna bas.")
@@ -7585,7 +7640,9 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                 en_iyi_grup = max(adaylar, key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("hit", 0) or 0)))
                 label = str(en_iyi_grup.get("label", "—"))
                 if grup == "Yarılar":
-                    label = label.replace("İki Yarı 1.5 Üst ", "İki Yarı 1.5 Üst ")
+                    label = label.replace("Her İki Yarı 1.5 Üst ", "İki Yarı 1.5 Üst ")
+                    label = label.replace("Her iki yarı 1.5 Üst ", "İki Yarı 1.5 Üst ")
+                    label = label.replace("Her iki yarı 1.5 üst ", "İki Yarı 1.5 Üst ")
                 grup_en_iyiler.append((label, float(en_iyi_grup.get("oran", 0) or 0)))
 
             # Gruplar arasındaki en yüksek yüzde sarı, diğerleri camgöbeği.
@@ -7690,6 +7747,9 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         )
                         detay_label = str(en_iyi_detay.get("label", "—"))
                         if grup == "Yarılar":
+                            detay_label = detay_label.replace("Her İki Yarı 1.5 Üst ", "")
+                            detay_label = detay_label.replace("Her iki yarı 1.5 Üst ", "")
+                            detay_label = detay_label.replace("Her iki yarı 1.5 üst ", "")
                             detay_label = detay_label.replace("İki Yarı 1.5 Üst ", "")
                         detay_kartlari.append((baslik, ikon, detay_label, en_iyi_detay))
 
