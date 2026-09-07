@@ -8227,7 +8227,9 @@ if spor_toto_btn:
                 if es is None:
                     sonuclar.append({**sm, "durum": "Eşleşmedi", "es_skor": es_skor})
                     continue
-                ist = _spor_toto_ms_11_hesapla(gecmis_st, es, min_ornek, sadece_ayni_lig)
+                # Spor Toto: geçmiş örnekleri lig ayrımı yapmadan tüm seçili geçmiş liglerde ara.
+                # Ana uygulamadaki "sadece_ayni_lig" ayarı Spor Toto'yu etkilemez.
+                ist = _spor_toto_ms_11_hesapla(gecmis_st, es, min_ornek, False)
                 if ist is None:
                     sonuclar.append({**sm, "durum": "Örnek yok", "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep")})
                     continue
