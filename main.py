@@ -1319,27 +1319,20 @@ def _gecmis_cache_kaydet(df):
     except Exception:
         return False
 
-@st.cache_data(ttl=86400)
-def futbol_veri_motoru(sezonlar):
-    """
-    Öncelik sırası:
-      1) Repo/.py yanındaki yapaikupon_gecmis_cache.csv
-      2) Cache yoksa eski Football-Data canlı fallback
-
-    Böylece Streamlit Cloud Football-Data'dan 503 alsa bile uygulama,
-    GitHub'a eklenen kalıcı CSV ile çalışmaya devam eder.
-    """
+@st.cache_data(ttl=3600)
+def futbol_veri_motoru(sezonlar, zorla_yenile=False):
+    """Geçmiş maç verisini yerel cache + Football-Data ile güncel tutar."""
     if not sezonlar:
         return pd.DataFrame()
 
     secili_sezonlar = {str(x) for x in sezonlar}
+    yerel_tum = _gecmis_cache_yukle()
+    yerel = yerel_tum.copy()
+    if not yerel.empty and "season_code" in yerel.columns:
+        yerel = yerel[yerel["season_code"].astype(str).isin(secili_sezonlar)].copy()
 
-    # 1) ANA KAYNAK: yerel/GitHub cache.
-    yerel = _gecmis_cache_yukle()
-    if not yerel.empty:
-        if "season_code" in yerel.columns:
-            yerel = yerel[yerel["season_code"].astype(str).isin(secili_sezonlar)].copy()
-
+    # Normal kullanımda hızlı yerel cache; backtestte zorla_yenile=True ile canlı güncelleme.
+    if not zorla_yenile and not yerel.empty:
         try:
             yerel.attrs["kaynak"] = "yerel GitHub cache"
             yerel.attrs["kaynak_hata_sayisi"] = 0
@@ -1349,33 +1342,20 @@ def futbol_veri_motoru(sezonlar):
             pass
         return yerel.reset_index(drop=True)
 
-    # 2) Yalnızca cache hiç yoksa canlı Football-Data fallback.
-    # Bu bölüm ana kaynak değildir; ilk kurulum/acil durum içindir.
     lig_map = [
-        "T1",
-        "E0", "E1", "E2", "E3",
-        "SP1", "SP2",
-        "D1", "D2",
-        "I1", "I2",
-        "F1", "F2",
-        "N1", "B1", "P1", "SC0", "G1",
+        "T1", "E0", "E1", "E2", "E3", "SP1", "SP2", "D1", "D2",
+        "I1", "I2", "F1", "F2", "N1", "B1", "P1", "SC0", "G1",
     ]
-    liste = []
-    hatalar = []
+    liste, hatalar = [], []
 
     for k in lig_map:
         for sezon in sezonlar:
             url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{k}.csv"
             try:
-                r = requests.get(
-                    url,
-                    timeout=20,
-                    headers={"User-Agent": "Mozilla/5.0 YapAiKupon/1.0"},
-                )
+                r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 YapAiKupon/1.0"})
                 if r.status_code != 200 or not r.content:
                     hatalar.append(f"{k}-{sezon}: HTTP {r.status_code}")
                     continue
-
                 ct = str(r.headers.get("content-type", "")).lower()
                 ilk = r.content[:300].lower()
                 if b"<html" in ilk or b"temporarily unavailable" in ilk or "text/html" in ct:
@@ -1384,19 +1364,14 @@ def futbol_veri_motoru(sezonlar):
 
                 df = pd.read_csv(io.BytesIO(r.content))
                 cols = [
-                    "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG",
-                    "FTR", "HTR",
-                    "B365H", "B365D", "B365A",
-                    "B365CH", "B365CD", "B365CA",
-                    "HC", "AC", "HY", "AY"
+                    "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG", "FTR", "HTR",
+                    "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA", "HC", "AC", "HY", "AY"
                 ]
                 df = df[df.columns.intersection(cols)].copy()
-
                 for c in ["B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"]:
                     if c not in df.columns:
                         df[c] = pd.NA
                     df[c] = pd.to_numeric(df[c], errors="coerce")
-
                 df["REF_H"] = df["B365CH"].combine_first(df["B365H"])
                 df["REF_D"] = df["B365CD"].combine_first(df["B365D"])
                 df["REF_A"] = df["B365CA"].combine_first(df["B365A"])
@@ -1406,7 +1381,6 @@ def futbol_veri_motoru(sezonlar):
                 temp = temp.dropna(subset=["Date"])
                 temp["league_code"] = k
                 temp["season_code"] = str(sezon)
-
                 if not temp.empty:
                     liste.append(temp)
                 else:
@@ -1415,15 +1389,35 @@ def futbol_veri_motoru(sezonlar):
                 hatalar.append(f"{k}-{sezon}: {type(exc).__name__}: {exc}")
 
     if liste:
-        sonuc = pd.concat(liste, ignore_index=True)
-        _gecmis_cache_kaydet(sonuc)
+        canli = pd.concat(liste, ignore_index=True)
+        sonuc_tum = pd.concat([yerel_tum, canli], ignore_index=True, sort=False) if not yerel_tum.empty else canli.copy()
+        sonuc_tum["Date"] = pd.to_datetime(sonuc_tum["Date"], errors="coerce")
+        anahtar = ["Date", "league_code", "HomeTeam", "AwayTeam"]
+        if all(c in sonuc_tum.columns for c in anahtar):
+            sonuc_tum = sonuc_tum.sort_values("Date").drop_duplicates(subset=anahtar, keep="last")
+        _gecmis_cache_kaydet(sonuc_tum)
+
+        sonuc = sonuc_tum.copy()
+        if "season_code" in sonuc.columns:
+            sonuc = sonuc[sonuc["season_code"].astype(str).isin(secili_sezonlar)].copy()
         try:
-            sonuc.attrs["kaynak"] = "Football-Data canlı fallback + cache oluşturuldu"
+            sonuc.attrs["kaynak"] = "Football-Data güncel + yerel cache birleştirildi"
             sonuc.attrs["kaynak_hata_sayisi"] = len(hatalar)
             sonuc.attrs["kaynak_hatalari"] = hatalar[:12]
+            sonuc.attrs["cache_dosyasi"] = str(GEÇMİŞ_VERİ_DOSYASI.name)
         except Exception:
             pass
-        return sonuc
+        return sonuc.reset_index(drop=True)
+
+    # Canlı yenileme başarısız olursa eski cache ile çalışmaya devam et.
+    if not yerel.empty:
+        try:
+            yerel.attrs["kaynak"] = "yerel cache (canlı yenileme başarısız)"
+            yerel.attrs["kaynak_hata_sayisi"] = len(hatalar)
+            yerel.attrs["kaynak_hatalari"] = hatalar[:12]
+        except Exception:
+            pass
+        return yerel.reset_index(drop=True)
 
     sonuc = pd.DataFrame()
     try:
@@ -8196,7 +8190,13 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
 if backtest_btn:
     with st.spinner("🧪 11 hassasiyet test ediliyor (0.00–0.10)..."):
         bt_sezonlar = list(dict.fromkeys(list(yillar) + [backtest_sezonu]))
-        bt_gecmis = futbol_veri_motoru(tuple(bt_sezonlar))
+        # Backtest başlatılırken Football-Data'yı zorla yenile ve eski cache ile birleştir.
+        futbol_veri_motoru.clear()
+        bt_gecmis = futbol_veri_motoru(tuple(bt_sezonlar), zorla_yenile=True)
+        if bt_gecmis is not None and not bt_gecmis.empty and "Date" in bt_gecmis.columns:
+            _bt_son_tarih = pd.to_datetime(bt_gecmis["Date"], errors="coerce").max()
+            if pd.notna(_bt_son_tarih):
+                st.session_state["backtest_veri_son_tarih"] = _bt_son_tarih.strftime("%d.%m.%Y")
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
         bt11, bt_secili = backtest_11_hassasiyet_calistir(
             bt_gecmis,
@@ -8269,6 +8269,10 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         """,
         unsafe_allow_html=True,
     )
+    _bt_veri_tarihi = st.session_state.get("backtest_veri_son_tarih")
+    if _bt_veri_tarihi:
+        st.caption(f"📅 Backtest veri setindeki son tamamlanmış maç tarihi: {_bt_veri_tarihi}")
+
     bt = st.session_state.get("backtest_df")
     if bt is None:
         st.info("Sol menüden sezon ve filtreleri seçip BACKTESTİ BAŞLAT butonuna bas.")
