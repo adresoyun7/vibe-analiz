@@ -9910,7 +9910,11 @@ else:
               </div>
             </div>
             """
-            st.markdown(card_html, unsafe_allow_html=True)
+            # Markdown parseri çok satırlı/indentli HTML bloğunu bazı rerunlarda
+            # erken kapatıp kalan <div> etiketlerini düz metin gösterebiliyor.
+            # Kartı tek satır ham HTML olarak göndererek parserin bloğu bölmesini engelle.
+            card_html_render = " ".join(line.strip() for line in card_html.splitlines() if line.strip())
+            st.markdown(card_html_render, unsafe_allow_html=True)
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
