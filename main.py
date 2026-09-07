@@ -7689,38 +7689,30 @@ with st.sidebar:
         gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
         gecmis_btn = False
     elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
-        # Oran Filtresi marketleri her zaman aktif kalsın.
-        # Widgetlar oluşturulmadan önce state'i True'ya sabitliyoruz.
-        st.session_state['oran_filter_ms'] = True
-        st.session_state['oran_filter_kg'] = True
-        st.session_state['oran_filter_25'] = True
-        st.session_state['oran_filter_cift_yari_15'] = True
+        # Oran Filtresi kutuları kullanıcı tarafından açılıp kapatılabilir.
         of1, of2 = st.columns(2)
         with of1:
-            oran_filter_ms = st.checkbox('Maç Sonucu', key='oran_filter_ms')
+            oran_filter_ms = st.checkbox('Maç Sonucu', value=True, key='oran_filter_ms')
         with of2:
-            oran_filter_kg = st.checkbox('Karşılıklı Gol', key='oran_filter_kg')
+            oran_filter_kg = st.checkbox('Karşılıklı Gol', value=True, key='oran_filter_kg')
         of3, of4 = st.columns(2)
         with of3:
-            oran_filter_25 = st.checkbox('2.5 Alt / Üst', key='oran_filter_25')
+            oran_filter_25 = st.checkbox('2.5 Alt / Üst', value=True, key='oran_filter_25')
         with of4:
-            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', key='oran_filter_cift_yari_15')
+            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', value=True, key='oran_filter_cift_yari_15')
         # Kombo isteğe bağlıdır. İşaretli değilse hiçbir kombo hesabı yapılmaz.
         oran_filter_kombo = st.checkbox('Kombo', value=False, key='oran_filter_kombo')
         oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
         oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
-        # Yüksek Oran Filtresi marketleri her zaman aktif kalsın.
-        st.session_state['yuksek_filtre_12'] = True
-        st.session_state['yuksek_filtre_21'] = True
-        st.session_state['yuksek_filtre_cift_yari_kg'] = True
+        # Yüksek Oran Filtresi kutuları kullanıcı tarafından açılıp kapatılabilir.
         yf1, yf2 = st.columns(2)
         with yf1:
-            yuksek_filtre_12 = st.checkbox('1/2', key='yuksek_filtre_12')
+            yuksek_filtre_12 = st.checkbox('1/2', value=True, key='yuksek_filtre_12')
         with yf2:
-            yuksek_filtre_21 = st.checkbox('2/1', key='yuksek_filtre_21')
+            yuksek_filtre_21 = st.checkbox('2/1', value=True, key='yuksek_filtre_21')
         yuksek_filtre_cift_yari_kg = st.checkbox(
-            'İki yarıda da karşılıklı gol', key='yuksek_filtre_cift_yari_kg'
+            'İki yarıda da karşılıklı gol', value=True, key='yuksek_filtre_cift_yari_kg'
         )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
         yuksek_oran_btn = False
@@ -8683,55 +8675,33 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                     delta_color="off",
                                 )
 
-                    # Kombo seçiliyse üç ikili kesişimi ayrı ayrı göster.
+                    # Kombo seçiliyse maç detayında yalnızca en yüksek kombo gösterilir.
+                    # Tek satır: kombo tipi + seçim + yüzde + hassasiyet + örnek sayısı.
                     if oran_filter_kombo:
                         kombo_stats = [x for x in istatistikler if x.get('grup') == 'Kombo']
                         if kombo_stats:
-                            st.markdown('**🔗 Kombo**')
-                            kombo_map = {x.get('kombo_tipi'): x for x in kombo_stats}
-                            kc1, kc2, kc3 = st.columns(3, gap='small')
-                            for kc, tip, baslik in [
-                                (kc1, 'MS+KG', 'MS + KG'),
-                                (kc2, 'MS+2.5', 'MS + 2.5'),
-                                (kc3, 'KG+2.5', 'KG + 2.5'),
-                            ]:
-                                c = kombo_map.get(tip)
-                                if c is None:
-                                    continue
-                                with kc:
-                                    kombo_pct = float(c.get('oran', 0) or 0)
-                                    kombo_hass = int(c.get('uzlasi', 0) or 0)
-                                    kombo_alt = (
-                                        f"{kombo_hass}/11 hass. · {toplam_benzer} örnek"
-                                        if abs(kombo_pct - max_baslik_pct) < 1e-9
-                                        else f"{toplam_benzer} örnek"
-                                    )
-                                    if kombo_pct > 50.0:
-                                        st.markdown(
-                                            f"""<style>
-                                            .st-key-oran_kombo50_{sira}_{tip.replace('+', '_').replace('.', '_')} [data-testid=\"stMetricValue\"],
-                                            .st-key-oran_kombo50_{sira}_{tip.replace('+', '_').replace('.', '_')} [data-testid=\"stMetricLabel\"] {{
-                                                color:#a78bfa !important;
-                                                -webkit-text-fill-color:#a78bfa !important;
-                                                font-weight:850 !important;
-                                            }}
-                                            </style>""",
-                                            unsafe_allow_html=True,
-                                        )
-                                        with st.container(key=f"oran_kombo50_{sira}_{tip.replace('+', '_').replace('.', '_')}"):
-                                            st.metric(
-                                                baslik + ' · ' + str(c.get('label', '—')),
-                                                f"%{kombo_pct:.1f}",
-                                                kombo_alt,
-                                                delta_color='off',
-                                            )
-                                    else:
-                                        st.metric(
-                                            baslik + ' · ' + str(c.get('label', '—')),
-                                            f"%{kombo_pct:.1f}",
-                                            kombo_alt,
-                                            delta_color='off',
-                                        )
+                            en_yuksek_kombo = max(
+                                kombo_stats,
+                                key=lambda x: (
+                                    float(x.get('oran', 0) or 0),
+                                    int(x.get('uzlasi', 0) or 0),
+                                    int(x.get('hit', 0) or 0),
+                                ),
+                            )
+                            kombo_pct = float(en_yuksek_kombo.get('oran', 0) or 0)
+                            kombo_hass = int(en_yuksek_kombo.get('uzlasi', 0) or 0)
+                            kombo_tip = str(en_yuksek_kombo.get('kombo_tipi', 'Kombo'))
+                            kombo_label = str(en_yuksek_kombo.get('label', '—'))
+                            kombo_renk = '#a78bfa' if kombo_pct > 50.0 else normal_renk
+                            kombo_html = (
+                                '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+                                'margin:.15rem 0 .55rem 0;font-weight:750;">'
+                                '🔗 <span style="color:' + kombo_renk + ';">' + escape(kombo_tip) + ' · ' +
+                                escape(kombo_label) + ' · %' + f'{kombo_pct:.1f}' + '</span>' +
+                                '<span style="opacity:.72;font-weight:600;"> · ' + str(kombo_hass) +
+                                '/11 hass. · ' + str(toplam_benzer) + ' örnek</span></div>'
+                            )
+                            st.markdown(kombo_html, unsafe_allow_html=True)
 
                     try:
                         ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
