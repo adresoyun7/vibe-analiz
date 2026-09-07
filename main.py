@@ -8358,7 +8358,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
             })
         st.dataframe(pd.DataFrame(tablo), use_container_width=True, hide_index=True)
 
-        tamam = [r for r in _st_sonuclar if r.get('durum') == 'Tamam']
+        tamam = [r for r in _st_sonuclar if str(r.get('durum', '')).startswith('Tamam')]
         if tamam:
             st.markdown("#### Kolon önerileri")
             # 1. kolon: modelin en güçlü tek tahmini.
@@ -8382,7 +8382,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     kolonlar[4][r['no']] = alt[0]
             gor = []
             for r in _st_sonuclar:
-                if r.get('durum') != 'Tamam':
+                if not str(r.get('durum', '')).startswith('Tamam'):
                     continue
                 gor.append({
                     '#': r['no'], 'Maç': f"{r['ev']} - {r['dep']}",
