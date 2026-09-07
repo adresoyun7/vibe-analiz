@@ -8857,38 +8857,28 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                 st.markdown(
                     f"**Güncel oran:** `{m.get('h', 0):.2f} / {m.get('b', 0):.2f} / {m.get('a', 0):.2f}`"
                 )
-                # Bir geçmiş maç aynı anda birden fazla yüksek oran olayına uyuyorsa
-                # tabloda yalnızca bu maç için seçili istatistikler arasındaki en güçlü olay gösterilir.
-                # Güç sırası: önce 11 hassasiyet ortalama yüzdesi, eşitse uzlaşı, sonra hit sayısı.
+                # Bir geçmiş maçta birden fazla yüksek oran olayı gerçekleşmişse
+                # yalnızca sabit olay önceliğinde en yüksek olanı göster.
+                # Öncelik: 1/2 ve 2/1 > İki yarıda da KG > İki yarı 1.5 Üst.
                 olay_kolon_map = {
                     "1/2": "olay_12",
                     "2/1": "olay_21",
                     "İki yarıda da KG": "olay_cift_yari_kg",
                     "İki yarı 1.5 Üst": "olay_cift_yari_15",
                 }
+                olay_onceligi = ["1/2", "2/1", "İki yarıda da KG", "İki yarı 1.5 Üst"]
 
                 def _tek_yuksek_oran_olayi(r):
-                    adaylar = []
-                    for olay_label, olay_kolon in olay_kolon_map.items():
+                    for olay_label in olay_onceligi:
+                        olay_kolon = olay_kolon_map[olay_label]
                         if olay_label not in istatistik_map or olay_kolon not in r.index:
                             continue
                         try:
-                            gerceklesti = bool(r[olay_kolon])
+                            if bool(r[olay_kolon]):
+                                return olay_label
                         except Exception:
-                            gerceklesti = False
-                        if not gerceklesti:
-                            continue
-                        bilgi = istatistik_map.get(olay_label, {})
-                        adaylar.append((
-                            float(bilgi.get("oran", 0) or 0),
-                            int(bilgi.get("uzlasi", 0) or 0),
-                            int(bilgi.get("hit", 0) or 0),
-                            olay_label,
-                        ))
-                    if not adaylar:
-                        return "—"
-                    adaylar.sort(reverse=True)
-                    return adaylar[0][3]
+                            pass
+                    return "—"
 
                 yuksek_oran_olay_serisi = ornekler.apply(_tek_yuksek_oran_olayi, axis=1)
 
