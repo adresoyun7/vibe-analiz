@@ -6766,12 +6766,40 @@ def uygula_tema_css(koyu_mod: bool):
             background:linear-gradient(180deg,#07111f 0%,#081426 48%,#0a1830 100%) !important;
         }
 
-        /* Sayfa dikey kaydırmasını hiçbir görünümde kilitleme. */
-        html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-            overflow-y:auto !important;
+        /* === GLOBAL SCROLL FIX v2 ===
+           stMain'e ayrı scroll vermek bazı Streamlit sürümlerinde iç içe
+           scroll alanı oluşturup sayfanın altını kesiyordu. Tek scroll sahibi
+           AppViewContainer olsun; main ve block-container doğal yükseklikte aksın. */
+        html, body {
+            height:100% !important;
+            min-height:100% !important;
+            overflow-x:hidden !important;
         }
-        [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        .stApp {
             min-height:100vh !important;
+            height:auto !important;
+            overflow:visible !important;
+        }
+        [data-testid="stAppViewContainer"] {
+            height:100vh !important;
+            min-height:100vh !important;
+            overflow-y:scroll !important;
+            overflow-x:hidden !important;
+            overscroll-behavior-y:auto !important;
+        }
+        [data-testid="stMain"] {
+            height:auto !important;
+            min-height:100% !important;
+            max-height:none !important;
+            overflow:visible !important;
+        }
+        .main .block-container,
+        [data-testid="stMainBlockContainer"] {
+            height:auto !important;
+            min-height:0 !important;
+            max-height:none !important;
+            overflow:visible !important;
+            padding-bottom:6rem !important;
         }
         [data-testid="stHeader"] {
             background:rgba(7,17,31,.94) !important;
