@@ -5803,6 +5803,14 @@ def gecmis_tablo_stili(tablo):
             return "background-color:#991b1b;color:#fef2f2;font-weight:900"
         return ""
 
+    def kombo_evet_hayir_renk(value):
+        # Kombo renkleri diğer MS / KG / 2.5 / özel olay renkleriyle çakışmasın.
+        if str(value) == "Evet":
+            return "background-color:#0f766e;color:#f0fdfa;font-weight:900"  # teal
+        if str(value) == "Hayır":
+            return "background-color:#be185d;color:#fdf2f8;font-weight:900"  # magenta
+        return ""
+
     def olay_renk(value):
         metin = str(value)
         if "İki yarıda da KG" in metin:
@@ -5833,7 +5841,7 @@ def gecmis_tablo_stili(tablo):
         or str(c).startswith("KG+2.5")
     ]
     if kombo_kolonlari:
-        stil = stil.map(evet_hayir_renk, subset=kombo_kolonlari)
+        stil = stil.map(kombo_evet_hayir_renk, subset=kombo_kolonlari)
 
     olay_kolonlari = [c for c in ["Özel olay", "Yüksek oran olayı"] if c in tablo.columns]
     if olay_kolonlari:
