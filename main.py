@@ -11031,11 +11031,11 @@ else:
                     gunun_kuponlari = [[dict(gunun_secimleri[0])]]
 
                 for kupon_no, kupon_secimleri in enumerate(gunun_kuponlari, start=1):
-                    profil_etiketi = (
-                        "Günün Kuponu" if len(gunun_kuponlari) == 1
-                        else f"Günün Kuponu {kupon_no}"
-                    )
-                    kupon_gecmisine_ekle(kupon_secimleri, profil_etiketi, "0.00–0.10 tarama")
+                    # Görünüm yalnızca tam "Günün Kuponu" profilini listeliyor.
+                    # Birden fazla kupon üretildiğinde "Günün Kuponu 1/2" gibi
+                    # farklı profil adları kullanmak kayıtların ekranda görünmemesine yol açıyordu.
+                    # Her grup ayrı kayıt olarak tutulur, fakat aynı profil altında gösterilir.
+                    kupon_gecmisine_ekle(kupon_secimleri, "Günün Kuponu", "0.00–0.10 tarama")
                 st.session_state.coupon_popup_open = True
                 st.session_state.scroll_to_coupon = True
                 dagilim = " + ".join(str(len(k)) for k in gunun_kuponlari)
