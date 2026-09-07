@@ -8160,8 +8160,9 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             kg_sonuc, _, kg_pct = ozet["kg"]
             # Sağdaki özet değerlerinden yüzdesi en yüksek olanı ayrı renkle vurgula.
             # Eşitlik varsa aynı en yüksek yüzdeye sahip olanların hepsi vurgulanır.
+            # Geçmiş Örnekleri başlığında İlk Yarı (İY) özetini gösterme.
+            # İY verisi detay/tablo tarafında korunur; yalnızca başlık özetinden çıkarılır.
             ozetler = [
-                ("İY", iy_sonuc, float(iy_pct)),
                 ("MS", ms_sonuc, float(ms_pct)),
                 ("2.5", ou_sonuc, float(ou_pct)),
                 ("KG", kg_sonuc, float(kg_pct)),
