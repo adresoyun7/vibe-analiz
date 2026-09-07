@@ -9847,6 +9847,17 @@ else:
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
+        # Teyit HTML'ini kart f-string'i içinde iç içe f-string olarak üretme.
+        # Streamlit/Markdown bazı rerunlarda HTML bloğunu metin olarak gösterebiliyor.
+        _kart_teyit = t.get("teyit_skoru")
+        if _kart_teyit is not None:
+            teyit_card_html = (
+                f'<div style="margin-top:6px;font-size:0.72rem;color:#2f80ed">'
+                f'🛡️ Teyit {float(_kart_teyit):.1f}/100 · {t.get("teyit_seviye", "—")}'
+                f'</div>'
+            )
+        else:
+            teyit_card_html = ""
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
@@ -9893,7 +9904,7 @@ else:
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
-                {f"<div style='margin-top:6px;font-size:0.72rem;color:#2f80ed'>🛡️ Teyit {float(t.get('teyit_skoru')):.1f}/100 · {t.get('teyit_seviye','—')}</div>" if t.get('teyit_skoru') is not None else ""}
+                {teyit_card_html}
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
                 {stability_html}
               </div>
