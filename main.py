@@ -5867,6 +5867,81 @@ def yuksek_oran_istatistikleri(tum_ornekler, filtre_12=True, filtre_21=True,
     return istatistikler, en_iyi, oneri
 
 
+def oran_filtresi_istatistikleri(tum_ornekler, goster_ms=True, goster_kg=True,
+                                 goster_25=True, goster_cift_yari_15=True):
+    """Benzer oranlı geçmiş maçlardan temel market yüzdelerini çıkarır.
+
+    Gösterilen marketler:
+    - Maç Sonucu: 1 / X / 2
+    - Karşılıklı Gol: Var / Yok
+    - 2.5 Gol: Üst / Alt
+    - Her iki yarıda da 1.5 Üst: ilk yarı >=2 VE ikinci yarı >=2 gol
+    """
+    if tum_ornekler is None or getattr(tum_ornekler, "empty", True):
+        return [], {"label": "—", "oran": 0.0, "hit": 0, "toplam": 0, "puan": 0.0}
+
+    b = tum_ornekler.copy()
+    toplam = int(len(b))
+    if toplam <= 0:
+        return [], {"label": "—", "oran": 0.0, "hit": 0, "toplam": 0, "puan": 0.0}
+
+    for c in ["FTHG", "FTAG", "HTHG", "HTAG"]:
+        if c in b.columns:
+            b[c] = pd.to_numeric(b[c], errors="coerce")
+
+    tanimlar = []
+    if goster_ms and "FTR" in b.columns:
+        tanimlar.extend([
+            ("MS 1", b["FTR"] == "H", "MS"),
+            ("MS X", b["FTR"] == "D", "MS"),
+            ("MS 2", b["FTR"] == "A", "MS"),
+        ])
+
+    if goster_kg and all(c in b.columns for c in ["FTHG", "FTAG"]):
+        kg_var = (b["FTHG"] > 0) & (b["FTAG"] > 0)
+        tanimlar.extend([
+            ("KG Var", kg_var, "KG"),
+            ("KG Yok", ~kg_var, "KG"),
+        ])
+
+    if goster_25 and all(c in b.columns for c in ["FTHG", "FTAG"]):
+        toplam_gol = b["FTHG"] + b["FTAG"]
+        ust25 = toplam_gol >= 3
+        tanimlar.extend([
+            ("2.5 Üst", ust25, "2.5"),
+            ("2.5 Alt", ~ust25, "2.5"),
+        ])
+
+    if goster_cift_yari_15 and all(c in b.columns for c in ["FTHG", "FTAG", "HTHG", "HTAG"]):
+        ilk_yari_gol = b["HTHG"] + b["HTAG"]
+        ikinci_yari_gol = (b["FTHG"] - b["HTHG"]) + (b["FTAG"] - b["HTAG"])
+        iki_yari_15 = (ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)
+        tanimlar.append(("Her iki yarı 1.5 Üst", iki_yari_15, "Yarılar"))
+
+    istatistikler = []
+    for label, mask, grup in tanimlar:
+        try:
+            hit = int(pd.Series(mask).fillna(False).astype(bool).sum())
+        except Exception:
+            hit = 0
+        oran = (hit / toplam * 100.0) if toplam else 0.0
+        # Yüzde ana sinyal; örnek sayısı yalnızca sıralamada küçük güven katkısı verir.
+        ornek_guveni = min(toplam / 30.0, 1.0)
+        puan = oran * (0.82 + 0.18 * ornek_guveni)
+        istatistikler.append({
+            "label": label,
+            "grup": grup,
+            "hit": hit,
+            "toplam": toplam,
+            "oran": round(oran, 1),
+            "puan": round(puan, 1),
+        })
+
+    istatistikler.sort(key=lambda x: (x["puan"], x["hit"]), reverse=True)
+    en_iyi = istatistikler[0] if istatistikler else {"label": "—", "oran": 0.0, "hit": 0, "toplam": toplam, "puan": 0.0}
+    return istatistikler, en_iyi
+
+
 for key, default in [
     ("final_list", []),
     ("detay_idx", None),
@@ -5888,6 +5963,7 @@ for key, default in [
     ("gecmis_inceleme_list", None),
     ("gecmis_tam_ekran_sira", None),
     ("yuksek_oran_list", None),
+    ("oran_filtresi_list", None),
     ("odds_league_cache", {}),
     ("odds_api_quota", {}),
 ]:
@@ -7316,7 +7392,7 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -7347,6 +7423,7 @@ with st.sidebar:
     analiz_btn = False
     backtest_btn = False
     gecmis_btn = False
+    oran_filtresi_btn = False
     yuksek_oran_btn = False
     canli_yenile_btn = False
     canli_otomatik = False
@@ -7364,6 +7441,28 @@ with st.sidebar:
     elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
         gecmis_btn = False
+    elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
+        st.markdown(
+            """
+            <div class="sidebar-high-market-title">
+              <b>📊 Oran Filtresi Marketleri</b>
+              <span>Benzer kapanış oranlı geçmiş maçlarda temel marketlerin gerçekleşme yüzdelerini gösterir.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        of1, of2 = st.columns(2)
+        with of1:
+            oran_filter_ms = st.checkbox('Maç Sonucu', value=True, key='oran_filter_ms')
+        with of2:
+            oran_filter_kg = st.checkbox('Karşılıklı Gol', value=True, key='oran_filter_kg')
+        of3, of4 = st.columns(2)
+        with of3:
+            oran_filter_25 = st.checkbox('2.5 Alt / Üst', value=True, key='oran_filter_25')
+        with of4:
+            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', value=True, key='oran_filter_cift_yari_15')
+        oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
+        oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
         st.markdown(
             """
@@ -7433,6 +7532,15 @@ elif st.session_state.get('sayfa_modu') == 'Backtest':
             use_container_width=True,
             type='primary',
             key='backtest_baslat_btn',
+        )
+elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        oran_filtresi_btn = st.button(
+            '📊 ORAN FİLTRESİNİ ÇALIŞTIR',
+            use_container_width=True,
+            type='primary',
+            key='oran_filtresi_btn',
         )
 elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
     with ust_analiz_buton_alani.container():
@@ -7898,6 +8006,51 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     st.stop()
 
 
+if oran_filtresi_btn:
+    if not API_KEY or not secili_kodlar:
+        st.error("⚠️ API Key ve en az bir lig seçin.")
+    elif not (oran_filter_ms or oran_filter_kg or oran_filter_25 or oran_filter_cift_yari_15):
+        st.error("⚠️ En az bir market seçin.")
+    else:
+        with st.spinner("📊 Benzer oranlı geçmiş maçların temel marketleri taranıyor..."):
+            of_gecmis = futbol_veri_motoru(tuple(yillar))
+            of_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            oran_filtresi_list = []
+            for _, of_mac in of_bulten.iterrows():
+                tum_ornekler = gecmis_ornekleri_bul(
+                    of_gecmis,
+                    of_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    limit=100000,
+                )
+                toplam_benzer = int(len(tum_ornekler))
+                if tum_ornekler.empty or toplam_benzer < int(oran_filter_min_ornek):
+                    continue
+                istatistikler, en_iyi = oran_filtresi_istatistikleri(
+                    tum_ornekler,
+                    goster_ms=oran_filter_ms,
+                    goster_kg=oran_filter_kg,
+                    goster_25=oran_filter_25,
+                    goster_cift_yari_15=oran_filter_cift_yari_15,
+                )
+                if not istatistikler:
+                    continue
+                oran_filtresi_list.append({
+                    "m": of_mac.to_dict(),
+                    "ornekler": tum_ornekler,
+                    "istatistikler": istatistikler,
+                    "en_iyi": en_iyi,
+                    "toplam_benzer": toplam_benzer,
+                })
+
+            oran_filtresi_list.sort(
+                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
+                reverse=True,
+            )
+            st.session_state.oran_filtresi_list = oran_filtresi_list
+            st.rerun()
+
 if yuksek_oran_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
@@ -7947,6 +8100,113 @@ if yuksek_oran_btn:
             )
             st.session_state.yuksek_oran_list = yuksek_liste
             st.rerun()
+
+if st.session_state.get('sayfa_modu') == 'Oran Filtresi':
+    st.markdown(
+        """
+        <div class="high-filter-header-fix" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
+          <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">📊 Oran Filtresi</div>
+          <div style="font-size:.90rem;margin-top:7px;line-height:1.5;">
+            Tahmin üretmez; güncel maçın 1/X/2 oranlarına benzeyen geçmiş maçlarda Maç Sonucu, KG, 2.5 Alt/Üst ve her iki yarıda 1.5 Üst oranlarını gösterir.
+          </div>
+        </div>
+        <style>
+        .high-filter-header-fix, .high-filter-header-fix * {
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+            opacity:1 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    oran_liste = st.session_state.get("oran_filtresi_list")
+    if oran_liste is None:
+        st.info("Lig, tarih ve marketleri seçip ORAN FİLTRESİNİ ÇALIŞTIR butonuna bas.")
+    elif not oran_liste:
+        st.warning("Seçilen hassasiyet ve minimum örnek sayısıyla eşleşen güncel maç bulunamadı.")
+    else:
+        st.success(f"{len(oran_liste)} güncel maç için benzer oran istatistiği bulundu.")
+        for sira, item in enumerate(oran_liste, start=1):
+            m = item["m"]
+            ornekler = item["ornekler"]
+            istatistikler = item.get("istatistikler", [])
+            en_iyi = item.get("en_iyi", {})
+            toplam_benzer = int(item.get("toplam_benzer", len(ornekler)))
+            saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+
+            with st.expander(
+                f"#{sira}  {m.get('ev', '')} – {m.get('dep', '')}  ·  {saat}  ·  En yüksek: {en_iyi.get('label', '—')} %{float(en_iyi.get('oran', 0)):.1f}",
+                expanded=(sira == 1),
+            ):
+                st.markdown(
+                    f"**Güncel oran:** `{m.get('h', 0):.2f} / {m.get('b', 0):.2f} / {m.get('a', 0):.2f}` &nbsp;&nbsp; · &nbsp;&nbsp; **Benzer geçmiş maç:** `{toplam_benzer}`"
+                )
+
+                ist_map = {x.get("label"): x for x in istatistikler}
+
+                if any(x.get("grup") == "MS" for x in istatistikler):
+                    st.markdown("#### ⚽ Maç Sonucu")
+                    cols = st.columns(3)
+                    for col, label in zip(cols, ["MS 1", "MS X", "MS 2"]):
+                        bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0, "toplam": toplam_benzer})
+                        with col:
+                            st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
+
+                if any(x.get("grup") == "KG" for x in istatistikler):
+                    st.markdown("#### 🔁 Karşılıklı Gol")
+                    cols = st.columns(2)
+                    for col, label in zip(cols, ["KG Var", "KG Yok"]):
+                        bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
+                        with col:
+                            st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
+
+                if any(x.get("grup") == "2.5" for x in istatistikler):
+                    st.markdown("#### 🎯 2.5 Gol")
+                    cols = st.columns(2)
+                    for col, label in zip(cols, ["2.5 Üst", "2.5 Alt"]):
+                        bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
+                        with col:
+                            st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
+
+                if any(x.get("grup") == "Yarılar" for x in istatistikler):
+                    st.markdown("#### ⏱️ Her İki Yarı 1.5 Üst")
+                    bilgi = ist_map.get("Her iki yarı 1.5 Üst", {"hit": 0, "oran": 0.0})
+                    st.metric(
+                        "İlk yarı 1.5 Üst + İkinci yarı 1.5 Üst",
+                        f"%{float(bilgi.get('oran', 0)):.1f}",
+                        f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç",
+                        delta_color="off",
+                    )
+
+                # İncelemek isteyen kullanıcı için benzer geçmiş maçları da aynı kartın altında göster.
+                try:
+                    ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
+                    ikinci_yari_gol = (ornekler["FTHG"] - ornekler["HTHG"]) + (ornekler["FTAG"] - ornekler["HTAG"])
+                    iki_yari_15_txt = ((ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)).map({True: "Evet", False: "Hayır"})
+                except Exception:
+                    iki_yari_15_txt = pd.Series("—", index=ornekler.index)
+
+                tablo = pd.DataFrame({
+                    "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
+                    "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
+                    "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
+                    "Kapanış 1/X/2": (
+                        (ornekler["REF_H"] if "REF_H" in ornekler.columns else ornekler["B365H"]).round(2).astype(str)
+                        + " / "
+                        + (ornekler["REF_D"] if "REF_D" in ornekler.columns else ornekler["B365D"]).round(2).astype(str)
+                        + " / "
+                        + (ornekler["REF_A"] if "REF_A" in ornekler.columns else ornekler["B365A"]).round(2).astype(str)
+                    ),
+                    "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
+                    "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
+                    "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
+                    "İki yarı 1.5 Üst": iki_yari_15_txt,
+                })
+                st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+    legal_footer()
+    st.stop()
+
 
 if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
     st.markdown(
