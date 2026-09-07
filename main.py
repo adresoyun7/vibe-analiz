@@ -8542,8 +8542,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         font-weight:950 !important;
                     }}
                     .st-key-oran_mac_baslik_{sira} .oran-ozet-ms-guclu {{
-                        color:#94a3b8 !important;
-                        -webkit-text-fill-color:#94a3b8 !important;
+                        color:#a78bfa !important;
+                        -webkit-text-fill-color:#a78bfa !important;
                         font-weight:850 !important;
                     }}
                     .st-key-oran_mac_baslik_{sira} .oran-ozet-ayirici {{
@@ -8606,8 +8606,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                         f"""<style>
                                         .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricValue\"],
                                         .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricLabel\"] {{
-                                            color:#94a3b8 !important;
-                                            -webkit-text-fill-color:#94a3b8 !important;
+                                            color:#a78bfa !important;
+                                            -webkit-text-fill-color:#a78bfa !important;
                                             font-weight:850 !important;
                                         }}
                                         </style>""",
