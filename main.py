@@ -1206,6 +1206,99 @@ def guven_metni(sample: int, tolerans: float):
     return "Riskli", "#e74c3c"
 
 
+# ==========================================================
+# YAKIN SEZON AĞIRLIKLANDIRMA
+# ==========================================================
+# Eski sezonlar modelden atılmaz; yalnızca yakın tarihli aynı oran/market
+# davranışına daha fazla ağırlık verilir. Backtestte hedef maçın sezonu
+# referans alınır; böylece gelecek sezon bilgisi sızmaz.
+SEZON_YAS_AGIRLIKLARI = {
+    0: 1.00,  # hedef / güncel sezon
+    1: 0.90,
+    2: 0.75,
+    3: 0.60,
+    4: 0.45,
+    5: 0.35,
+}
+
+def _sezon_baslangic_yili_koddan(kod):
+    try:
+        s = str(kod or "").strip()
+        if len(s) == 4 and s.isdigit():
+            return 2000 + int(s[:2])
+    except Exception:
+        pass
+    return None
+
+def _hedef_sezon_baslangic_yili(m_row):
+    try:
+        z = m_row.get("zaman") if hasattr(m_row, "get") else None
+        dt = parse_mac_datetime(z)
+        return int(dt.year) if int(dt.month) >= 7 else int(dt.year) - 1
+    except Exception:
+        now = datetime.now()
+        return int(now.year) if int(now.month) >= 7 else int(now.year) - 1
+
+def sezon_agirlik_serisi(df, m_row):
+    """Her geçmiş maça hedef sezona uzaklığına göre ağırlık verir.
+
+    recency_weighting_enabled kapalıysa klasik eşit ağırlık döner.
+    Örnek sayısı / minimum yeterlilik gerçek maç adediyle çalışmaya devam eder.
+    """
+    if df is None or getattr(df, "empty", True):
+        return pd.Series(dtype="float64")
+    if not bool(st.session_state.get("recency_weighting_enabled", True)):
+        return pd.Series(1.0, index=df.index, dtype="float64")
+
+    hedef_yil = _hedef_sezon_baslangic_yili(m_row)
+    if "season_code" not in df.columns:
+        return pd.Series(1.0, index=df.index, dtype="float64")
+
+    def _w(kod):
+        bas = _sezon_baslangic_yili_koddan(kod)
+        if bas is None:
+            return 0.35
+        yas = max(0, int(hedef_yil) - int(bas))
+        return float(SEZON_YAS_AGIRLIKLARI.get(yas, 0.35))
+
+    return df["season_code"].map(_w).astype(float)
+
+def agirlikli_ortalama(values, weights, default=0.0):
+    try:
+        v = pd.to_numeric(pd.Series(values), errors="coerce")
+        w = pd.to_numeric(pd.Series(weights, index=v.index), errors="coerce")
+        mask = v.notna() & w.notna() & (w > 0)
+        if not mask.any():
+            return float(default)
+        return float((v[mask] * w[mask]).sum() / w[mask].sum())
+    except Exception:
+        return float(default)
+
+def agirlikli_oran(mask, weights):
+    try:
+        m = pd.Series(mask).astype(float)
+        w = pd.Series(weights, index=m.index, dtype="float64")
+        valid = m.notna() & w.notna() & (w > 0)
+        if not valid.any():
+            return 0.0
+        return float((m[valid] * w[valid]).sum() / w[valid].sum())
+    except Exception:
+        return 0.0
+
+def agirlikli_value_counts(series, weights):
+    try:
+        s = pd.Series(series)
+        w = pd.Series(weights, index=s.index, dtype="float64")
+        valid = s.notna() & w.notna() & (w > 0)
+        if not valid.any():
+            return pd.Series(dtype="float64")
+        toplam = float(w[valid].sum())
+        if toplam <= 0:
+            return pd.Series(dtype="float64")
+        return w[valid].groupby(s[valid]).sum().sort_values(ascending=False) / toplam
+    except Exception:
+        return pd.Series(dtype="float64")
+
 def guven_renk(pct: int):
     if pct >= 70:
         return "#27ae60", "badge-yuksek", "Yüksek Güven"
@@ -3579,7 +3672,11 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     sample = len(b)
     toplam_gol = b["FTHG"] + b["FTAG"]
 
-    ms_vc = b["FTR"].value_counts(normalize=True)
+    # İstatistik yüzdeleri yakın sezon ağırlığıyla hesaplanır; sample ise gerçek
+    # maç adedi olarak kalır. Böylece güncel davranış daha hızlı yakalanırken
+    # küçük örneklem korumaları bozulmaz.
+    sezon_w = sezon_agirlik_serisi(b, m_row)
+    ms_vc = agirlikli_value_counts(b["FTR"], sezon_w)
 
     ms_mod = ms_vc.idxmax() if not ms_vc.empty else "D"
     ms_raw = float(ms_vc.get(ms_mod, 0))
@@ -3589,10 +3686,10 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     msx_raw = float(ms_vc.get("D", 0))
     ms2_raw = float(ms_vc.get("A", 0))
 
-    ms25_raw = float((toplam_gol >= 3).mean())
-    ms35_raw = float((toplam_gol >= 4).mean())
-    ms15_raw = float((toplam_gol >= 2).mean())
-    kg_raw = float(((b["FTHG"] > 0) & (b["FTAG"] > 0)).mean())
+    ms25_raw = agirlikli_oran(toplam_gol >= 3, sezon_w)
+    ms35_raw = agirlikli_oran(toplam_gol >= 4, sezon_w)
+    ms15_raw = agirlikli_oran(toplam_gol >= 2, sezon_w)
+    kg_raw = agirlikli_oran((b["FTHG"] > 0) & (b["FTAG"] > 0), sezon_w)
 
     # İlk-yarı/HTFT yalnızca gerçekten HT verisi bulunan alt kümeden hesaplanır.
     if all(c in b.columns for c in ["HTHG", "HTAG", "HTR"]):
@@ -3602,16 +3699,18 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
     if not b_ht.empty:
         ilk_yari_gol = b_ht["HTHG"] + b_ht["HTAG"]
-        iy_vc = b_ht["HTR"].value_counts(normalize=True)
-        iy05_raw = float((ilk_yari_gol >= 1).mean())
-        iy15_raw = float((ilk_yari_gol >= 2).mean())
+        sezon_w_ht = sezon_w.reindex(b_ht.index).fillna(0.35)
+        iy_vc = agirlikli_value_counts(b_ht["HTR"], sezon_w_ht)
+        iy05_raw = agirlikli_oran(ilk_yari_gol >= 1, sezon_w_ht)
+        iy15_raw = agirlikli_oran(ilk_yari_gol >= 2, sezon_w_ht)
         htft_s = (
             b_ht["HTR"].replace({"H": "1", "A": "2", "D": "X"})
             + "/"
             + b_ht["FTR"].replace({"H": "1", "A": "2", "D": "X"})
         )
-        htft_mod = htft_s.mode()[0] if not htft_s.empty else "-"
-        htft_raw = float(htft_s.value_counts(normalize=True).get(htft_mod, 0)) if not htft_s.empty else 0.0
+        htft_vc = agirlikli_value_counts(htft_s, sezon_w_ht)
+        htft_mod = htft_vc.index[0] if not htft_vc.empty else "-"
+        htft_raw = float(htft_vc.get(htft_mod, 0)) if not htft_vc.empty else 0.0
     else:
         # HT verisi olmayan extra/worldwide liglerde ilk-yarı marketlerini
         # sıfırla; full-time MS/KG/Üst analizleri çalışmaya devam etsin.
@@ -3619,6 +3718,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         iy05_raw = 0.0
         iy15_raw = 0.0
         htft_s = pd.Series(dtype="object")
+        htft_vc = pd.Series(dtype="float64")
         htft_mod = "-"
         htft_raw = 0.0
 
@@ -3773,7 +3873,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     raw_combo_list = []
     for combo_label, combo_cond, combo_type in combo_defs:
         combo_hit = int(combo_cond.sum())
-        combo_raw = float(combo_cond.mean())
+        combo_raw = agirlikli_oran(combo_cond, sezon_w)
         combo_conf = min(combo_raw * guven_carpani * combo_bias * form_market_carpani(combo_label, form_profili), 0.99)
         combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, sample, float(tolerans))
 
@@ -3794,7 +3894,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
                 "type": combo_type,
             })
 
-    htft_counts = htft_series.value_counts(normalize=True)
+    htft_counts = htft_vc.copy() if 'htft_vc' in locals() else pd.Series(dtype="float64")
     for htft_label, htft_raw_prob in htft_counts.items():
         htft_hit = int((htft_series == htft_label).sum())
         htft_conf = min(float(htft_raw_prob) * guven_carpani * combo_bias * form_market_carpani(f"HT/FT {htft_label}", form_profili), 0.99)
@@ -3906,7 +4006,11 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         canli_label, canli_p = "Canlı İzle", 50
         canli_strateji = "İlk 10-15 dakikada baskı, şut ve korner üstünlüğü hangi taraftaysa sadece o yönde canlı giriş düşün."
 
-    flip_p = float((((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H"))).mean())
+    if "HTR" in b.columns:
+        flip_mask = (((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H")))
+        flip_p = agirlikli_oran(flip_mask, sezon_w)
+    else:
+        flip_p = 0.0
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
@@ -3923,7 +4027,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     else:
         tavsiye = "Uygun"
 
-    avg_goal = float(toplam_gol.mean())
+    avg_goal = agirlikli_ortalama(toplam_gol, sezon_w, default=float(toplam_gol.mean()))
     goal_profile = gol_profili(avg_goal)
 
     nedenler = [
@@ -3932,6 +4036,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         f"Ortalama toplam gol {avg_goal:.2f} ({goal_profile}).",
         f"Maç tipi: {match_type}.",
     ]
+    if bool(st.session_state.get("recency_weighting_enabled", True)):
+        nedenler.append("Yakın sezon ağırlığı aktif: yeni sezonların benzer oran istatistiğine etkisi daha yüksek.")
     if belirsiz:
         nedenler.append("1/X/2 dağılımı birbirine çok yakın olduğu için maç belirsiz işaretlendi.")
     if combo_var:
@@ -4042,6 +4148,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "guven_badge_cls": gb_cls,
         "guven_badge_lbl": gb_lbl,
         "ornek": sample,
+        "sezon_agirlikli": bool(st.session_state.get("recency_weighting_enabled", True)),
+        "sezon_agirlik_profili": "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35" if bool(st.session_state.get("recency_weighting_enabled", True)) else "Eşit ağırlık",
         "ornek_durum": ornek_durum,
         "ornek_renk": ornek_renk,
         "onerilen_tolerans": rehber["onerilen_tolerans"],
@@ -4164,6 +4272,7 @@ def hassasiyet_birlesik_hesapla(
       - Örnek sayısı: puan vermez; yalnızca yeterlilik şartıdır.
       - Çok az medyan örnekte ayrıca ceza uygulanır.
       - Marketin geçmiş backtest başarısı güvene küçük bir düzeltme yapar.
+      - İsteğe bağlı yakın-sezon ağırlığı, ham oran/market yüzdelerini güncele yaklaştırır.
     """
     market_alanlari = {
         "MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
@@ -6655,6 +6764,16 @@ with st.container(key="sticky_analysis_controls"):
             yillar = st.multiselect(
                 "Sezonlar", options=sezon_secenekleri, default=sezon_secenekleri,
                 key="top_seasons", on_change=clear_backtest_on_change,
+            )
+            st.checkbox(
+                "Yakın sezonları daha değerli say",
+                value=True,
+                key="recency_weighting_enabled",
+                help=(
+                    "Açıkken aynı oranlı geçmiş maçlarda hedef sezona yakın sezonlar daha fazla ağırlık alır: "
+                    "1.00 / 0.90 / 0.75 / 0.60 / 0.45 / 0.35. Eski sezonlar silinmez; örnek sayısı gerçek maç adedi olarak kalır."
+                ),
+                on_change=clear_backtest_on_change,
             )
             sadece_ayni_lig = st.checkbox(
                 "Sadece aynı lig verilerini kullan", value=False,
