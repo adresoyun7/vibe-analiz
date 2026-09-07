@@ -5800,6 +5800,13 @@ def gecmis_tablo_stili(tablo):
             return "background-color:#374151;color:#f9fafb;font-weight:800"
         return ""
 
+    def evet_hayir_renk(value):
+        if str(value) == "Evet":
+            return "background-color:#6b21a8;color:#faf5ff;font-weight:900"
+        if str(value) == "Hayır":
+            return "background-color:#9a3412;color:#fff7ed;font-weight:900"
+        return ""
+
     def olay_renk(value):
         metin = str(value)
         if "İki yarıda da KG" in metin:
@@ -5818,6 +5825,8 @@ def gecmis_tablo_stili(tablo):
         stil = stil.map(alt_ust_renk, subset=["2.5"])
     if "KG" in tablo.columns:
         stil = stil.map(kg_renk, subset=["KG"])
+    if "İki yarı 1.5 Üst" in tablo.columns:
+        stil = stil.map(evet_hayir_renk, subset=["İki yarı 1.5 Üst"])
     olay_kolonlari = [c for c in ["Özel olay", "Yüksek oran olayı"] if c in tablo.columns]
     if olay_kolonlari:
         stil = stil.map(olay_renk, subset=olay_kolonlari)
@@ -5916,7 +5925,10 @@ def oran_filtresi_istatistikleri(tum_ornekler, goster_ms=True, goster_kg=True,
         ilk_yari_gol = b["HTHG"] + b["HTAG"]
         ikinci_yari_gol = (b["FTHG"] - b["HTHG"]) + (b["FTAG"] - b["HTAG"])
         iki_yari_15 = (ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)
-        tanimlar.append(("Her iki yarı 1.5 Üst", iki_yari_15, "Yarılar"))
+        tanimlar.extend([
+            ("Her iki yarı 1.5 Üst Evet", iki_yari_15, "Yarılar"),
+            ("Her iki yarı 1.5 Üst Hayır", ~iki_yari_15, "Yarılar"),
+        ])
 
     istatistikler = []
     for label, mask, grup in tanimlar:
@@ -7516,213 +7528,36 @@ elif st.session_state.get('sayfa_modu') == 'Backtest':
             key='backtest_baslat_btn',
         )
 elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
-    with ust_analiz_buton_alani.container():
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        oran_filtresi_btn = st.button(
-            '📊 ORAN FİLTRESİNİ ÇALIŞTIR',
-            use_container_width=True,
-            type='primary',
-            key='oran_filtresi_btn',
-        )
-elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
-    with ust_analiz_buton_alani.container():
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        yuksek_oran_btn = st.button(
-            '💎 ORANLILARI BUL',
-            use_container_width=True,
-            type='primary',
-            key='yuksek_oran_btn',
-        )
-elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
-    with ust_analiz_buton_alani.container():
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        sonuc_yenile_btn = st.button(
-            '🔄 SONUÇLARI YENİLE',
-            use_container_width=True,
-            type='primary',
-            key='sonuclari_yenile_btn',
-        )
-elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
-    with ust_analiz_buton_alani.container():
-        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
-        canli_yenile_btn = st.button(
-            '🔄 CANLIYI YENİLE',
-            use_container_width=True,
-            type='primary',
-            key='canliyi_yenile_btn',
-        )
-
-
-if gecmis_btn:
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ API Key ve en az bir lig seçin.")
+    oran_liste = st.session_state.get("oran_filtresi_list")
+    if oran_liste is None:
+        st.info("Lig, tarih ve marketleri seçip ORAN FİLTRESİNİ ÇALIŞTIR butonuna bas.")
+    elif not oran_liste:
+        st.warning("Seçilen hassasiyet ve minimum örnek sayısıyla eşleşen güncel maç bulunamadı.")
     else:
-        with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
-            gi_gecmis = futbol_veri_motoru(tuple(yillar))
-            gi_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
-            inceleme = []
-            for _, gi_mac in gi_bulten.iterrows():
-                ornekler = gecmis_ornekleri_bul(
-                    gi_gecmis,
-                    gi_mac,
-                    TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    limit=gecmis_limit,
-                )
-                # Satır başlığında aynı lig / toplam örnek sayısını gösterebilmek için
-                # toplam örnek sayısını ayrıca sakla. Aynı lig filtresi kapalıysa
-                # mevcut sonuç zaten toplam örnek listesidir; ekstra hesap yapma.
-                if sadece_ayni_lig:
-                    tum_ornekler = gecmis_ornekleri_bul(
-                        gi_gecmis,
-                        gi_mac,
-                        TOLERANS,
-                        sadece_ayni_lig=False,
-                        limit=gecmis_limit,
-                    )
-                    tum_ornek_sayisi = int(len(tum_ornekler))
-                else:
-                    tum_ornek_sayisi = int(len(ornekler))
-                inceleme.append({
-                    "m": gi_mac.to_dict(),
-                    "ornekler": ornekler,
-                    "tum_ornek_sayisi": tum_ornek_sayisi,
-                })
-            # Geçmiş Örnekleri sıralaması:
-            # 1) İY, MS, 2.5 veya KG içindeki EN YÜKSEK YÜZDE çoktan aza
-            # 2) En yüksek yüzde eşitse toplam örnek sayısı çoktan aza
-            inceleme.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
-            st.session_state.gecmis_inceleme_list = inceleme
-            st.rerun()
+        st.success(f"{len(oran_liste)} güncel maç için benzer oran istatistiği bulundu.")
 
-if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
-    inceleme = st.session_state.get("gecmis_inceleme_list")
-    if inceleme is None:
-        st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
-    elif not inceleme:
-        st.warning("Bu tarih ve özel filtrelerle eşleşen maç bulunamadı.")
-    else:
-        # Eski session verisi kalmış olsa bile aynı gelişmiş sıralamayı uygula.
-        inceleme = sorted(
-            inceleme,
-            key=gecmis_ornek_siralama_anahtari,
-            reverse=True,
-        )
-        st.success(f"{len(inceleme)} güncel maç bulundu.")
-
-        # Geçmiş Örnekleri için hızlı görünüm/filtre anahtarları.
-        # İki aynı-lig kontrolü çift yönlü callback ile tek ayar gibi çalışır.
-        mevcut_ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
-        if "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
-            st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
-        if "gecmis_ayni_lig_uygulandi" not in st.session_state:
-            st.session_state["gecmis_ayni_lig_uygulandi"] = mevcut_ayni_lig
-        if "gecmis_oranlari_goster" not in st.session_state:
-            st.session_state["gecmis_oranlari_goster"] = False
-
-        ust_bos, ust_ayni, ust_oran = st.columns([6.2, 1.45, 1.25], gap="small")
-        with ust_ayni:
-            gecmis_ayni_lig = st.toggle(
-                "Sadece aynı ligler",
-                key="gecmis_sadece_ayni_lig_toggle",
-                help="Açıkken geçmiş örnekler yalnızca güncel maçın kendi liginden alınır. Her maç satırında aynı lig / toplam örnek sayısı gösterilir.",
-                on_change=sync_ayni_lig_gecmisten_globale,
-            )
-        with ust_oran:
-            gecmis_oranlari_goster = st.toggle(
-                "Oranları göster",
-                key="gecmis_oranlari_goster",
-                help="Kapatınca maç başlığındaki ve geçmiş tablo içindeki 1-X-2 oranları gizlenir.",
-            )
-
-        # Aynı lig anahtarı değiştiyse mevcut maç listesini API'ye tekrar gitmeden
-        # yalnızca yerel/tarihsel veriyle yeniden hesapla. Karşılaştırmayı global
-        # widget ile değil, bu listenin en son uygulanan durumuyla yapıyoruz; böylece
-        # AÇIK -> KAPALI geçişinde de eski (tüm ligler) görünüm geri gelir.
-        gecmis_ayni_lig_uygulandi = bool(st.session_state.get("gecmis_ayni_lig_uygulandi", mevcut_ayni_lig))
-        if bool(gecmis_ayni_lig) != gecmis_ayni_lig_uygulandi:
-            # `sadece_ayni_lig` anahtarı sayfanın başka yerinde zaten bir widget key'i
-            # olarak oluşturulmuş olabilir. Widget oluşturulduktan sonra aynı key'e
-            # session_state üzerinden değer yazmak StreamlitWidgetAlreadyInstantiatedError
-            # üretir. Bu yüzden Geçmiş Örnekleri anahtarını bağımsız tutup yalnızca
-            # bu görünümün örneklerini yeniden hesaplıyoruz.
-            gi_gecmis_yeniden = futbol_veri_motoru(tuple(yillar))
-            yeniden = []
-            for eski_item in inceleme:
-                gi_mac_dict = dict(eski_item.get("m", {}) or {})
-                gi_mac_series = pd.Series(gi_mac_dict)
-                yeni_ornekler = gecmis_ornekleri_bul(
-                    gi_gecmis_yeniden,
-                    gi_mac_series,
-                    TOLERANS,
-                    sadece_ayni_lig=bool(gecmis_ayni_lig),
-                    limit=gecmis_limit,
-                )
-                # Toggle açıkken satırda "aynı lig / toplam" gösterebilmek için
-                # toplam örnek sayısını filtresiz olarak ayrıca hesapla.
-                if bool(gecmis_ayni_lig):
-                    tum_ornekler = gecmis_ornekleri_bul(
-                        gi_gecmis_yeniden,
-                        gi_mac_series,
-                        TOLERANS,
-                        sadece_ayni_lig=False,
-                        limit=gecmis_limit,
-                    )
-                    tum_ornek_sayisi = int(len(tum_ornekler))
-                else:
-                    tum_ornek_sayisi = int(len(yeni_ornekler))
-                yeniden.append({
-                    "m": gi_mac_dict,
-                    "ornekler": yeni_ornekler,
-                    "tum_ornek_sayisi": tum_ornek_sayisi,
-                })
-            yeniden.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
-            st.session_state.gecmis_inceleme_list = yeniden
-            st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_ayni_lig)
-            st.rerun()
-
-        # Geçmiş maç başlıklarını eskisi gibi aralıksız/kompakt göster.
-        # Key'li container'lar Streamlit'in varsayılan dikey boşluğunu taşıdığı için
-        # negatif alt marj ile yalnızca bu görünümde arayı kapatıyoruz.
+        # Geçmiş Örnekleri görünümü gibi kompakt maç satırları.
         st.markdown(
             """
             <style>
-            [class*="st-key-gecmis_mac_baslik_"] {
+            [class*="st-key-oran_mac_baslik_"] {
                 margin:0 !important;
                 padding:0 !important;
-            }
-            [class*="st-key-gecmis_mac_baslik_"] > div[data-testid="stVerticalBlock"] {
-                gap:0 !important;
-                margin:0 !important;
-                padding:0 !important;
-            }
-            /* Maç kartlarını taşıyan ana Streamlit dikey bloğunda ekstra satır aralığı bırakma. */
-            div[data-testid="stVerticalBlock"]:has(> div [class*="st-key-gecmis_mac_baslik_"]) {
-                gap:0 !important;
-            }
-            [class*="st-key-gecmis_mac_baslik_"] div[data-testid="stElementContainer"] {
-                margin-top:0 !important;
-                margin-bottom:0 !important;
-            }
-            /* Geçmiş maç başlıklarını olabildiğince dip dibe getir.
-               Streamlit'in key'li container çevresinde bıraktığı dikey alanı da sıfırla. */
-            [class*="st-key-gecmis_mac_baslik_"] {
-                margin-top:0 !important;
                 margin-bottom:-10px !important;
-                padding-top:0 !important;
-                padding-bottom:0 !important;
             }
-            [class*="st-key-gecmis_mac_baslik_"] > div[data-testid="stVerticalBlock"],
-            [class*="st-key-gecmis_mac_baslik_"] > div[data-testid="stVerticalBlockBorderWrapper"],
-            [class*="st-key-gecmis_mac_baslik_"] [data-testid="stVerticalBlockBorderWrapper"] {
-                margin-top:0 !important;
-                margin-bottom:0 !important;
-                padding-top:0 !important;
-                padding-bottom:0 !important;
+            [class*="st-key-oran_mac_baslik_"] > div[data-testid="stVerticalBlock"] {
+                gap:0 !important;
+                margin:0 !important;
+                padding:0 !important;
+            }
+            div[data-testid="stVerticalBlock"]:has(> div [class*="st-key-oran_mac_baslik_"]) {
                 gap:0 !important;
             }
-            /* Kapalı maç satırının yüksekliğini de biraz azalt; içerik açılınca tablo etkilenmez. */
-            [class*="st-key-gecmis_mac_baslik_"] [data-testid="stExpander"] summary {
+            [class*="st-key-oran_mac_baslik_"] div[data-testid="stElementContainer"] {
+                margin-top:0 !important;
+                margin-bottom:0 !important;
+            }
+            [class*="st-key-oran_mac_baslik_"] [data-testid="stExpander"] summary {
                 min-height:38px !important;
                 padding-top:4px !important;
                 padding-bottom:4px !important;
@@ -7731,520 +7566,172 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             """,
             unsafe_allow_html=True,
         )
-        for sira, item in enumerate(inceleme, start=1):
-            m = item["m"]
-            ornekler = item["ornekler"]
-            saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
-            ozet = gecmis_ornek_ozeti(ornekler)
-            iy_sonuc, _, iy_pct = ozet["iy"]
-            ms_sonuc, _, ms_pct = ozet["ms"]
-            ou_sonuc, _, ou_pct = ozet["ou25"]
-            kg_sonuc, _, kg_pct = ozet["kg"]
-            # Sağdaki özet değerlerinden yüzdesi en yüksek olanı ayrı renkle vurgula.
-            # Eşitlik varsa aynı en yüksek yüzdeye sahip olanların hepsi vurgulanır.
-            ozetler = [
-                ("İY", iy_sonuc, float(iy_pct)),
-                ("MS", ms_sonuc, float(ms_pct)),
-                ("2.5", ou_sonuc, float(ou_pct)),
-                ("KG", kg_sonuc, float(kg_pct)),
-            ]
-            max_ozet_pct = max((x[2] for x in ozetler), default=0.0)
-            koyu_aktif = bool(st.session_state.get("koyu_mod", False))
-            normal_renk = "#67e8f9" if koyu_aktif else "#0369a1"
-            guclu_renk = "#facc15" if koyu_aktif else "#b45309"
 
-            if len(ornekler) > 0:
-                ozet_html_parcalar = []
-                for idx_ozet, (etiket_ozet, sonuc_ozet, pct_ozet) in enumerate(ozetler):
-                    guclu_class = " gecmis-ozet-en-guclu" if pct_ozet == max_ozet_pct else ""
-                    ayirici = '<span class="gecmis-ozet-ayirici"> · </span>' if idx_ozet else ""
-                    ozet_html_parcalar.append(
-                        ayirici
-                        + f'<span class="gecmis-ozet-deger{guclu_class}">{escape(etiket_ozet)} {escape(str(sonuc_ozet))} %{pct_ozet:.0f}</span>'
-                    )
-                tekrar_ozeti_html = "".join(ozet_html_parcalar)
-            else:
-                # 0 örnekte sağ tarafta anlamsız %0 değerleri gösterme.
-                tekrar_ozeti_html = ""
-
-            with st.container(key=f"gecmis_mac_baslik_{sira}"):
-                st.markdown(
-                    f"""
-                    <style>
-                    .st-key-gecmis_mac_baslik_{sira} {{
-                        position:relative !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
-                        display:flex !important;
-                        align-items:center !important;
-                        width:100% !important;
-                        padding-right:min(390px, 42vw) !important;
-                        overflow:hidden !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary p {{
-                        overflow:hidden !important;
-                        text-overflow:ellipsis !important;
-                        white-space:nowrap !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag {{
-                        position:absolute !important;
-                        right:14px !important;
-                        top:54px !important;
-                        transform:translateY(-50%) !important;
-                        z-index:18 !important;
-                        max-width:min(380px, 41vw) !important;
-                        overflow:hidden !important;
-                        text-overflow:ellipsis !important;
-                        color:{normal_renk} !important;
-                        -webkit-text-fill-color:{normal_renk} !important;
-                        font-weight:800 !important;
-                        font-size:clamp(.68rem, .72vw, .84rem) !important;
-                        letter-spacing:0 !important;
-                        white-space:nowrap !important;
-                        pointer-events:none !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag .gecmis-ozet-deger {{
-                        color:{normal_renk} !important;
-                        -webkit-text-fill-color:{normal_renk} !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag .gecmis-ozet-en-guclu {{
-                        color:{guclu_renk} !important;
-                        -webkit-text-fill-color:{guclu_renk} !important;
-                        font-weight:950 !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag .gecmis-ozet-ayirici {{
-                        color:{normal_renk} !important;
-                        -webkit-text-fill-color:{normal_renk} !important;
-                        opacity:.75 !important;
-                    }}
-                    @media (max-width: 1150px) {{
-                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
-                            padding-right:250px !important;
-                        }}
-                        .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag {{
-                            max-width:240px !important;
-                            font-size:.68rem !important;
-                        }}
-                    }}
-                    </style>
-                    <div class="gecmis-ozet-sag" style="display:{'block' if tekrar_ozeti_html else 'none'}">{tekrar_ozeti_html}</div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                tam_ekran_aktif = st.session_state.get("gecmis_tam_ekran_sira") == sira
-
-                # Sadece ikonlu düğme; expander başlığının SOLUNDA, aynı kutunun içinde görünür.
-                # :has() ile butonun Streamlit element kabını akıştan çıkarıp başlık üzerine bindiriyoruz.
-                st.markdown(
-                    f"""
-                    <style>
-                    .st-key-gecmis_mac_baslik_{sira} {{
-                        position:relative !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
-                        position:absolute !important;
-                        left:42px !important;
-                        top:39px !important;
-                        z-index:20 !important;
-                        width:30px !important;
-                        min-width:30px !important;
-                        height:30px !important;
-                        margin:0 !important;
-                        padding:0 !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) button {{
-                        width:30px !important;
-                        min-width:30px !important;
-                        height:30px !important;
-                        min-height:30px !important;
-                        padding:0 !important;
-                        border-radius:7px !important;
-                        font-size:16px !important;
-                        line-height:1 !important;
-                    }}
-                    .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
-                        padding-left:76px !important;
-                    }}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-                if st.button(
-                    "↙" if tam_ekran_aktif else "⛶",
-                    key=f"gecmis_tam_ekran_btn_{sira}",
-                    help="Normal görünüme dön" if tam_ekran_aktif else "Tüm geçmiş sonuçları tek ekrana sığdır",
-                ):
-                    st.session_state.gecmis_tam_ekran_sira = None if tam_ekran_aktif else sira
-                    st.rerun()
-
-                if tam_ekran_aktif:
-                    tam_arka = '#071426' if bool(st.session_state.get('koyu_mod', False)) else '#f8fafc'
-                    st.markdown(
-                        f"""
-                        <style>
-                        .st-key-gecmis_mac_baslik_{sira} {{
-                            position:fixed !important;
-                            inset:0 !important;
-                            z-index:999999 !important;
-                            background:{tam_arka} !important;
-                            padding:8px 12px !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                        }}
-                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] {{
-                            width:100% !important;
-                            max-width:none !important;
-                            height:calc(100vh - 16px) !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                        }}
-                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] {{
-                            height:calc(100vh - 62px) !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                            padding:2px 4px 4px 4px !important;
-                        }}
-                        /* Tam ekranda tablo normal satır yüksekliğini korur.
-                           Satırlar ekran yüksekliğini aşarsa tablonun kendi dikey kaydırması devreye girer. */
-                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stDataFrame"] {{
-                            max-height:calc(100vh - 82px) !important;
-                        }}
-                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] > div,
-                        .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpanderDetails"] [data-testid="stVerticalBlock"] {{
-                            gap:0 !important;
-                            margin:0 !important;
-                            padding:0 !important;
-                        }}
-                        .st-key-gecmis_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
-                            position:absolute !important;
-                            left:42px !important;
-                            top:14px !important;
-                        }}
-                        </style>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
-                oran_baslik = (
-                    f" · Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f}"
-                    if gecmis_oranlari_goster else ""
-                )
-                # Sadece aynı ligler açıkken sayı maç satırında gösterilir:
-                # örn. 7/25 örnek = 7 aynı lig örneği / 25 toplam benzer örnek.
-                if bool(gecmis_ayni_lig):
-                    tum_ornek_sayisi = int(item.get("tum_ornek_sayisi", len(ornekler)) or 0)
-                    ornek_baslik = f"{len(ornekler)}/{tum_ornek_sayisi} örnek"
-                else:
-                    ornek_baslik = f"{len(ornekler)} örnek"
-                with st.expander(
-                    f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat}"
-                    f"{oran_baslik} · {ornek_baslik}",
-                    expanded=tam_ekran_aktif,
-                ):
-                    if ornekler.empty:
-                        st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
-                        continue
-                    tablo_veri = {
-                        "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
-                        "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
-                        "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
-                    }
-                    if gecmis_oranlari_goster:
-                        # Filtre hangi oranı kullandıysa tabloda da yalnızca onu göster.
-                        # REF_* kapanış oranıdır; eski sezonda yoksa yükleyici B365'e düşer.
-                        tablo_veri.update({
-                            "1": ornekler["REF_H"].round(2) if "REF_H" in ornekler.columns else ornekler["B365H"].round(2),
-                            "X": ornekler["REF_D"].round(2) if "REF_D" in ornekler.columns else ornekler["B365D"].round(2),
-                            "2": ornekler["REF_A"].round(2) if "REF_A" in ornekler.columns else ornekler["B365A"].round(2),
-                        })
-                    tablo_veri.update({
-                        "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
-                        "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
-                        "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
-                        "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
-                        "Özel olay": ornekler["Olay"],
-                    })
-                    tablo = pd.DataFrame(tablo_veri)
-                    if tam_ekran_aktif:
-                        # Tam ekran yalnızca inceleme alanını büyütür; tablo görünümü normal modla aynıdır.
-                        # Az örnekte satırlar gereksiz büyümez. Çok örnekte ise tablo kendi dikey
-                        # kaydırma çubuğunu gösterir. Genişlik yetmezse Streamlit yatay kaydırmayı sağlar.
-                        normal_satir_yuksekligi = 35
-                        baslik_yuksekligi = 38
-                        tam_ekran_tablo_yuksekligi = min(
-                            900,
-                            baslik_yuksekligi + max(1, len(tablo)) * normal_satir_yuksekligi,
-                        )
-                        st.dataframe(
-                            gecmis_tablo_stili(tablo),
-                            use_container_width=True,
-                            hide_index=True,
-                            height=tam_ekran_tablo_yuksekligi,
-                        )
-                    else:
-                        st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
-    legal_footer()
-    st.stop()
-
-
-if oran_filtresi_btn:
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ API Key ve en az bir lig seçin.")
-    elif not (oran_filter_ms or oran_filter_kg or oran_filter_25 or oran_filter_cift_yari_15):
-        st.error("⚠️ En az bir market seçin.")
-    else:
-        with st.spinner("📊 Benzer oranlı geçmiş maçların temel marketleri taranıyor..."):
-            of_gecmis = futbol_veri_motoru(tuple(yillar))
-            of_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
-            oran_filtresi_list = []
-            for _, of_mac in of_bulten.iterrows():
-                tum_ornekler = gecmis_ornekleri_bul(
-                    of_gecmis,
-                    of_mac,
-                    TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    limit=100000,
-                )
-                toplam_benzer = int(len(tum_ornekler))
-                if tum_ornekler.empty or toplam_benzer < int(oran_filter_min_ornek):
-                    continue
-                istatistikler, en_iyi = oran_filtresi_istatistikleri(
-                    tum_ornekler,
-                    goster_ms=oran_filter_ms,
-                    goster_kg=oran_filter_kg,
-                    goster_25=oran_filter_25,
-                    goster_cift_yari_15=oran_filter_cift_yari_15,
-                )
-                if not istatistikler:
-                    continue
-                oran_filtresi_list.append({
-                    "m": of_mac.to_dict(),
-                    "ornekler": tum_ornekler,
-                    "istatistikler": istatistikler,
-                    "en_iyi": en_iyi,
-                    "toplam_benzer": toplam_benzer,
-                })
-
-            oran_filtresi_list.sort(
-                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
-                reverse=True,
-            )
-            st.session_state.oran_filtresi_list = oran_filtresi_list
-            st.rerun()
-
-if yuksek_oran_btn:
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ API Key ve en az bir lig seçin.")
-    elif not (yuksek_filtre_12 or yuksek_filtre_21 or yuksek_filtre_cift_yari_kg):
-        st.error("⚠️ En az bir yüksek oran marketi seçin.")
-    else:
-        with st.spinner("💎 1/2, 2/1 ve iki yarıda da KG örnekleri taranıyor..."):
-            yo_gecmis = futbol_veri_motoru(tuple(yillar))
-            yo_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
-            yuksek_liste = []
-            for _, yo_mac in yo_bulten.iterrows():
-                tum_ornekler = gecmis_ornekleri_bul(
-                    yo_gecmis,
-                    yo_mac,
-                    TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    limit=100000,
-                )
-                ornekler = gecmis_ornekleri_bul(
-                    yo_gecmis,
-                    yo_mac,
-                    TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    filtre_12=yuksek_filtre_12,
-                    filtre_21=yuksek_filtre_21,
-                    filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
-                    limit=yuksek_limit,
-                )
-                if not ornekler.empty:
-                    istatistikler, en_iyi, oneri = yuksek_oran_istatistikleri(
-                        tum_ornekler,
-                        filtre_12=yuksek_filtre_12,
-                        filtre_21=yuksek_filtre_21,
-                        filtre_cift_yari_kg=yuksek_filtre_cift_yari_kg,
-                    )
-                    yuksek_liste.append({
-                        "m": yo_mac.to_dict(),
-                        "ornekler": ornekler,
-                        "istatistikler": istatistikler,
-                        "en_iyi": en_iyi,
-                        "oneri": oneri,
-                        "toplam_benzer": len(tum_ornekler),
-                    })
-            yuksek_liste.sort(
-                key=lambda x: (x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
-                reverse=True,
-            )
-            st.session_state.yuksek_oran_list = yuksek_liste
-            st.rerun()
-
-if st.session_state.get('sayfa_modu') == 'Oran Filtresi':
-    oran_liste = st.session_state.get("oran_filtresi_list")
-    if oran_liste is None:
-        st.info("Lig, tarih ve marketleri seçip ORAN FİLTRESİNİ ÇALIŞTIR butonuna bas.")
-    elif not oran_liste:
-        st.warning("Seçilen hassasiyet ve minimum örnek sayısıyla eşleşen güncel maç bulunamadı.")
-    else:
-        st.success(f"{len(oran_liste)} güncel maç için benzer oran istatistiği bulundu.")
         for sira, item in enumerate(oran_liste, start=1):
             m = item["m"]
             ornekler = item["ornekler"]
             istatistikler = item.get("istatistikler", [])
-            en_iyi = item.get("en_iyi", {})
             toplam_benzer = int(item.get("toplam_benzer", len(ornekler)))
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
 
-            # Seçili marketlerin TÜM yüzdelerini maç başlığının sağında göster.
-            # En yüksek yüzde diğerlerinden farklı renkte vurgulanır.
-            en_yuksek_oran = max(
-                [float(x.get("oran", 0) or 0) for x in istatistikler],
-                default=0.0,
-            )
-            istatistik_html = []
-            for bilgi in istatistikler:
-                label = escape(str(bilgi.get("label", "—")))
-                yuzde = float(bilgi.get("oran", 0) or 0)
-                en_yuksek_mi = abs(yuzde - en_yuksek_oran) < 1e-9
-                cls = "of-stat of-stat-best" if en_yuksek_mi else "of-stat"
-                istatistik_html.append(
-                    f'<span class="{cls}"><b>{label}</b> %{yuzde:.1f}</span>'
+            # Her seçili market grubunda yalnızca en yüksek yüzdeli sonuç başlıkta gösterilir.
+            # Örn. 2.5 Üst %68 ise aynı anda 2.5 Alt yazılmaz.
+            grup_sirasi = ["MS", "KG", "2.5", "Yarılar"]
+            grup_en_iyiler = []
+            for grup in grup_sirasi:
+                adaylar = [x for x in istatistikler if x.get("grup") == grup]
+                if not adaylar:
+                    continue
+                en_iyi_grup = max(adaylar, key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("hit", 0) or 0)))
+                label = str(en_iyi_grup.get("label", "—"))
+                if grup == "Yarılar":
+                    label = label.replace("Her iki yarı 1.5 Üst ", "İY 1.5 ")
+                grup_en_iyiler.append((label, float(en_iyi_grup.get("oran", 0) or 0)))
+
+            # Gruplar arasındaki en yüksek yüzde sarı, diğerleri camgöbeği.
+            max_baslik_pct = max((pct for _, pct in grup_en_iyiler), default=0.0)
+            koyu_aktif = bool(st.session_state.get("koyu_mod", False))
+            normal_renk = "#67e8f9" if koyu_aktif else "#0369a1"
+            guclu_renk = "#facc15" if koyu_aktif else "#b45309"
+            baslik_parcalar = []
+            for idx, (label, pct) in enumerate(grup_en_iyiler):
+                guclu = abs(pct - max_baslik_pct) < 1e-9
+                cls = "oran-ozet-deger oran-ozet-en-guclu" if guclu else "oran-ozet-deger"
+                ayirici = '<span class="oran-ozet-ayirici"> · </span>' if idx else ""
+                baslik_parcalar.append(
+                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f}</span>'
+                )
+            baslik_ozeti_html = "".join(baslik_parcalar)
+
+            with st.container(key=f"oran_mac_baslik_{sira}"):
+                st.markdown(
+                    f"""
+                    <style>
+                    .st-key-oran_mac_baslik_{sira} {{
+                        position:relative !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] summary {{
+                        display:flex !important;
+                        align-items:center !important;
+                        width:100% !important;
+                        padding-right:min(500px, 52vw) !important;
+                        overflow:hidden !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] summary p {{
+                        overflow:hidden !important;
+                        text-overflow:ellipsis !important;
+                        white-space:nowrap !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} .oran-ozet-sag {{
+                        position:absolute !important;
+                        right:14px !important;
+                        top:29px !important;
+                        transform:translateY(-50%) !important;
+                        z-index:18 !important;
+                        max-width:min(490px, 51vw) !important;
+                        overflow:hidden !important;
+                        text-overflow:ellipsis !important;
+                        color:{normal_renk} !important;
+                        -webkit-text-fill-color:{normal_renk} !important;
+                        font-weight:850 !important;
+                        font-size:clamp(.68rem, .72vw, .84rem) !important;
+                        white-space:nowrap !important;
+                        pointer-events:none !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} .oran-ozet-deger {{
+                        color:{normal_renk} !important;
+                        -webkit-text-fill-color:{normal_renk} !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} .oran-ozet-en-guclu {{
+                        color:{guclu_renk} !important;
+                        -webkit-text-fill-color:{guclu_renk} !important;
+                        font-weight:950 !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} .oran-ozet-ayirici {{
+                        color:{normal_renk} !important;
+                        -webkit-text-fill-color:{normal_renk} !important;
+                        opacity:.75 !important;
+                    }}
+                    @media (max-width:1150px) {{
+                        .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] summary {{
+                            padding-right:280px !important;
+                        }}
+                        .st-key-oran_mac_baslik_{sira} .oran-ozet-sag {{
+                            max-width:270px !important;
+                            font-size:.66rem !important;
+                        }}
+                    }}
+                    </style>
+                    <div class="oran-ozet-sag" style="display:{'block' if baslik_ozeti_html else 'none'}">{baslik_ozeti_html}</div>
+                    """,
+                    unsafe_allow_html=True,
                 )
 
-            st.markdown(
-                f"""
-                <style>
-                .of-match-head {{
-                    display:flex;
-                    align-items:center;
-                    justify-content:space-between;
-                    gap:18px;
-                    width:100%;
-                    padding:11px 14px;
-                    margin:0 0 6px 0;
-                    border:1px solid #223c63;
-                    border-radius:12px;
-                    background:linear-gradient(90deg,#07111f 0%,#0a1830 100%);
-                }}
-                .of-match-left {{
-                    min-width:260px;
-                    color:#f8fafc !important;
-                    font-weight:800;
-                    font-size:.94rem;
-                    white-space:nowrap;
-                }}
-                .of-match-right {{
-                    margin-left:auto;
-                    display:flex;
-                    justify-content:flex-end;
-                    align-items:center;
-                    gap:7px;
-                    flex-wrap:wrap;
-                    text-align:right;
-                }}
-                .of-stat {{
-                    display:inline-block;
-                    padding:4px 8px;
-                    border-radius:7px;
-                    border:1px solid #334155;
-                    background:#111827;
-                    color:#cbd5e1 !important;
-                    font-size:.76rem;
-                    line-height:1.1;
-                    white-space:nowrap;
-                }}
-                .of-stat b {{ color:#f8fafc !important; }}
-                .of-stat-best {{
-                    background:#173b2a !important;
-                    border-color:#22c55e !important;
-                    color:#86efac !important;
-                    box-shadow:0 0 0 1px rgba(34,197,94,.10);
-                }}
-                .of-stat-best b {{ color:#86efac !important; }}
-                @media (max-width: 900px) {{
-                    .of-match-head {{align-items:flex-start;flex-direction:column;}}
-                    .of-match-right {{margin-left:0;justify-content:flex-start;text-align:left;}}
-                    .of-match-left {{min-width:0;white-space:normal;}}
-                }}
-                </style>
-                <div class="of-match-head">
-                    <div class="of-match-left">#{sira}&nbsp;&nbsp;{escape(str(m.get('ev', '')))} – {escape(str(m.get('dep', '')))} &nbsp;·&nbsp; {escape(str(saat))}</div>
-                    <div class="of-match-right">{"".join(istatistik_html)}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                with st.expander(
+                    f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · {toplam_benzer} örnek",
+                    expanded=False,
+                ):
+                    ist_map = {x.get("label"): x for x in istatistikler}
 
-            with st.expander(
-                f"Geçmiş örnekleri · {toplam_benzer} maç · Oran {m.get('h', 0):.2f}/{m.get('b', 0):.2f}/{m.get('a', 0):.2f}",
-                expanded=(sira == 1),
-            ):
+                    if any(x.get("grup") == "MS" for x in istatistikler):
+                        st.markdown("#### ⚽ Maç Sonucu")
+                        cols = st.columns(3)
+                        for col, label in zip(cols, ["MS 1", "MS X", "MS 2"]):
+                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0, "toplam": toplam_benzer})
+                            with col:
+                                st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
 
-                ist_map = {x.get("label"): x for x in istatistikler}
+                    if any(x.get("grup") == "KG" for x in istatistikler):
+                        st.markdown("#### 🔁 Karşılıklı Gol")
+                        cols = st.columns(2)
+                        for col, label in zip(cols, ["KG Var", "KG Yok"]):
+                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
+                            with col:
+                                st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
 
-                if any(x.get("grup") == "MS" for x in istatistikler):
-                    st.markdown("#### ⚽ Maç Sonucu")
-                    cols = st.columns(3)
-                    for col, label in zip(cols, ["MS 1", "MS X", "MS 2"]):
-                        bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0, "toplam": toplam_benzer})
-                        with col:
-                            st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
+                    if any(x.get("grup") == "2.5" for x in istatistikler):
+                        st.markdown("#### 🎯 2.5 Gol")
+                        cols = st.columns(2)
+                        for col, label in zip(cols, ["2.5 Üst", "2.5 Alt"]):
+                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
+                            with col:
+                                st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
 
-                if any(x.get("grup") == "KG" for x in istatistikler):
-                    st.markdown("#### 🔁 Karşılıklı Gol")
-                    cols = st.columns(2)
-                    for col, label in zip(cols, ["KG Var", "KG Yok"]):
-                        bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
-                        with col:
-                            st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
+                    if any(x.get("grup") == "Yarılar" for x in istatistikler):
+                        st.markdown("#### ⏱️ Her İki Yarı 1.5 Üst")
+                        cols = st.columns(2)
+                        for col, label, baslik in [
+                            (cols[0], "Her iki yarı 1.5 Üst Evet", "Evet"),
+                            (cols[1], "Her iki yarı 1.5 Üst Hayır", "Hayır"),
+                        ]:
+                            bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
+                            with col:
+                                st.metric(baslik, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
 
-                if any(x.get("grup") == "2.5" for x in istatistikler):
-                    st.markdown("#### 🎯 2.5 Gol")
-                    cols = st.columns(2)
-                    for col, label in zip(cols, ["2.5 Üst", "2.5 Alt"]):
-                        bilgi = ist_map.get(label, {"hit": 0, "oran": 0.0})
-                        with col:
-                            st.metric(label, f"%{float(bilgi.get('oran', 0)):.1f}", f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç", delta_color="off")
+                    try:
+                        ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
+                        ikinci_yari_gol = (ornekler["FTHG"] - ornekler["HTHG"]) + (ornekler["FTAG"] - ornekler["HTAG"])
+                        iki_yari_15_txt = ((ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)).map({True: "Evet", False: "Hayır"})
+                    except Exception:
+                        iki_yari_15_txt = pd.Series("—", index=ornekler.index)
 
-                if any(x.get("grup") == "Yarılar" for x in istatistikler):
-                    st.markdown("#### ⏱️ Her İki Yarı 1.5 Üst")
-                    bilgi = ist_map.get("Her iki yarı 1.5 Üst", {"hit": 0, "oran": 0.0})
-                    st.metric(
-                        "İlk yarı 1.5 Üst + İkinci yarı 1.5 Üst",
-                        f"%{float(bilgi.get('oran', 0)):.1f}",
-                        f"{int(bilgi.get('hit', 0))}/{toplam_benzer} maç",
-                        delta_color="off",
-                    )
-
-                # İncelemek isteyen kullanıcı için benzer geçmiş maçları da aynı kartın altında göster.
-                try:
-                    ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
-                    ikinci_yari_gol = (ornekler["FTHG"] - ornekler["HTHG"]) + (ornekler["FTAG"] - ornekler["HTAG"])
-                    iki_yari_15_txt = ((ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)).map({True: "Evet", False: "Hayır"})
-                except Exception:
-                    iki_yari_15_txt = pd.Series("—", index=ornekler.index)
-
-                tablo = pd.DataFrame({
-                    "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
-                    "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
-                    "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
-                    "Kapanış 1/X/2": (
-                        (ornekler["REF_H"] if "REF_H" in ornekler.columns else ornekler["B365H"]).round(2).astype(str)
-                        + " / "
-                        + (ornekler["REF_D"] if "REF_D" in ornekler.columns else ornekler["B365D"]).round(2).astype(str)
-                        + " / "
-                        + (ornekler["REF_A"] if "REF_A" in ornekler.columns else ornekler["B365A"]).round(2).astype(str)
-                    ),
-                    "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
-                    "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
-                    "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
-                    "İki yarı 1.5 Üst": iki_yari_15_txt,
-                })
-                st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+                    tablo = pd.DataFrame({
+                        "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
+                        "Lig": ornekler.get("league_code", pd.Series("-", index=ornekler.index)),
+                        "Geçmiş maç": ornekler["HomeTeam"].astype(str) + " - " + ornekler["AwayTeam"].astype(str),
+                        "Kapanış 1/X/2": (
+                            (ornekler["REF_H"] if "REF_H" in ornekler.columns else ornekler["B365H"]).round(2).astype(str)
+                            + " / "
+                            + (ornekler["REF_D"] if "REF_D" in ornekler.columns else ornekler["B365D"]).round(2).astype(str)
+                            + " / "
+                            + (ornekler["REF_A"] if "REF_A" in ornekler.columns else ornekler["B365A"]).round(2).astype(str)
+                        ),
+                        "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
+                        "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
+                        "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
+                        "İki yarı 1.5 Üst": iki_yari_15_txt,
+                    })
+                    st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
