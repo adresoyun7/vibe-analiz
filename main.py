@@ -9644,13 +9644,18 @@ else:
             combo_level = t.get("combo_level", "")
             level_text = f' · {combo_level}' if combo_level else ''
             combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
-        stability_html = ""
-        if t.get("stability_early_text"):
-            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>'
-        if t.get("stability_late_text"):
-            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>'
-        if not stability_html:
-            stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
+        # Kararlılık bilgisini kartta tek ve net bir satır olarak göster.
+        # Eski kayıtlarda stability_text boş olsa bile tolerans listesi / sayaçtan geri üret.
+        _stability_tols = list(t.get("stability_tols", []) or [])
+        _stability_count = int(t.get("stability_count", len(_stability_tols)) or len(_stability_tols))
+        _stability_text = str(t.get("stability_text", "") or "").strip()
+        if not _stability_text and _stability_tols:
+            _stability_text = " · ".join(str(x) for x in _stability_tols)
+        _stability_suffix = f" · {_stability_text}" if _stability_text else ""
+        stability_html = (
+            f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">'
+            f'🎯 Stabil: {_stability_count}/11{_stability_suffix}</div>'
+        )
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
@@ -9699,8 +9704,8 @@ else:
                   <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
-                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#8fa0ba">📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {float(t.get('birlesik_puan', t.get('score', t.get('ana_p', 0))) or 0):.1f} puan</div>
                 {stability_html}
               </div>
             </div>
