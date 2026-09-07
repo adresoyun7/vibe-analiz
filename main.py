@@ -8549,21 +8549,18 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             baslik_parcalar = []
             for idx, (label, pct, uzlasi, gecerli_hass) in enumerate(grup_en_iyiler):
                 guclu = abs(pct - max_baslik_pct) < 1e-9
-                ms_50_ustu = str(label).startswith("MS ") and pct > 50.0
-                if ms_50_ustu:
-                    # MS %50 üstündeyse, en yüksek yüzde olsa bile sarı vurguya dönmesin;
-                    # sakin ve ayrı bir renkte kalsın.
-                    cls = "oran-ozet-deger oran-ozet-ms-guclu"
+                kombo_50_ustu = (" + " in str(label) or str(label).startswith(("MS+", "KG+"))) and pct > 50.0
+                if kombo_50_ustu:
+                    # Kombo %50 üstündeyse diğer marketlerden ayrı, yumuşak mor tonda göster.
+                    cls = "oran-ozet-deger oran-ozet-kombo-guclu"
                 elif guclu:
                     cls = "oran-ozet-deger oran-ozet-en-guclu"
                 else:
                     cls = "oran-ozet-deger"
                 ayirici = '<span class="oran-ozet-ayirici"> · </span>' if idx else ""
-                # Oran Filtresi başlığında hassasiyet bilgisi yalnızca
-                # yüzdesi en yüksek (sarı) markette gösterilsin.
-                hass_yazi = f" · {uzlasi}/11 hass." if guclu else ""
+                # Başlıkta hassasiyet bilgisi gösterilmez; yalnızca maç detayında yer alır.
                 baslik_parcalar.append(
-                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f}{hass_yazi}</span>'
+                    ayirici + f'<span class="{cls}">{escape(label)} %{pct:.0f}</span>'
                 )
             baslik_ozeti_html = "".join(baslik_parcalar)
 
@@ -8611,7 +8608,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         -webkit-text-fill-color:{guclu_renk} !important;
                         font-weight:950 !important;
                     }}
-                    .st-key-oran_mac_baslik_{sira} .oran-ozet-ms-guclu {{
+                    .st-key-oran_mac_baslik_{sira} .oran-ozet-kombo-guclu {{
                         color:#a78bfa !important;
                         -webkit-text-fill-color:#a78bfa !important;
                         font-weight:850 !important;
@@ -8671,40 +8668,20 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                             with col:
                                 st.markdown(f"**{ikon} {baslik}**")
                                 detay_pct = float(en_iyi_detay.get('oran', 0) or 0)
-                                if baslik == "Maç Sonucu" and detay_pct > 50.0:
-                                    st.markdown(
-                                        f"""<style>
-                                        .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricValue\"],
-                                        .st-key-oran_ms50_{sira}_{detay_i} [data-testid=\"stMetricLabel\"] {{
-                                            color:#a78bfa !important;
-                                            -webkit-text-fill-color:#a78bfa !important;
-                                            font-weight:850 !important;
-                                        }}
-                                        </style>""",
-                                        unsafe_allow_html=True,
-                                    )
                                 detay_hass = int(en_iyi_detay.get('uzlasi', 0) or 0)
-                                # Sadece en yüksek yüzdeli kart hassasiyet sayısını göstersin.
+                                # Hassasiyet yalnızca maç detayında ve tüm istatistikler içindeki
+                                # en yüksek yüzdeli kartta gösterilir.
                                 detay_alt = (
                                     f"{detay_hass}/11 hass. · {toplam_benzer} örnek"
                                     if abs(detay_pct - max_baslik_pct) < 1e-9
                                     else f"{toplam_benzer} örnek"
                                 )
-                                if baslik == "Maç Sonucu" and detay_pct > 50.0:
-                                    with st.container(key=f"oran_ms50_{sira}_{detay_i}"):
-                                        st.metric(
-                                            detay_label,
-                                            f"%{detay_pct:.1f}",
-                                            detay_alt,
-                                            delta_color="off",
-                                        )
-                                else:
-                                    st.metric(
-                                        detay_label,
-                                        f"%{detay_pct:.1f}",
-                                        detay_alt,
-                                        delta_color="off",
-                                    )
+                                st.metric(
+                                    detay_label,
+                                    f"%{detay_pct:.1f}",
+                                    detay_alt,
+                                    delta_color="off",
+                                )
 
                     # Kombo seçiliyse üç ikili kesişimi ayrı ayrı göster.
                     if oran_filter_kombo:
@@ -8722,12 +8699,39 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                 if c is None:
                                     continue
                                 with kc:
-                                    st.metric(
-                                        baslik + ' · ' + str(c.get('label', '—')),
-                                        f"%{float(c.get('oran', 0) or 0):.1f}",
-                                        f"{int(c.get('uzlasi', 0) or 0)}/11 hass. · {toplam_benzer} örnek",
-                                        delta_color='off',
+                                    kombo_pct = float(c.get('oran', 0) or 0)
+                                    kombo_hass = int(c.get('uzlasi', 0) or 0)
+                                    kombo_alt = (
+                                        f"{kombo_hass}/11 hass. · {toplam_benzer} örnek"
+                                        if abs(kombo_pct - max_baslik_pct) < 1e-9
+                                        else f"{toplam_benzer} örnek"
                                     )
+                                    if kombo_pct > 50.0:
+                                        st.markdown(
+                                            f"""<style>
+                                            .st-key-oran_kombo50_{sira}_{tip.replace('+', '_').replace('.', '_')} [data-testid=\"stMetricValue\"],
+                                            .st-key-oran_kombo50_{sira}_{tip.replace('+', '_').replace('.', '_')} [data-testid=\"stMetricLabel\"] {{
+                                                color:#a78bfa !important;
+                                                -webkit-text-fill-color:#a78bfa !important;
+                                                font-weight:850 !important;
+                                            }}
+                                            </style>""",
+                                            unsafe_allow_html=True,
+                                        )
+                                        with st.container(key=f"oran_kombo50_{sira}_{tip.replace('+', '_').replace('.', '_')}"):
+                                            st.metric(
+                                                baslik + ' · ' + str(c.get('label', '—')),
+                                                f"%{kombo_pct:.1f}",
+                                                kombo_alt,
+                                                delta_color='off',
+                                            )
+                                    else:
+                                        st.metric(
+                                            baslik + ' · ' + str(c.get('label', '—')),
+                                            f"%{kombo_pct:.1f}",
+                                            kombo_alt,
+                                            delta_color='off',
+                                        )
 
                     try:
                         ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
