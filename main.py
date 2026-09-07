@@ -6901,6 +6901,39 @@ def uygula_tema_css(koyu_mod: bool):
             overflow:visible !important;
             padding-bottom:6rem !important;
         }
+        /* === DYNAMIC EXPANDER SCROLL FIX v3 ===
+           Alt sıradaki bir expander açıldığında sayfa yüksekliği anlık büyüyor.
+           Scroll'u sabit 100vh AppViewContainer'a kilitlemek yerine belge akışına
+           bırakıyoruz; böylece Oran Filtresi / Yüksek Oran Filtresi son kartı
+           açıldığında oluşan yeni içerik de kaydırılabilir kalıyor. */
+        html, body {
+            height:auto !important;
+            min-height:100% !important;
+            overflow-y:auto !important;
+            overflow-x:hidden !important;
+        }
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"],
+        .main .block-container {
+            height:auto !important;
+            min-height:100vh !important;
+            max-height:none !important;
+            overflow:visible !important;
+        }
+        [data-testid="stAppViewContainer"] {
+            position:relative !important;
+        }
+        div[data-testid="stExpander"],
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpanderDetails"],
+        div[data-testid="stExpanderDetails"] > div {
+            max-height:none !important;
+            overflow:visible !important;
+            contain:none !important;
+        }
+
         [data-testid="stHeader"] {
             background:rgba(7,17,31,.94) !important;
         }
