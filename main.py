@@ -5925,10 +5925,9 @@ def oran_filtresi_istatistikleri(tum_ornekler, goster_ms=True, goster_kg=True,
         ilk_yari_gol = b["HTHG"] + b["HTAG"]
         ikinci_yari_gol = (b["FTHG"] - b["HTHG"]) + (b["FTAG"] - b["HTAG"])
         iki_yari_15 = (ilk_yari_gol >= 2) & (ikinci_yari_gol >= 2)
-        tanimlar.extend([
-            ("İki Yarı 1.5 Üst Evet", iki_yari_15, "Yarılar"),
-            ("İki Yarı 1.5 Üst Hayır", ~iki_yari_15, "Yarılar"),
-        ])
+        # Bu market yalnızca Evet oranı en az %50 ise görünür.
+        # "Hayır" istatistiği başlıkta/detayda hiç gösterilmez.
+        tanimlar.append(("İki Yarı 1.5 Üst Evet", iki_yari_15, "Yarılar"))
 
     istatistikler = []
     for label, mask, grup in tanimlar:
@@ -5937,6 +5936,9 @@ def oran_filtresi_istatistikleri(tum_ornekler, goster_ms=True, goster_kg=True,
         except Exception:
             hit = 0
         oran = (hit / toplam * 100.0) if toplam else 0.0
+        # İki Yarı 1.5 Üst sadece Evet >= %50 olduğunda görünür.
+        if grup == "Yarılar" and oran < 50.0:
+            continue
         # Yüzde ana sinyal; örnek sayısı yalnızca sıralamada küçük güven katkısı verir.
         ornek_guveni = min(toplam / 30.0, 1.0)
         puan = oran * (0.82 + 0.18 * ornek_guveni)
@@ -7454,26 +7456,36 @@ with st.sidebar:
         gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
         gecmis_btn = False
     elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
+        # Oran Filtresi marketleri her zaman aktif kalsın.
+        # Widgetlar oluşturulmadan önce state'i True'ya sabitliyoruz.
+        st.session_state['oran_filter_ms'] = True
+        st.session_state['oran_filter_kg'] = True
+        st.session_state['oran_filter_25'] = True
+        st.session_state['oran_filter_cift_yari_15'] = True
         of1, of2 = st.columns(2)
         with of1:
-            oran_filter_ms = st.checkbox('Maç Sonucu', value=False, key='oran_filter_ms')
+            oran_filter_ms = st.checkbox('Maç Sonucu', key='oran_filter_ms', disabled=True)
         with of2:
-            oran_filter_kg = st.checkbox('Karşılıklı Gol', value=False, key='oran_filter_kg')
+            oran_filter_kg = st.checkbox('Karşılıklı Gol', key='oran_filter_kg', disabled=True)
         of3, of4 = st.columns(2)
         with of3:
-            oran_filter_25 = st.checkbox('2.5 Alt / Üst', value=False, key='oran_filter_25')
+            oran_filter_25 = st.checkbox('2.5 Alt / Üst', key='oran_filter_25', disabled=True)
         with of4:
-            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', value=False, key='oran_filter_cift_yari_15')
+            oran_filter_cift_yari_15 = st.checkbox('İki yarı 1.5 Üst', key='oran_filter_cift_yari_15', disabled=True)
         oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
         oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
+        # Yüksek Oran Filtresi marketleri her zaman aktif kalsın.
+        st.session_state['yuksek_filtre_12'] = True
+        st.session_state['yuksek_filtre_21'] = True
+        st.session_state['yuksek_filtre_cift_yari_kg'] = True
         yf1, yf2 = st.columns(2)
         with yf1:
-            yuksek_filtre_12 = st.checkbox('1/2', value=False, key='yuksek_filtre_12')
+            yuksek_filtre_12 = st.checkbox('1/2', key='yuksek_filtre_12', disabled=True)
         with yf2:
-            yuksek_filtre_21 = st.checkbox('2/1', value=False, key='yuksek_filtre_21')
+            yuksek_filtre_21 = st.checkbox('2/1', key='yuksek_filtre_21', disabled=True)
         yuksek_filtre_cift_yari_kg = st.checkbox(
-            'İki yarıda da karşılıklı gol', value=False, key='yuksek_filtre_cift_yari_kg'
+            'İki yarıda da karşılıklı gol', key='yuksek_filtre_cift_yari_kg', disabled=True
         )
         yuksek_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='yuksek_limit')
         yuksek_oran_btn = False
