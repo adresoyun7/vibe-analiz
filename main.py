@@ -7365,6 +7365,75 @@ with st.sidebar:
     with st.container(key="koyu_mod_toggle"):
         koyu_mod = st.toggle("🌙 Koyu Mod", value=bool(st.session_state.get("koyu_mod", True)), key="koyu_mod")
     uygula_tema_css(koyu_mod)
+
+    # === SABİT SIDEBAR / SADECE SAĞ TARAF SCROLL ===
+    # Sol panel ekran boyunca sabit kalır; tüm dikey kaydırma ana içerikte yapılır.
+    st.markdown(
+        """
+        <style>
+        html, body {
+            height:100% !important;
+            min-height:100% !important;
+            overflow:hidden !important;
+        }
+        .stApp,
+        [data-testid="stAppViewContainer"] {
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+        }
+
+        /* Sidebar hiçbir zaman ana sayfayla birlikte hareket etmez. */
+        section[data-testid="stSidebar"] {
+            position:relative !important;
+            top:auto !important;
+            align-self:stretch !important;
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+        }
+        section[data-testid="stSidebar"] > div,
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            height:100vh !important;
+            min-height:100vh !important;
+            max-height:100vh !important;
+            overflow:hidden !important;
+        }
+
+        /* Tek dikey scroll sahibi sağdaki ana içerik. */
+        [data-testid="stMain"] {
+            height:100vh !important;
+            min-height:0 !important;
+            max-height:100vh !important;
+            overflow-y:auto !important;
+            overflow-x:hidden !important;
+            overscroll-behavior-y:contain !important;
+            scrollbar-gutter:stable !important;
+        }
+        [data-testid="stMainBlockContainer"],
+        .main .block-container {
+            height:auto !important;
+            min-height:100% !important;
+            max-height:none !important;
+            overflow:visible !important;
+            padding-bottom:6rem !important;
+        }
+
+        /* Açılan son maç detayları ana içerik yüksekliğini doğal biçimde büyütsün. */
+        div[data-testid="stExpander"],
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpanderDetails"],
+        div[data-testid="stExpanderDetails"] > div {
+            max-height:none !important;
+            overflow:visible !important;
+            contain:none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     with st.container(key="sidebar_system_clock"):
         st.markdown(
             """
