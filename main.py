@@ -9847,17 +9847,29 @@ else:
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
-        # Teyit HTML'ini kart f-string'i içinde iç içe f-string olarak üretme.
-        # Streamlit/Markdown bazı rerunlarda HTML bloğunu metin olarak gösterebiliyor.
+        # Teyit skoru eski session_state analizlerinde bulunmayabilir. Kart çizilirken
+        # bir kez tamamla; böylece kullanıcı analizi yeniden başlatmadan da skor görünür.
         _kart_teyit = t.get("teyit_skoru")
+        if _kart_teyit is None:
+            try:
+                _kart_teyit, _kart_teyit_detay = _teyit_skoru_hesapla(
+                    gecmis, m, t.get("ana_label"), t, None
+                )
+                if _kart_teyit is not None:
+                    t["teyit_skoru"] = _kart_teyit
+                    t["teyit_seviye"] = _teyit_seviye(_kart_teyit)
+                    t["teyit_detay"] = _kart_teyit_detay
+            except Exception:
+                _kart_teyit = None
+
         if _kart_teyit is not None:
             teyit_card_html = (
-                f'<div style="margin-top:6px;font-size:0.72rem;color:#2f80ed">'
+                f'<div style="margin-top:7px;font-size:0.74rem;color:#7fb3ff;font-weight:700">'
                 f'🛡️ Teyit {float(_kart_teyit):.1f}/100 · {t.get("teyit_seviye", "—")}'
                 f'</div>'
             )
         else:
-            teyit_card_html = ""
+            teyit_card_html = '<div style="margin-top:7px;font-size:0.70rem;color:#6f7990">🛡️ Teyit: veri yetersiz</div>'
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
@@ -9885,6 +9897,7 @@ else:
                   <div class="mk-label">GÜVEN</div>
                   <div class="guven-pct">{int(t['ana_p'])}%</div>
                   <div class="guven-bar"><div class="guven-fill" style="width:{int(t['ana_p'])}%;background:{gc}"></div></div>
+                  {teyit_card_html}
                 </div>
               </div>
 
@@ -9903,9 +9916,8 @@ else:
                   <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
-                {teyit_card_html}
-                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#9aa4b2">📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 Puan {t.get('score', 0):.1f}</div>
                 {stability_html}
               </div>
             </div>
