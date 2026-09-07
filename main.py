@@ -8279,7 +8279,12 @@ def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yari
             "oran": round(ort, 1), "puan": round(ort * (0.82 + 0.18 * ornek_guveni), 1),
             "uzlasi": uzlasi, "gecerli_hassasiyet": gecerli,
         })
-    final_stats.sort(key=lambda x: (x.get("puan", 0), x.get("uzlasi", 0)), reverse=True)
+    # Oran Filtresi içinde en güçlü marketi doğrudan başarı yüzdesine göre belirle.
+    # Hassasiyet uzlaşısı artık yalnızca eşitlik bozucu olarak kullanılır.
+    final_stats.sort(
+        key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("uzlasi", 0) or 0), float(x.get("puan", 0) or 0)),
+        reverse=True,
+    )
     if not final_stats:
         return None
     return {
@@ -8365,8 +8370,14 @@ if oran_filtresi_btn:
                     continue
                 sonuc["m"] = of_mac.to_dict()
                 oran_filtresi_list.append(sonuc)
+            # Maçları hassasiyet uzlaşısına göre değil, en yüksek görünen yüzdeye göre sırala.
+            # Eşit yüzde varsa önce uzlaşı, sonra örnek sayısı eşitlik bozucu olur.
             oran_filtresi_list.sort(
-                key=lambda x: (x.get("en_iyi", {}).get("uzlasi", 0), x.get("en_iyi", {}).get("puan", 0), x.get("toplam_benzer", 0)),
+                key=lambda x: (
+                    float(x.get("en_iyi", {}).get("oran", 0) or 0),
+                    int(x.get("en_iyi", {}).get("uzlasi", 0) or 0),
+                    int(x.get("toplam_benzer", 0) or 0),
+                ),
                 reverse=True,
             )
             st.session_state.oran_filtresi_list = oran_filtresi_list
