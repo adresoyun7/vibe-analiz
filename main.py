@@ -7442,15 +7442,6 @@ with st.sidebar:
         gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
         gecmis_btn = False
     elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
-        st.markdown(
-            """
-            <div class="sidebar-high-market-title">
-              <b>📊 Oran Filtresi Marketleri</b>
-              <span>Benzer kapanış oranlı geçmiş maçlarda temel marketlerin gerçekleşme yüzdelerini gösterir.</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         of1, of2 = st.columns(2)
         with of1:
             oran_filter_ms = st.checkbox('Maç Sonucu', value=True, key='oran_filter_ms')
@@ -7464,15 +7455,6 @@ with st.sidebar:
         oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
         oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
-        st.markdown(
-            """
-            <div class="sidebar-high-market-title">
-              <b>💎 Yüksek Oran Marketleri</b>
-              <span>Birden fazla seçim açılırsa koşullardan herhangi birini sağlayan geçmiş örnekler gösterilir.</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         yf1, yf2 = st.columns(2)
         with yf1:
             yuksek_filtre_12 = st.checkbox('1/2', value=True, key='yuksek_filtre_12')
@@ -8106,9 +8088,6 @@ if st.session_state.get('sayfa_modu') == 'Oran Filtresi':
         """
         <div class="high-filter-header-fix" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
           <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">📊 Oran Filtresi</div>
-          <div style="font-size:.90rem;margin-top:7px;line-height:1.5;">
-            Tahmin üretmez; güncel maçın 1/X/2 oranlarına benzeyen geçmiş maçlarda Maç Sonucu, KG, 2.5 Alt/Üst ve her iki yarıda 1.5 Üst oranlarını gösterir.
-          </div>
         </div>
         <style>
         .high-filter-header-fix, .high-filter-header-fix * {
@@ -8213,9 +8192,6 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
         """
         <div class="high-filter-header-fix" style="background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px;">
           <div style="font-size:1.55rem;font-weight:900;line-height:1.2;">💎 Yüksek Oran Filtresi</div>
-          <div style="font-size:.90rem;margin-top:7px;line-height:1.5;">
-            Tahmin üretmez; yalnızca benzer geçmiş maçlarda seçilen yüksek oran senaryoları gerçekleşmiş güncel karşılaşmaları listeler.
-          </div>
         </div>
         <style>
         .high-filter-header-fix, .high-filter-header-fix * {
