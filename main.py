@@ -5430,7 +5430,7 @@ def _backtest_uzlasi_ozeti(tolerans_sonuclari):
         x["_tol"] = float(tol)
         kayitlar.append(x)
     if not kayitlar:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     tum = pd.concat(kayitlar, ignore_index=True)
     anahtar = ["Tarih", "Lig", "Maç"]
@@ -5467,7 +5467,7 @@ def _backtest_uzlasi_ozeti(tolerans_sonuclari):
             "Kâr (100 TL)": kar,
         })
     if not detay:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     d = pd.DataFrame(detay)
     def grup(n):
@@ -5497,7 +5497,9 @@ def _backtest_uzlasi_ozeti(tolerans_sonuclari):
         })
     ozet = pd.DataFrame(rows)
 
-    # Detay tablolarını attrs içinde taşı: mevcut fonksiyon imzasını bozmayalım.
+    # Detay tablolarını ayrı DataFrame olarak döndür. Streamlit session_state
+    # pandas .attrs bilgisini her rerun/serileştirmede güvenilir biçimde korumayabildiği
+    # için detay tabloları attrs yerine ayrı session_state anahtarlarında tutulur.
     # 1) 11/11 -> 1/11 tek tek uzlaşı performansı
     tek_rows = []
     for n in range(11, 0, -1):
@@ -5537,9 +5539,7 @@ def _backtest_uzlasi_ozeti(tolerans_sonuclari):
         capraz_df["_uz"] = capraz_df["Uzlaşı"].str.extract(r"(\d+)")[0].astype(int)
         capraz_df = capraz_df.sort_values(["_uz", "Örnek", "Başarı %"], ascending=[False, False, False]).drop(columns=["_uz"])
 
-    ozet.attrs["tek_uzlasi_df"] = tek_df
-    ozet.attrs["tahmin_uzlasi_df"] = capraz_df
-    return ozet
+    return ozet, tek_df, capraz_df
 
 
 def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min_ornek,
@@ -5574,7 +5574,7 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             "MS ROI %": round(ms_roi, 1) if ms_roi is not None else None,
         })
 
-    uzlasi_df = _backtest_uzlasi_ozeti(tolerans_sonuclari)
+    uzlasi_df, tek_uzlasi_df, tahmin_uzlasi_df = _backtest_uzlasi_ozeti(tolerans_sonuclari)
 
     secili_df = backtest_calistir(
         gecmis_df, test_sezonu, secili_tolerans, min_ornek,
@@ -5582,7 +5582,7 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
         lig_kodlari=lig_kodlari, max_test=max_test,
         birlesik_hassasiyet=True,
     )
-    return pd.DataFrame(satirlar), secili_df, uzlasi_df
+    return pd.DataFrame(satirlar), secili_df, uzlasi_df, tek_uzlasi_df, tahmin_uzlasi_df
 
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
@@ -5883,6 +5883,8 @@ for key, default in [
     ("backtest_df", None),
     ("backtest_11_df", None),
     ("backtest_uzlasi_df", None),
+    ("backtest_tek_uzlasi_df", None),
+    ("backtest_tahmin_uzlasi_df", None),
     ("gecmis_inceleme_list", None),
     ("gecmis_tam_ekran_sira", None),
     ("yuksek_oran_list", None),
@@ -8323,7 +8325,7 @@ if backtest_btn:
             if pd.notna(_bt_son_tarih):
                 st.session_state["backtest_veri_son_tarih"] = _bt_son_tarih.strftime("%d.%m.%Y")
         secili_history_codes = [ODDS_TO_HISTORY[k] for k in secili_kodlar if k in ODDS_TO_HISTORY]
-        bt11, bt_secili, bt_uzlasi = backtest_11_hassasiyet_calistir(
+        bt11, bt_secili, bt_uzlasi, bt_tek_uzlasi, bt_tahmin_uzlasi = backtest_11_hassasiyet_calistir(
             bt_gecmis,
             backtest_sezonu,
             TOLERANS,
@@ -8334,6 +8336,8 @@ if backtest_btn:
         )
         st.session_state.backtest_11_df = bt11
         st.session_state.backtest_uzlasi_df = bt_uzlasi
+        st.session_state.backtest_tek_uzlasi_df = bt_tek_uzlasi
+        st.session_state.backtest_tahmin_uzlasi_df = bt_tahmin_uzlasi
         st.session_state.backtest_df = bt_secili
         st.rerun()
 
@@ -8473,17 +8477,21 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                 )
                 st.dataframe(backtest_stili(uzlasi), use_container_width=True, hide_index=True)
 
-                tek_uzlasi = uzlasi.attrs.get("tek_uzlasi_df")
+                tek_uzlasi = st.session_state.get("backtest_tek_uzlasi_df")
                 if tek_uzlasi is not None and not tek_uzlasi.empty:
                     st.markdown("#### Tek Tek Uzlaşı (11/11 → 1/11)")
                     st.caption("9–10/11 grubunu ayırır; başarıyı 9/11 mi yoksa 10/11 mi taşıyor doğrudan görürüz.")
                     st.dataframe(backtest_stili(tek_uzlasi), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Tek tek uzlaşı tablosu bu çalıştırmada üretilemedi. BACKTESTİ BAŞLAT'a yeniden bas.")
 
-                tahmin_uzlasi = uzlasi.attrs.get("tahmin_uzlasi_df")
+                tahmin_uzlasi = st.session_state.get("backtest_tahmin_uzlasi_df")
                 if tahmin_uzlasi is not None and not tahmin_uzlasi.empty:
                     st.markdown("#### Tahmin × Uzlaşı Performansı")
                     st.caption("MS1, MS2, KG Var, 2.5 Üst/Alt gibi ana tahminlerin her uzlaşı seviyesindeki gerçek başarısını gösterir. Az örnekli satırları tek başına güçlü sinyal sayma.")
                     st.dataframe(backtest_stili(tahmin_uzlasi), use_container_width=True, hide_index=True, height=420)
+                else:
+                    st.info("Tahmin × Uzlaşı tablosu bu çalıştırmada üretilemedi. BACKTESTİ BAŞLAT'a yeniden bas.")
 
         # Birleşik oynanabilirlik puanı gerçekten ayırt edici mi?
         # Puan yükseldikçe başarının da yükselmesi beklenir.
