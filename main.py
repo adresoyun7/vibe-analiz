@@ -8036,47 +8036,102 @@ def _spor_toto_satirlari_parse(metin):
 
 
 def _spor_toto_takim_benzerlik(a, b):
+    """Spor Toto manuel takım adını API adlarıyla daha toleranslı eşleştir."""
     ka = takim_anahtari(a)
     kb = takim_anahtari(b)
     if not ka or not kb:
         return 0.0
+
+    # Sık görülen manuel/API isim farklarını aynı kanonik ada indir.
+    aliaslar = {
+        "levante": "levanteud",
+        "levanteud": "levanteud",
+        "barcelona": "fcbarcelona",
+        "fcbarcelona": "fcbarcelona",
+        "bleverkusen": "bayerleverkusen",
+        "bayer04leverkusen": "bayerleverkusen",
+        "bayerleverkusen": "bayerleverkusen",
+        "marsilya": "marseille",
+        "olympiquedemarseille": "marseille",
+        "marseille": "marseille",
+        "basaksehirfk": "istanbulbasaksehir",
+        "istanbulbasaksehir": "istanbulbasaksehir",
+        "gaziantepfkas": "gaziantepfk",
+        "gaziantepfk": "gaziantepfk",
+        "galatasarayas": "galatasaray",
+        "galatasaray": "galatasaray",
+        "kocaelispor": "kocaelispor",
+        "chelseafc": "chelsea",
+        "chelsea": "chelsea",
+        "hullcityafc": "hullcity",
+        "hullcity": "hullcity",
+    }
+    ka = aliaslar.get(ka, ka)
+    kb = aliaslar.get(kb, kb)
+
     if ka == kb:
         return 1.0
     if ka in kb or kb in ka:
-        return 0.92
+        return 0.94
     return SequenceMatcher(None, ka, kb).ratio()
 
 
 def _spor_toto_eslestir(mac, bulten):
+    """Önce aynı gün, bulunamazsa ±1 gün içinde güçlü takım adı eşleşmesi ara."""
     if bulten is None or getattr(bulten, "empty", True):
         return None, 0.0
-    aday = bulten.copy()
-    if "zaman" in aday.columns:
+
+    tum = bulten.copy()
+    aramalar = []
+
+    # 1) Önce manuel programdaki günün kendisi.
+    if "zaman" in tum.columns:
         try:
-            aday = aday[aday["zaman"].apply(lambda x: parse_mac_datetime(x).date() == mac["zaman"].date())]
+            ayni_gun = tum[tum["zaman"].apply(lambda x: parse_mac_datetime(x).date() == mac["zaman"].date())]
+            if not ayni_gun.empty:
+                aramalar.append(ayni_gun)
         except Exception:
             pass
+
+        # 2) Program/API tarihleri bir gün kayabiliyor. Takım adları güçlü eşleşiyorsa ±1 gün kabul et.
+        try:
+            yakin_gun = tum[tum["zaman"].apply(
+                lambda x: abs((parse_mac_datetime(x).date() - mac["zaman"].date()).days) <= 1
+            )]
+            if not yakin_gun.empty:
+                aramalar.append(yakin_gun)
+        except Exception:
+            pass
+
+    if not aramalar:
+        aramalar = [tum]
+
     en_iyi = None
     en_skor = 0.0
-    for _, row in aday.iterrows():
-        evs = _spor_toto_takim_benzerlik(mac["ev"], row.get("ev", ""))
-        deps = _spor_toto_takim_benzerlik(mac["dep"], row.get("dep", ""))
-        skor = (evs + deps) / 2.0
-        if skor > en_skor:
-            en_skor = skor
-            en_iyi = row
-    if en_skor < 0.60:
+    for aday in aramalar:
+        for _, row in aday.iterrows():
+            evs = _spor_toto_takim_benzerlik(mac["ev"], row.get("ev", ""))
+            deps = _spor_toto_takim_benzerlik(mac["dep"], row.get("dep", ""))
+            skor = (evs + deps) / 2.0
+            if skor > en_skor:
+                en_skor = skor
+                en_iyi = row
+        # Çok güçlü eşleşme bulunduysa daha geniş tarih havuzuna gerek yok.
+        if en_skor >= 0.88:
+            break
+
+    # Yanlış maça yapışmaması için iki takımın birlikte güçlü eşleşmesini şart koş.
+    if en_skor < 0.72:
         return None, en_skor
     return en_iyi, en_skor
 
 
-def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
+def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_lig=False):
     taramalar = []
-    for i in range(11):
-        tol = i / 100.0
+    for tol in toleranslar:
         try:
             _t, b_det = hesapla(
-                gecmis_df, mac_row, tol,
+                gecmis_df, mac_row, float(tol),
                 sadece_ayni_lig=ayni_lig,
                 form_aktif=False,
                 kalibrasyon_aktif=False,
@@ -8096,15 +8151,45 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
         mod = str(vc.idxmax()) if not vc.empty else "D"
         taraf = taraf_map.get(mod, "X")
         yuzde = float(vc.get(mod, 0.0)) * 100.0
-        taramalar.append({"tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
+        taramalar.append({"tol": float(tol), "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
+    return taramalar
+
+
+def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
+    """Normal 0.00–0.10 tarama; veri yoksa yalnız Spor Toto'da kontrollü fallback."""
+    normal_min = max(1, int(min_ornek_val or 1))
+    fazlar = [
+        # Standart model: mevcut 11 hassasiyet aynen korunur.
+        ([i / 100.0 for i in range(11)], normal_min, "standart"),
+        # Örnek yoksa hassasiyet biraz genişletilir ve minimum örnek kontrollü düşürülür.
+        ([i * 0.015 for i in range(11)], max(5, min(normal_min, max(5, normal_min // 2))), "fallback 0.15"),
+        # Son çare: 0.00–0.20, en az 3 gerçek geçmiş maç. Veri yoksa tahmin yine üretilmez.
+        ([i * 0.02 for i in range(11)], 3, "fallback 0.20"),
+    ]
+
+    taramalar = []
+    kullanilan_faz = "standart"
+    kullanilan_min = normal_min
+    for toleranslar, faz_min, faz_adi in fazlar:
+        taramalar = _spor_toto_ms_tarama(
+            gecmis_df, mac_row, faz_min, toleranslar, ayni_lig=ayni_lig
+        )
+        if taramalar:
+            kullanilan_faz = faz_adi
+            kullanilan_min = faz_min
+            break
+
     if not taramalar:
         return None
+
     sayim = pd.Series([x["taraf"] for x in taramalar]).value_counts()
     en_cok = int(sayim.max())
     aday_taraflar = list(sayim[sayim == en_cok].index)
+
     def _ort(taraf):
         vals = [x["yuzde"] for x in taramalar if x["taraf"] == taraf]
         return sum(vals) / len(vals) if vals else 0.0
+
     secim = max(aday_taraflar, key=_ort)
     secim_kayitlari = [x for x in taramalar if x["taraf"] == secim]
     return {
@@ -8114,6 +8199,8 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
         "gecerli": len(taramalar),
         "ornek": max(x["ornek"] for x in secim_kayitlari),
         "hass": [x["tol"] for x in secim_kayitlari],
+        "spor_toto_faz": kullanilan_faz,
+        "spor_toto_min_ornek": kullanilan_min,
     }
 
 
@@ -8144,7 +8231,9 @@ if spor_toto_btn:
                 if ist is None:
                     sonuclar.append({**sm, "durum": "Örnek yok", "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep")})
                     continue
-                sonuclar.append({**sm, "durum": "Tamam", "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep"), **ist})
+                _faz = str(ist.get("spor_toto_faz", "standart"))
+                _durum = "Tamam" if _faz == "standart" else f"Tamam · {_faz}"
+                sonuclar.append({**sm, "durum": _durum, "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep"), **ist})
             st.session_state['spor_toto_sonuclar'] = sonuclar
         st.rerun()
 
@@ -8157,7 +8246,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
     else:
         tablo = []
         for r in _st_sonuclar:
-            if r.get('durum') == 'Tamam':
+            if str(r.get('durum', '')).startswith('Tamam'):
                 tahmin = str(r.get('secim', '—'))
                 guven = f"%{float(r.get('guven', 0)):.1f}"
                 kar = f"{int(r.get('kararlilik',0))}/11"
