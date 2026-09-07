@@ -7970,6 +7970,15 @@ elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
             type='primary',
             key='yuksek_oran_getir_btn',
         )
+elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        sonuc_yenile_btn = st.button(
+            '🔄 SONUÇLARI YENİLE',
+            use_container_width=True,
+            type='primary',
+            key='sonuclari_yenile_btn',
+        )
 
 if gecmis_btn:
     if not API_KEY or not secili_kodlar:
