@@ -5804,11 +5804,12 @@ def gecmis_tablo_stili(tablo):
         return ""
 
     def kombo_evet_hayir_renk(value):
-        # Kombo renkleri diğer MS / KG / 2.5 / özel olay renkleriyle çakışmasın.
+        # Kombo Evet sonucu belirgin; Hayır ise nötr ve geri planda kalsın.
+        # Bu tonlar MS / KG / 2.5 / özel olay renkleriyle çakışmaz.
         if str(value) == "Evet":
-            return "background-color:#0f766e;color:#f0fdfa;font-weight:900"  # teal
+            return "background-color:#0f766e;color:#f0fdfa;font-weight:900"  # belirgin teal
         if str(value) == "Hayır":
-            return "background-color:#be185d;color:#fdf2f8;font-weight:900"  # magenta
+            return "background-color:#27272a;color:#a1a1aa;font-weight:700"  # nötr koyu füme
         return ""
 
     def olay_renk(value):
