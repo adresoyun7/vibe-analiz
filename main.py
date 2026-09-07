@@ -9852,8 +9852,24 @@ else:
         _kart_teyit = t.get("teyit_skoru")
         if _kart_teyit is None:
             try:
+                # Kart bir Streamlit rerun'ında eski analiz sonucundan çiziliyorsa
+                # local `gecmis` boş/None kalabiliyordu. Teyit motorunun kullandığı
+                # geçmişi önce session_state'ten, o da yoksa aynı tarihsel veri
+                # motorundan yeniden hazırla. Bu işlem The Odds API çağrısı yapmaz.
+                _teyit_gecmis = st.session_state.get("last_gecmis_df")
+                if _teyit_gecmis is None or getattr(_teyit_gecmis, "empty", True):
+                    _teyit_gecmis = gecmis
+                if _teyit_gecmis is None or getattr(_teyit_gecmis, "empty", True):
+                    try:
+                        _teyit_gecmis = futbol_veri_motoru(tuple(yillar))
+                        _teyit_gecmis = sadece_tam_verili_gecmis(_teyit_gecmis)
+                        if _teyit_gecmis is not None and not getattr(_teyit_gecmis, "empty", True):
+                            st.session_state["last_gecmis_df"] = _teyit_gecmis
+                    except Exception:
+                        _teyit_gecmis = pd.DataFrame()
+
                 _kart_teyit, _kart_teyit_detay = _teyit_skoru_hesapla(
-                    gecmis, m, t.get("ana_label"), t, None
+                    _teyit_gecmis, m, t.get("ana_label"), t, None
                 )
                 if _kart_teyit is not None:
                     t["teyit_skoru"] = _kart_teyit
