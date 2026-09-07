@@ -2231,6 +2231,82 @@ def gunun_kuponunu_profil_adaylarindan_olustur(gecmis_df, bulten_df, min_ornek=5
     return secimler
 
 
+def gunun_kuponlarini_kaliteye_gore_bol(secimler, maks_kupon_mac=6, min_anlamli_dusus=4.0):
+    """Sıralı Günün Kuponu seçimlerini kalite kırılımında ayrı kuponlara böler.
+
+    Kalite = güven + 11 hassasiyet kararlılığı katkısı. Ardışık iki seçim arasında
+    anlamlı bir düşüş varsa yeni kupon başlatılır. Ancak özellikle profil adaylarından
+    gelen fallback seçimlerde, yeni kuponun ilk maçı minimum güven + kararlılık
+    yeterliliğini geçmiyorsa sırf elde kaldığı için ayrı kupon oluşturulmaz.
+    """
+    if not secimler:
+        return []
+
+    def _kalite(x):
+        # Sıkı Günün Kuponu seçimlerinde varsa daha zengin günün puanını kullan.
+        if x.get("gunun_puani") is not None:
+            try:
+                return float(x.get("gunun_puani"))
+            except Exception:
+                pass
+        guven = float(x.get("guven", 0) or 0)
+        stabil = float(x.get("hassasiyet_sayisi", 0) or 0)
+        return guven + stabil * 1.8
+
+    def _yeni_kupon_baslangici_yeterli(x):
+        # Sıkı Günün Kuponu filtresinden gelen seçimler zaten kendi kalite kapılarını geçti.
+        if not x.get("profil_aday_fallback"):
+            return True
+
+        # Profil fallback adayında yeni bir kupon başlatmak için kontrollü minimum kalite.
+        # Böylece kalite kırılımından sonra elde kalan zayıf tek maç otomatik kupon olmaz.
+        guven = float(x.get("guven", 0) or 0)
+        stabil = int(x.get("hassasiyet_sayisi", 0) or 0)
+        return (
+            (guven >= 88 and stabil >= 3)
+            or (guven >= 83 and stabil >= 4)
+            or (guven >= 78 and stabil >= 5)
+            or (guven >= 74 and stabil >= 7)
+        )
+
+    sirali = sorted(
+        [dict(x) for x in secimler if isinstance(x, dict)],
+        key=lambda x: (_kalite(x), float(x.get("guven", 0) or 0), int(x.get("hassasiyet_sayisi", 0) or 0)),
+        reverse=True,
+    )
+    if not sirali:
+        return []
+
+    # İlk kupon da minimum başlangıç kalitesini geçmek zorunda.
+    ilk_index = next((i for i, x in enumerate(sirali) if _yeni_kupon_baslangici_yeterli(x)), None)
+    if ilk_index is None:
+        return []
+
+    ilk = sirali[ilk_index]
+    kuponlar = [[ilk]]
+    onceki_kalite = _kalite(ilk)
+
+    for secim in sirali[ilk_index + 1:]:
+        kalite = _kalite(secim)
+        mevcut = kuponlar[-1]
+        anlamli_dusus = (onceki_kalite - kalite) >= float(min_anlamli_dusus)
+        yeni_grup_gerekli = anlamli_dusus or len(mevcut) >= int(maks_kupon_mac)
+
+        if yeni_grup_gerekli:
+            # Yeni grubun ilk adayı yeterli değilse ayrı kupon oluşturma.
+            # Mevcut güçlü kupona da geri ekleme; aday Günün Kuponu dışında kalır.
+            if _yeni_kupon_baslangici_yeterli(secim):
+                kuponlar.append([secim])
+            else:
+                continue
+        else:
+            mevcut.append(secim)
+
+        onceki_kalite = kalite
+
+    return [k for k in kuponlar if k]
+
+
 def _secim_skorla_tuttu_mu(label, ev_gol, dep_gol, current_home_is_row_home=True):
     """Bir market etiketini skor üzerinde değerlendirir; H2H'de mevcut ev takımına göre yönü korur."""
     label = str(label or "").strip()
@@ -10945,18 +11021,29 @@ else:
                 profil_aday_fallback = bool(gunun_secimleri)
 
             if gunun_secimleri:
-                kupon_gecmisine_ekle(gunun_secimleri, "Günün Kuponu", "0.00–0.10 tarama")
+                # Adayları tek kupona 6 maç doldurmak yerine kalite kırılımında böl.
+                # Ardışık kalite puanı 4+ düştüğünde yeni Günün Kuponu başlar.
+                gunun_kuponlari = gunun_kuponlarini_kaliteye_gore_bol(
+                    gunun_secimleri, maks_kupon_mac=6, min_anlamli_dusus=4.0
+                )
+                for kupon_no, kupon_secimleri in enumerate(gunun_kuponlari, start=1):
+                    profil_etiketi = (
+                        "Günün Kuponu" if len(gunun_kuponlari) == 1
+                        else f"Günün Kuponu {kupon_no}"
+                    )
+                    kupon_gecmisine_ekle(kupon_secimleri, profil_etiketi, "0.00–0.10 tarama")
                 st.session_state.coupon_popup_open = True
                 st.session_state.scroll_to_coupon = True
+                dagilim = " + ".join(str(len(k)) for k in gunun_kuponlari)
                 if profil_aday_fallback:
                     kupon_mesaji = (
                         "success",
-                        f"⭐ Günün Kuponu oluşturuldu: sıkı Günün Kuponu filtresi boş kaldığı için profil adaylarından en güçlü {len(gunun_secimleri)} seçim kullanıldı."
+                        f"⭐ Günün Kuponu oluşturuldu: profil adayları kalite düştüğü noktalarda {len(gunun_kuponlari)} kupona bölündü ({dagilim} maç)."
                     )
                 else:
                     kupon_mesaji = (
                         "success",
-                        f"⭐ Günün Kuponu oluşturuldu: kalite eşiğini geçen {len(gunun_secimleri)} güçlü seçim tek kupona eklendi."
+                        f"⭐ Günün Kuponu oluşturuldu: seçimler kalite düştüğü noktalarda {len(gunun_kuponlari)} kupona bölündü ({dagilim} maç)."
                     )
             else:
                 kupon_mesaji = (
