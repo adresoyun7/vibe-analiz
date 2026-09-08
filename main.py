@@ -16,6 +16,356 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+import copy
+import hashlib
+import logging
+import sqlite3
+import tempfile
+from contextlib import contextmanager
+from datetime import timezone
+from zoneinfo import ZoneInfo
+
+
+MODEL_VERSION = "2026.09.08.1"
+TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
+APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
+LOGGER = logging.getLogger("yapaikupon")
+
+
+def tr_simdi():
+    """Uygulama içi karşılaştırmalar: her zaman Türkiye yerel saati (naive)."""
+    return datetime.now(TR_TIMEZONE).replace(tzinfo=None)
+
+
+def kayit_zamani_iso():
+    """Kalıcı kayıtlar saat dilimini de taşır."""
+    return datetime.now(TR_TIMEZONE).isoformat(timespec="seconds")
+
+
+def tarih_serisi_oku(values):
+    """ISO ve Football-Data tarihlerini açık biçimlerle, gün/ay değiştirmeden okur."""
+    series = pd.Series(values, index=getattr(values, "index", None))
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+    text_values = series.astype("string").str.strip()
+    result = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    iso = text_values.str.match(r"^\d{4}-\d{2}-\d{2}(?:$|[ T])", na=False)
+    result.loc[iso] = pd.to_datetime(text_values.loc[iso].str.slice(0, 10), format="%Y-%m-%d", errors="coerce")
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d.%m.%Y"):
+        remaining = result.isna() & ~iso
+        if remaining.any():
+            result.loc[remaining] = pd.to_datetime(text_values.loc[remaining], format=fmt, errors="coerce")
+    return result
+
+
+def mac_baslamadi_mi(value, simdi=None):
+    kickoff = parse_mac_datetime(value)
+    now = parse_mac_datetime(simdi) if simdi is not None else tr_simdi()
+    return kickoff is not None and now is not None and kickoff > now
+
+
+def tarih_oncesi_gecmis(df, value):
+    """Saat bilgisi olmayan geçmişte hedef günün tamamını dışarıda bırakır."""
+    kickoff = parse_mac_datetime(value)
+    if kickoff is None or "Date" not in df.columns:
+        return df.iloc[0:0].copy()
+    dates = tarih_serisi_oku(df["Date"])
+    return df.loc[dates < pd.Timestamp(kickoff).normalize()]
+
+
+def tarih_oncesi_kayitlar(records, value):
+    kickoff = parse_mac_datetime(value)
+    if kickoff is None:
+        return []
+    cutoff = kickoff.date()
+    return [record for record in records or []
+            if (dt := parse_mac_datetime(record.get("Tarih", record.get("zaman")))) is not None
+            and dt.date() < cutoff]
+
+
+class KayitDeposu:
+    """SQLite işlemi, okuma-değiştirme-yazmanın tamamını eşzamanlı kullanıma karşı korur.
+
+    Eski JSON dosyaları ilk erişimde içe alınır ve yedek olarak yerinde bırakılır.
+    Kalıcı disk kullanan kurulumlar YAPAIKUPON_DATA_DIR ile veri dizinini seçebilir.
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    @contextmanager
+    def _connection(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.path, timeout=15, isolation_level=None)
+        try:
+            connection.execute("PRAGMA busy_timeout=15000")
+            connection.execute("CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            yield connection
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _read(connection, name, legacy_path):
+        row = connection.execute("SELECT payload FROM documents WHERE name=?", (name,)).fetchone()
+        if row is not None:
+            result = json.loads(row[0])
+        elif legacy_path is not None and Path(legacy_path).exists():
+            result = json.loads(Path(legacy_path).read_text(encoding="utf-8"))
+        else:
+            result = []
+        if not isinstance(result, list):
+            raise ValueError("Kayıt dosyası liste biçiminde değil; mevcut dosya korunuyor.")
+        return result
+
+    def read(self, name, legacy_path=None):
+        with self._connection() as connection:
+            return self._read(connection, name, legacy_path)
+
+    def update(self, name, change, legacy_path=None):
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                records = self._read(connection, name, legacy_path)
+                updated = change(records)
+                payload = json.dumps(_json_guvenli_deger(updated), ensure_ascii=False, allow_nan=False)
+                connection.execute(
+                    "INSERT INTO documents(name,payload,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
+                    (name, payload, kayit_zamani_iso()),
+                )
+                connection.commit()
+                return updated
+            except Exception:
+                connection.rollback()
+                raise
+
+
+def kayit_deposu():
+    return KayitDeposu(APP_DATA_DIR / "yapaikupon.sqlite3")
+
+
+def kayit_hatasi(operation, error):
+    LOGGER.error("%s: %s", operation, type(error).__name__)
+    st.error(f"{operation}. Kayıt işlemi tamamlanmadı; önceki veriler korundu.")
+
+
+def kayitlari_degistir(name, change, legacy_path):
+    try:
+        kayit_deposu().update(name, change, legacy_path)
+        return True
+    except (OSError, ValueError, TypeError, sqlite3.Error) as error:
+        kayit_hatasi("Veriler kaydedilemedi", error)
+        return False
+
+
+def birlesik_aday_puani(guven, kararlilik, medyan_ornek):
+    """Tüm birleşik sıralamalarda aynı kural; örnek sayısı bonus üretmez."""
+    ceza = 8.0 if medyan_ornek <= 1 else 0.0
+    return round(float(guven) * 0.8 + min(int(kararlilik), 11) / 11 * 20 - ceza, 1)
+
+
+@st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
+def hassasiyet_taramasi(gecmis_df, hedef, sadece_ayni_lig=False, model_version=MODEL_VERSION):
+    """Tek maçı 11 kez tam veri setinde aramak yerine bir kez en geniş havuza indirir.
+
+    DataFrame ve hedef önbellek anahtarına dahildir. Kalibrasyon/market seçimleri
+    önbelleğe alınmaz; her çağrıda o ana ait geçmişle yeniden değerlendirilir.
+    """
+    havuz = sadece_tam_verili_gecmis(gecmis_df)
+    havuz = ayni_lig_gecmisi(havuz, hedef, sadece_ayni_lig)
+    havuz = tarih_oncesi_gecmis(havuz, hedef.get("zaman", hedef.get("Date")))
+    if havuz.empty:
+        return {}
+    mask = pd.Series(True, index=havuz.index)
+    for reference, fallback, key in (("REF_H", "B365H", "h"), ("REF_D", "B365D", "b"), ("REF_A", "B365A", "a")):
+        col = reference if reference in havuz.columns else fallback
+        values = pd.to_numeric(havuz[col], errors="coerce")
+        mask &= values.between(float(hedef[key]) - 0.100000001, float(hedef[key]) + 0.100000001)
+    havuz = havuz.loc[mask].copy()
+    return {round(i / 100, 2): hesapla(havuz, hedef, round(i / 100, 2), form_aktif=False, kalibrasyon_aktif=False)
+            for i in range(11)}
+
+
+def tarama_hedefi(m):
+    """Önbellekte API anahtarı veya geçici UI alanı tutulmaz."""
+    return {key: m.get(key) for key in ("h", "b", "a", "ev", "dep", "zaman", "sport_key", "o25_over", "o25_under")}
+
+
+def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
+                          market_gecmis_kayitlari=None, ek_marketler=False,
+                          filtreler=None, taramalar=None):
+    """Top 50 ve birleşik model aynı yeterlilik, güven ve puanlama yolunu kullanır."""
+    if taramalar is None:
+        taramalar = hassasiyet_taramasi(b_df, tarama_hedefi(m), sadece_ayni_lig)
+    if market_gecmis_kayitlari is None:
+        bt = st.session_state.get("backtest_df")
+        market_gecmis_kayitlari = (bt.to_dict("records") if isinstance(bt, pd.DataFrame)
+                                  and bt.attrs.get("model_version") == MODEL_VERSION else [])
+    prior = tarih_oncesi_kayitlar(market_gecmis_kayitlari, m.get("zaman"))
+    alanlar = {"MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
+               "2.5 Üst": "ms25_p", "2.5 Alt": "ms25a_p", "KG Var": "kg_var_p", "KG Yok": "kg_yok_p"}
+    groups = {}
+    for tol, (t, b) in taramalar.items():
+        if t is None or t.get("belirsiz"):
+            continue
+        n = len(b)
+        if n < max(int(min_ornek), dinamik_min_mac(tol)):
+            continue
+        candidates = (top10_market_adaylari(t, filtreler=filtreler) if ek_marketler else
+                      [{"label": label, "guven": t.get(field, 0), "oran": market_label_to_odd(m, label)}
+                       for label, field in alanlar.items()])
+        for candidate in candidates:
+            confidence = int(candidate.get("guven", 0))
+            if confidence <= 60:
+                continue
+            label = candidate["label"]
+            groups.setdefault(label, []).append(dict(guven=confidence, ornek=n, tol=tol, t=t, b=b, mk=candidate))
+    result = []
+    for label, records in groups.items():
+        if len(records) < 3:
+            continue
+        raw = sum(record["guven"] for record in records) / len(records)
+        confidence, historical_rate, count, delta = market_gecmis_guven_duzeltmesi(label, raw, prior)
+        confidence = max(0, min(99, int(round(confidence))))
+        if confidence <= 60:
+            continue
+        median = float(pd.Series([record["ornek"] for record in records]).median())
+        representative = max(records, key=lambda record: (record["guven"], -record["tol"]))
+        result.append({
+            "label": label, "guven": confidence, "ham_guven": round(raw, 1),
+            "puan": birlesik_aday_puani(confidence, len(records), median),
+            "ornek": int(round(median)), "kararlilik": len(records),
+            "kararlilik_pct": len(records) / 11 * 100,
+            "az_ornek_cezasi": 8.0 if median <= 1 else 0.0,
+            "toleranslar": [f'{record["tol"]:.2f}' for record in records], "temsilci": representative,
+            "market_gecmis_basari": historical_rate, "market_gecmis_adet": count,
+            "market_guven_delta": round(delta, 2),
+        })
+    return sorted(result, key=lambda item: (item["puan"], item["guven"], item["kararlilik"], item["label"]), reverse=True)
+
+
+def birlesik_tahmin_olustur(ana, havuz, m):
+    """Temsilci örnekleri taşırken ana/alternatif etiketleri ve puanları birlikte günceller."""
+    t = dict(ana["temsilci"]["t"])
+    b = ana["temsilci"]["b"]
+    alt = next((candidate for candidate in havuz if candidate["label"] != ana["label"]
+                and _tahmin_market_ailesi(candidate["label"]) != _tahmin_market_ailesi(ana["label"])), None)
+    t.update({
+        "ana_label": ana["label"], "ana_p": ana["guven"], "ana_ham_guven": ana["ham_guven"],
+        "ana_odd": market_label_to_odd(m, ana["label"]),
+        "score": ana["puan"], "playable_score": ana["puan"], "birlesik_puan": ana["puan"],
+        "ornek": len(b), "birlesik_ornek_medyan": ana["ornek"],
+        "kullanilan_tolerans": float(ana["temsilci"]["tol"]),
+        "stability_tols": ana["toleranslar"], "stability_count": ana["kararlilik"],
+        "stability_pct": ana["kararlilik_pct"], "stability_text": " · ".join(ana["toleranslar"]),
+        "birlesik_model": True, "model_version": MODEL_VERSION,
+        "az_ornek_cezasi": ana["az_ornek_cezasi"],
+        "market_gecmis_basari": ana["market_gecmis_basari"], "market_gecmis_adet": ana["market_gecmis_adet"],
+        "market_guven_delta": ana["market_guven_delta"], "puan_formulu": "Güven %80 + Kararlılık %20",
+        "oynanabilir": ana["guven"] > 60, "oynanabilir_esik_ok": ana["guven"] > 60,
+        "alt_label": alt["label"] if alt else "", "alt_p": alt["guven"] if alt else 0,
+        "alt_ornek": alt["ornek"] if alt else 0, "alt_puan": alt["puan"] if alt else 0,
+        "alt_kararlilik": alt["kararlilik"] if alt else 0,
+        "alt_hassasiyetler": alt["toleranslar"] if alt else [],
+        "alt_hassasiyet": float(alt["temsilci"]["tol"]) if alt else None,
+        "alt_market_gecmis_basari": alt["market_gecmis_basari"] if alt else None,
+        "alt_market_gecmis_adet": alt["market_gecmis_adet"] if alt else 0,
+    })
+    for band, condition in (("early", lambda tol: tol <= .05), ("late", lambda tol: tol > .05)):
+        values = [tol for tol in ana["toleranslar"] if condition(float(tol))]
+        t[f"stability_{band}_tols"] = values
+        t[f"stability_{band}_text"] = " · ".join(values)
+    raw_hits = [tahmin_tuttu_mu(ana["label"], row) for _, row in b.iterrows()]
+    raw_hits = [hit for hit in raw_hits if hit is not None]
+    t["ana_raw_p"] = round(sum(raw_hits) / len(raw_hits) * 100) if raw_hits else 0
+    t["scenario_label"] = ana["label"]
+    t["guven_renk"], t["guven_badge_cls"], t["guven_badge_lbl"] = guven_renk(t["ana_p"])
+    # A different representative's combo must not contradict the selected market.
+    previous_combo = {key: t.get(key) for key in ("combo_var", "combo_label", "combo_p", "combo_hit", "combo_raw_p", "combo_level")}
+    t["combo_var"] = False
+    t["combo_label"], t["combo_p"], t["combo_level"], t["combo_hit"], t["combo_raw_p"] = "", 0, "", 0, 0
+    def compatible(label):
+        return any(tahmin_tuttu_mu(ana["label"], {"FTHG": home, "FTAG": away})
+                   and tahmin_tuttu_mu(label, {"FTHG": home, "FTAG": away})
+                   for home in range(6) for away in range(6))
+    combo = next((candidate for candidate in havuz if "+" in candidate["label"] and compatible(candidate["label"])), None)
+    if combo and combo["label"] != ana["label"]:
+        combo_examples = combo["temsilci"]["b"]
+        hits = sum(bool(tahmin_tuttu_mu(combo["label"], row)) for _, row in combo_examples.iterrows())
+        t.update(combo_var=True, combo_label=combo["label"], combo_p=combo["guven"], combo_hit=hits,
+                 combo_raw_p=round(hits / len(combo_examples) * 100), combo_level="Premium")
+    elif previous_combo.get("combo_var") and compatible(previous_combo.get("combo_label")):
+        t.update(previous_combo)
+    t["eg"], t["dg"] = skoru_tahmine_uydur(t.get("eg", 1), t.get("dg", 1), t["ana_label"], t.get("ms_mod", "D"), t["alt_label"], "")
+    return t, b
+
+
+def top50_liste_sec(adaylar, limit=50):
+    """Canlı ve backtest listelerinde ortak sıralama ve maç başına tek tercih."""
+    ordered = sorted(adaylar, key=lambda item: (item["t"]["score"], item["t"]["ana_p"], item["t"]["stability_count"], mac_key(item["m"])), reverse=True)
+    unique, used = [], set()
+    for item in ordered:
+        key = mac_key(item["m"])
+        if key in used:
+            continue
+        used.add(key)
+        unique.append(item)
+        if limit and len(unique) >= limit:
+            break
+    return unique
+
+
+def backtest_verisini_hazirla(gecmis_df, test_sezonu, lig_kodlari, max_test):
+    veri = sadece_tam_verili_gecmis(gecmis_df).copy()
+    if veri.empty:
+        return veri, veri
+    veri["Date"] = tarih_serisi_oku(veri["Date"])
+    veri = veri.dropna(subset=["Date", "FTHG", "FTAG", "FTR"])
+    veri = veri.sort_values(["Date", "league_code", "HomeTeam", "AwayTeam"], kind="stable").drop_duplicates(
+        subset=["Date", "league_code", "HomeTeam", "AwayTeam"], keep="last")
+    test = veri[veri["season_code"].astype(str) == str(test_sezonu)]
+    if lig_kodlari:
+        test = test[test["league_code"].isin(lig_kodlari)]
+    return veri, test.tail(int(max_test))
+
+
+def backtest_hedefi(row):
+    inverse = {code: sport for sport, code in ODDS_TO_HISTORY.items()}
+    target = {"ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
+              "zaman": row["Date"], "sport_key": inverse.get(row.get("league_code"), ""), "lig": row.get("league_code", "")}
+    for name, reference, fallback in (("h", "REF_H", "B365H"), ("b", "REF_D", "B365D"), ("a", "REF_A", "B365A")):
+        value = row.get(reference)
+        if value is None or pd.isna(value):
+            value = row.get(fallback)
+        if value is None or pd.isna(value) or not math.isfinite(float(value)) or float(value) <= 1:
+            return None
+        target[name] = float(value)
+    return target
+
+
+def backtest_kaydi(row, target, t):
+    label = t.get("ana_label", "")
+    hit = tahmin_tuttu_mu(label, row)
+    if hit is None or int(t.get("ana_p", 0)) <= 60:
+        return None
+    odd = market_label_to_odd(target, label)
+    alt_label = t.get("alt_label", "") if int(t.get("alt_p", 0)) > 60 else ""
+    alt_hit = tahmin_tuttu_mu(alt_label, row) if alt_label else None
+    return {
+        "Tarih": row["Date"].date(), "Lig": row.get("league_code", "-"),
+        "Maç": f'{row.get("HomeTeam", "")} - {row.get("AwayTeam", "")}',
+        "Tahmin": label, "Güven": int(t["ana_p"]),
+        "Ana Puan": float(t.get("score", 0)), "Ana Medyan Örnek": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0))),
+        "Ana Kararlılık": int(t.get("stability_count", 0)), "Ana Hassasiyetler": " · ".join(t.get("stability_tols", [])),
+        "Alternatif Tahmin": alt_label, "Alt. Güven": int(t.get("alt_p", 0)) if alt_label else None,
+        "Alt. Örnek": t.get("alt_ornek") if alt_label else None, "Alt. Puan": t.get("alt_puan") if alt_label else None,
+        "Alt. Kararlılık": t.get("alt_kararlilik") if alt_label else None,
+        "Alt. Hassasiyetler": " · ".join(t.get("alt_hassasiyetler", [])) if alt_label else "",
+        "Alt. Tuttu": bool(alt_hit) if alt_hit is not None else None, "Örnek": int(t.get("ornek", 0)),
+        "Sonuç": f'{int(row["FTHG"])}-{int(row["FTAG"])}', "Tuttu": bool(hit),
+        "Oran": odd, "Kâr (100 TL)": round((odd - 1) * 100 if hit else -100, 2) if odd else None,
+    }
+
+
 
 
 def kart_takim_adi(ad):
@@ -25,18 +375,14 @@ def kart_takim_adi(ad):
     return s.strip() or str(ad or "")
 
 def parse_mac_datetime(value):
-    if isinstance(value, datetime):
-        return value
-    s = str(value).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
-        try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            pass
+    """Ofsetli zamanı Türkiye saatine çevirir; bozuk tarihi 'şimdi' yapmaz."""
+    if value is None or (not isinstance(value, (dict, list)) and pd.isna(value)):
+        return None
     try:
-        return datetime.fromisoformat(s.replace("Z", ""))
-    except Exception:
-        return datetime.now()
+        dt = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        return dt.astimezone(TR_TIMEZONE).replace(tzinfo=None) if dt.tzinfo else dt
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 
@@ -192,6 +538,7 @@ Platform, hizmet içeriğini önceden bildirmeksizin değiştirme hakkını sakl
 
 def legal_footer():
     """Sayfanın en altında kısa hukuki footer."""
+    uygula_tema_css(bool(st.session_state.get("koyu_mod", True)))
     st.markdown("""
     ---
     <div style="text-align:center;font-size:12px;color:#64748b;line-height:1.55;padding:10px 0 4px 0;">
@@ -203,9 +550,11 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 89
+APP_SCHEMA_VERSION = 90
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
+    korunan = {key: st.session_state[key] for key in ("user_api_key", "user_api_football_key", "koyu_mod") if key in st.session_state}
     st.session_state.clear()
+    st.session_state.update(korunan)
     st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
 
 # Uygulama ilk açılışta varsayılan olarak koyu modda başlasın.
@@ -1248,16 +1597,19 @@ def gol_profili(avg_goal: float):
     return "Yüksek Gollü"
 
 
-def fake_confidence_duzelt(conf_prob: float, sample: int, tolerans: float):
-    carpan = 1.0
-    if tolerans <= 0.05 and sample < 10 and conf_prob > 0.80:
-        carpan *= 0.75
-    elif tolerans <= 0.08 and sample < 8 and conf_prob > 0.75:
-        carpan *= 0.82
-    return conf_prob * carpan, carpan < 1.0
+def fake_confidence_duzelt(conf_prob, sample, tolerans):
+    """Küçük örnekte monoton Beta(1,1) düzeltmesi; hiçbir güven artırılmaz.
+
+    Bu bir geçmiş frekans düzeltmesidir, kalibre edilmiş kazanma garantisi değildir.
+    Aynı işlem ana, alternatif ve bütün market alanlarında bir kez uygulanır.
+    """
+    n = max(0, int(sample or 0))
+    raw = max(0.0, min(0.99, float(conf_prob or 0)))
+    adjusted = min(raw, (raw * n + 1.0) / (n + 2.0)) if n else 0.0
+    return adjusted, adjusted < raw - 1e-9
 
 
-GEÇMİŞ_VERİ_DOSYASI = Path(__file__).with_name("yapaikupon_gecmis_cache.csv")
+GEÇMİŞ_VERİ_DOSYASI = APP_DATA_DIR / "yapaikupon_gecmis_cache.csv"
 
 def _gecmis_cache_yukle():
     """Uygulamanın yanındaki kalıcı geçmiş CSV'sini ana veri kaynağı olarak yükler."""
@@ -1266,7 +1618,7 @@ def _gecmis_cache_yukle():
             df = pd.read_csv(GEÇMİŞ_VERİ_DOSYASI)
 
             if "Date" in df.columns:
-                df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+                df["Date"] = tarih_serisi_oku(df["Date"])
 
             # Extra/worldwide ligler bültende kalır; geçmiş model ve detay havuzundan çıkar.
             df = sadece_tam_verili_gecmis(df)
@@ -1305,19 +1657,27 @@ def _gecmis_cache_yukle():
     return pd.DataFrame()
 
 def _gecmis_cache_kaydet(df):
-    """Başarılı canlı indirmeyi yerel cache'e atomik biçimde yazar."""
-    if df is None or getattr(df, "empty", True):
+    if df is None or df.empty:
         return False
+    tmp = None
     try:
-        tmp = GEÇMİŞ_VERİ_DOSYASI.with_suffix(".tmp.csv")
+        GEÇMİŞ_VERİ_DOSYASI.parent.mkdir(parents=True, exist_ok=True)
         kayit = df.copy()
         if "Date" in kayit.columns:
-            kayit["Date"] = pd.to_datetime(kayit["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        kayit.to_csv(tmp, index=False)
+            kayit["Date"] = tarih_serisi_oku(kayit["Date"]).dt.strftime("%Y-%m-%d")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".csv", prefix="history-", dir=GEÇMİŞ_VERİ_DOSYASI.parent, delete=False) as stream:
+            tmp = Path(stream.name)
+            kayit.to_csv(stream, index=False)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(tmp, GEÇMİŞ_VERİ_DOSYASI)
         return True
-    except Exception:
+    except (OSError, ValueError) as error:
+        kayit_hatasi("Geçmiş veri dosyası kaydedilemedi", error)
         return False
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 @st.cache_data(ttl=3600)
 def futbol_veri_motoru(sezonlar, zorla_yenile=False):
@@ -1331,8 +1691,16 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
     if not yerel.empty and "season_code" in yerel.columns:
         yerel = yerel[yerel["season_code"].astype(str).isin(secili_sezonlar)].copy()
 
+    mevcut_sezonlar = set(yerel["season_code"].astype(str)) if not yerel.empty and "season_code" in yerel else set()
+    today = tr_simdi()
+    start_year = today.year if today.month >= 7 else today.year - 1
+    current_season = f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
+    expired = not GEÇMİŞ_VERİ_DOSYASI.exists() or time.time() - GEÇMİŞ_VERİ_DOSYASI.stat().st_mtime >= 6 * 3600
+    indirilecek = set(secili_sezonlar) if zorla_yenile else secili_sezonlar - mevcut_sezonlar
+    if expired and current_season in secili_sezonlar:
+        indirilecek.add(current_season)
     # Normal kullanımda hızlı yerel cache; backtestte zorla_yenile=True ile canlı güncelleme.
-    if not zorla_yenile and not yerel.empty:
+    if not indirilecek and not yerel.empty:
         try:
             yerel.attrs["kaynak"] = "yerel GitHub cache"
             yerel.attrs["kaynak_hata_sayisi"] = 0
@@ -1349,7 +1717,7 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
     liste, hatalar = [], []
 
     for k in lig_map:
-        for sezon in sezonlar:
+        for sezon in sorted(indirilecek):
             url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{k}.csv"
             try:
                 r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 YapAiKupon/1.0"})
@@ -1377,7 +1745,7 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
                 df["REF_A"] = df["B365CA"].combine_first(df["B365A"])
 
                 temp = df.dropna(subset=["REF_H", "REF_D", "REF_A"]).copy()
-                temp["Date"] = pd.to_datetime(temp["Date"], dayfirst=True, errors="coerce")
+                temp["Date"] = tarih_serisi_oku(temp["Date"])
                 temp = temp.dropna(subset=["Date"])
                 temp["league_code"] = k
                 temp["season_code"] = str(sezon)
@@ -1394,7 +1762,7 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
         sonuc_tum["Date"] = pd.to_datetime(sonuc_tum["Date"], errors="coerce")
         anahtar = ["Date", "league_code", "HomeTeam", "AwayTeam"]
         if all(c in sonuc_tum.columns for c in anahtar):
-            sonuc_tum = sonuc_tum.sort_values("Date").drop_duplicates(subset=anahtar, keep="last")
+            sonuc_tum = sonuc_tum.sort_values("Date", kind="stable").drop_duplicates(subset=anahtar, keep="last")
         _gecmis_cache_kaydet(sonuc_tum)
 
         sonuc = sonuc_tum.copy()
@@ -1458,6 +1826,7 @@ def bulten_cek(key, kodlar, t):
     if secret_key:
         key = secret_key
     if not key:
+        st.session_state["odds_api_last_error"] = "ODDS API anahtarı gerekli."
         st.error("Maç bültenini çekmek için ODDS API key gerekli.")
         return pd.DataFrame()
     res = []
@@ -1465,6 +1834,7 @@ def bulten_cek(key, kodlar, t):
     for secili_kod in kodlar:
         k = odds_lig_kodu_coz(key, secili_kod)
         if not k:
+            st.session_state["odds_api_last_error"] = f"Lig kodu çözülemedi: {secili_kod}"
             continue
         try:
             r = requests.get(
@@ -1500,15 +1870,16 @@ def bulten_cek(key, kodlar, t):
 
             data = r.json()
             if not isinstance(data, list):
+                st.session_state["odds_api_last_error"] = f"{k}: Geçersiz bülten yanıtı"
                 continue
 
             for m in data:
                 try:
-                    tm = datetime.strptime(m["commence_time"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=3)
+                    tm = parse_mac_datetime(m["commence_time"])
                 except Exception:
                     continue
 
-                if tm.date() != t:
+                if tm is None or tm.date() != t:
                     continue
 
                 bookies = m.get("bookmakers", [])
@@ -1634,62 +2005,55 @@ def bulten_cek(key, kodlar, t):
 ODDS_BULTEN_CACHE_TTL = 6 * 60 * 60  # 6 saat; filtre değişiklikleri API kredisi tüketmesin
 
 
+def odds_cache_key(kod, tarih, api_key=None):
+    key = get_app_api_key() if api_key is None else api_key
+    account = hashlib.sha256(str(key or "").encode()).hexdigest()[:16]
+    return f"{account}|{kod}|{tarih.isoformat()}"
+
+
 def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
-    """
-    Lig bazlı session cache kullanır.
-
-    - Aynı tarih + lig 6 saat içinde tekrar API'ye gitmez.
-    - Yeni bir lig eklenirse yalnızca o lig çekilir.
-    - Hassasiyet / minimum örnek / güven eşiği değişiklikleri API tüketmez.
-    - zorla_yenile=True yalnızca seçili ligleri yeniden çeker.
-    """
+    """Yalnızca başarılı yanıtlar 6 saat saklanır; hatada son başarılı veri korunur."""
+    key = get_app_api_key() or key
     cache = st.session_state.setdefault("odds_league_cache", {})
-    simdi_ts = time.time()
-    parcalar = []
-
-    for secili_kod in list(dict.fromkeys(kodlar or [])):
-        cache_key = f"{secili_kod}|{t.isoformat()}"
-        kayit = cache.get(cache_key)
-        gecerli = (
-            isinstance(kayit, dict)
-            and (simdi_ts - float(kayit.get("ts", 0) or 0)) < ODDS_BULTEN_CACHE_TTL
-        )
-
-        if gecerli and not zorla_yenile:
-            lig_df = kayit.get("df")
-            # Dolu veya boş fark etmez: aynı lig+tarih daha önce çekildiyse
-            # filtre/checkbox değişikliklerinde API'ye tekrar gitme.
-            if isinstance(lig_df, pd.DataFrame):
-                parcalar.append(lig_df.copy())
-                continue
-
-        # Cache yoksa/süresi dolduysa yalnızca bu ligi sorgula.
-        lig_df = bulten_cek(key, [secili_kod], t)
-        if not isinstance(lig_df, pd.DataFrame):
-            lig_df = pd.DataFrame()
-        # Boş sonuçları da cache'le. Böylece fikstürü olmayan/yanıtı boş ligler
-        # her ÖRNEKLERİ GETİR tıklamasında yeniden kredi tüketmez.
-        cache[cache_key] = {"ts": simdi_ts, "df": lig_df.copy()}
-        parcalar.append(lig_df)
-
-    # Süresi dolmuş eski kayıtları ara sıra temizle.
-    eski_sinir = simdi_ts - (ODDS_BULTEN_CACHE_TTL * 4)
-    for ck in list(cache.keys()):
-        try:
-            if float(cache[ck].get("ts", 0) or 0) < eski_sinir:
-                cache.pop(ck, None)
-        except Exception:
+    now = time.time()
+    parts, errors = [], []
+    stale = False
+    for code in dict.fromkeys(kodlar or []):
+        ck = odds_cache_key(code, t, key)
+        entry = cache.get(ck) or {}
+        previous = entry.get("df")
+        has_success = bool(entry.get("success")) and isinstance(previous, pd.DataFrame)
+        fresh = has_success and now - float(entry.get("ts", 0)) < ODDS_BULTEN_CACHE_TTL
+        waiting = now < float(entry.get("retry_after", 0))
+        if not zorla_yenile and (fresh or waiting):
+            if has_success:
+                parts.append(previous.copy())
+            if entry.get("error"):
+                errors.append(entry["error"])
+                stale |= has_success
+            continue
+        frame = bulten_cek(key, [code], t)
+        error = st.session_state.get("odds_api_last_error")
+        if error:
+            errors.append(str(error))
+            cache[ck] = dict(entry, error=str(error), retry_after=now + 60, last_attempt=now)
+            if has_success:
+                parts.append(previous.copy())
+                stale = True
+            continue
+        frame = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        cache[ck] = {"ts": now, "df": frame.copy(), "success": True, "last_attempt": now}
+        parts.append(frame)
+    for ck, entry in list(cache.items()):
+        if now - float(entry.get("last_attempt", entry.get("ts", 0))) > ODDS_BULTEN_CACHE_TTL * 4:
             cache.pop(ck, None)
-
-    if not parcalar:
-        return pd.DataFrame()
-    dolu = [x for x in parcalar if isinstance(x, pd.DataFrame) and not x.empty]
-    if not dolu:
-        return pd.DataFrame()
-    df = pd.concat(dolu, ignore_index=True)
-    if all(c in df.columns for c in ["ev", "dep", "zaman"]):
-        df = df.drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
-    return df
+    st.session_state["odds_api_last_error"] = " · ".join(dict.fromkeys(errors)) or None
+    nonempty = [frame for frame in parts if not frame.empty]
+    result = pd.concat(nonempty, ignore_index=True) if nonempty else pd.DataFrame()
+    if not result.empty:
+        result = result.drop_duplicates(subset=["ev", "dep", "zaman"]).sort_values("zaman").reset_index(drop=True)
+    result.attrs.update(stale=stale, errors=errors)
+    return result
 
 
 def bulten_saglam_al(key, kodlar, t, zorla_yenile=False):
@@ -1702,19 +2066,13 @@ def bulten_saglam_al(key, kodlar, t, zorla_yenile=False):
 
 
 def odds_cache_bilgi(kodlar, t):
-    """Seçili liglerin cache durumunu (geçerli/toplam) döndürür."""
     cache = st.session_state.get("odds_league_cache", {})
-    simdi_ts = time.time()
-    toplam = len(list(dict.fromkeys(kodlar or [])))
-    gecerli = 0
-    for kod in list(dict.fromkeys(kodlar or [])):
-        kayit = cache.get(f"{kod}|{t.isoformat()}")
-        try:
-            if isinstance(kayit, dict) and (simdi_ts - float(kayit.get("ts", 0) or 0)) < ODDS_BULTEN_CACHE_TTL:
-                gecerli += 1
-        except Exception:
-            pass
-    return gecerli, toplam
+    now = time.time()
+    codes = list(dict.fromkeys(kodlar or []))
+    valid = sum(bool((entry := cache.get(odds_cache_key(code, t), {})).get("success"))
+                and not entry.get("error")
+                and now - float(entry.get("ts", 0)) < ODDS_BULTEN_CACHE_TTL for code in codes)
+    return int(valid), len(codes)
 
 
 
@@ -1729,11 +2087,6 @@ def fmt_odd(odd):
         return ""
 
 
-def pct100(v):
-    try:
-        return max(0, min(100, int(round(float(v)))))
-    except Exception:
-        return 0
 
 
 def skor_etikete_uyuyor_mu(label, eg, dg):
@@ -1997,7 +2350,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
         "Yüksek Oran": {"min_guven": 55, "taban": 2, "maks": 5, "min_stabil": 1, "ek_stabil": 2, "min_oran": 0.0},
     }
     cfg = ayarlar.get(profil, ayarlar["Dengeli"])
-    simdi = datetime.now()
+    simdi = tr_simdi()
     adaylar = []
 
     for item in final_list or []:
@@ -2730,7 +3083,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
     Aynı maçtan yalnızca bir seçim alınır. 1-6 seçim üretilebilir.
     Güven kadar 0.00-0.10 taramasındaki kararlılık da dikkate alınır.
     """
-    simdi = datetime.now()
+    simdi = tr_simdi()
     adaylar = []
     kontrollu_gevsek_adaylar = []
 
@@ -2903,45 +3256,32 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
     return secimler
 
 
-KUPON_GECMISI_PATH = Path(__file__).with_name("vibe_kupon_gecmisi.json")
+KUPON_GECMISI_PATH = APP_DATA_DIR / "vibe_kupon_gecmisi.json"
 
 
 def kupon_gecmisini_oku():
     try:
-        if KUPON_GECMISI_PATH.exists():
-            veri = json.loads(KUPON_GECMISI_PATH.read_text(encoding="utf-8"))
-            return veri if isinstance(veri, list) else []
-    except Exception:
-        pass
-    return []
+        return kayit_deposu().read("kuponlar", KUPON_GECMISI_PATH)
+    except (OSError, ValueError, sqlite3.Error) as error:
+        kayit_hatasi("Kupon geçmişi okunamadı", error)
+        return []
 
 
 def kupon_gecmisini_yaz(kayitlar):
-    try:
-        gecici = KUPON_GECMISI_PATH.with_suffix(".tmp")
-        gecici.write_text(json.dumps(kayitlar, ensure_ascii=False, indent=2), encoding="utf-8")
-        gecici.replace(KUPON_GECMISI_PATH)
-        return True
-    except Exception:
-        return False
+    return kayitlari_degistir("kuponlar", lambda _: kayitlar, KUPON_GECMISI_PATH)
 
 
 def kupon_gecmisine_ekle(secimler, profil, hassasiyet):
-    kayitlar = kupon_gecmisini_oku()
-    simdi = datetime.now()
     kayit = {
-        "kupon_id": simdi.strftime("%Y%m%d%H%M%S%f"),
+        "kupon_id": datetime.now(TR_TIMEZONE).strftime("%Y%m%d%H%M%S%f"),
         "profil": str(profil),
-        "hassasiyet": (
-            round(float(hassasiyet), 2)
-            if isinstance(hassasiyet, (int, float))
-            else str(hassasiyet)
-        ),
-        "olusturma_zamani": simdi.isoformat(timespec="seconds"),
-        "secimler": secimler,
+        "hassasiyet": round(float(hassasiyet), 2) if isinstance(hassasiyet, (int, float)) else str(hassasiyet),
+        "olusturma_zamani": kayit_zamani_iso(),
+        "secimler": _json_guvenli_deger(secimler),
+        "model_version": MODEL_VERSION,
     }
-    kayitlar.insert(0, kayit)
-    kupon_gecmisini_yaz(kayitlar[:200])
+    if not kayitlari_degistir("kuponlar", lambda records: [kayit, *records][:200], KUPON_GECMISI_PATH):
+        return None
     return kayit
 
 
@@ -3598,7 +3938,7 @@ def takim_form_ozeti(veri, takim_adi, mac_tarihi, limit=5):
 
 def mac_form_profili(veri, m_row, limit=5):
     """Ev ve deplasman için form profili. Yeterli maç yoksa nötr döner."""
-    tarih = m_row.get("zaman", m_row.get("Date", datetime.now()))
+    tarih = m_row.get("zaman", m_row.get("Date", tr_simdi()))
     ev = takim_form_ozeti(veri, m_row.get("ev", m_row.get("HomeTeam", "")), tarih, limit=limit)
     dep = takim_form_ozeti(veri, m_row.get("dep", m_row.get("AwayTeam", "")), tarih, limit=limit)
 
@@ -3689,6 +4029,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     # İlk yarı verisi eksik 16 extra/worldwide lig hiçbir koşulda model örneği,
     # güven hesabı, örnek sayısı veya detay geçmişi olarak kullanılmasın.
     b_df = sadece_tam_verili_gecmis(b_df)
+    b_df = tarih_oncesi_gecmis(b_df, m_row.get("zaman", m_row.get("Date")))
     if b_df is None or getattr(b_df, "empty", True):
         return None, pd.DataFrame()
 
@@ -3817,8 +4158,13 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
     # Karşıt marketler önce kendi aileleri içinde yarıştırılır. Böylece örneğin
     # KG Yok %72 iken KG Var %63 resmî ana tahmin olarak kalamaz.
-    def _adj(raw, bias, label):
-        return min(float(raw) * guven_carpani * bias * form_market_carpani(label, form_profili), 0.99)
+    def _adj(raw, bias, label, n=None):
+        count = sample if n is None else n
+        if count <= 0:
+            return 0.0
+        factor = sample_factor_hesapla(count, float(tolerans)) * oran_factor
+        raw_adjusted = min(float(raw) * factor * bias * form_market_carpani(label, form_profili), 0.99)
+        return fake_confidence_duzelt(raw_adjusted, count, float(tolerans))[0]
 
     ms_taraflar = [
         {"label": "MS 1", "raw_prob": ms1_raw, "conf_prob": _adj(ms1_raw, ms_bias, "MS 1"), "market": "ms", "mod": "H"},
@@ -3869,7 +4215,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     # Mümkünse karşıt tarafları birbirine çok yakın olan market ailesini ana tahmin yapma.
     secim_havuzu = net_cands or cands
     best = max(secim_havuzu, key=lambda x: (x["conf_prob"], x["raw_prob"]))
-    best_conf, fake_drop = fake_confidence_duzelt(best["conf_prob"], sample, float(tolerans))
+    best_conf = best["conf_prob"]
+    fake_drop = best_conf < min(best["raw_prob"] * guven_carpani, 0.99) - 1e-9
 
     ana_label = best["label"]
     ana_p = int(round(best_conf * 100))
@@ -3882,7 +4229,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         others = [c for c in cands if c["market"] != best["market"]]
     if others:
         alt = max(others, key=lambda x: (x["conf_prob"], x["raw_prob"]))
-        alt_conf, _ = fake_confidence_duzelt(alt["conf_prob"], sample, float(tolerans))
+        alt_conf = alt["conf_prob"]
         alt_label = alt["label"]
         alt_p = int(round(alt_conf * 100))
     else:
@@ -3949,7 +4296,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     for htft_label, htft_raw_prob in htft_counts.items():
         htft_hit = int((htft_series == htft_label).sum())
         htft_conf = min(float(htft_raw_prob) * guven_carpani * combo_bias * form_market_carpani(f"HT/FT {htft_label}", form_profili), 0.99)
-        htft_conf, htft_fake_drop = fake_confidence_duzelt(htft_conf, sample, float(tolerans))
+        htft_conf, htft_fake_drop = fake_confidence_duzelt(htft_conf, len(b_ht), float(tolerans))
         gerekli_raw = 0.22 if match_type != "Sürpriz Açık" else 0.20
         gerekli_hit = max(3, onerilen_min_mac)
         if htft_hit >= gerekli_hit and float(htft_raw_prob) >= gerekli_raw:
@@ -4057,7 +4404,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         canli_label, canli_p = "Canlı İzle", 50
         canli_strateji = "İlk 10-15 dakikada baskı, şut ve korner üstünlüğü hangi taraftaysa sadece o yönde canlı giriş düşün."
 
-    flip_p = float((((b["HTR"] == "H") & (b["FTR"] == "A")) | ((b["HTR"] == "A") & (b["FTR"] == "H"))).mean())
+    flip_p = float((((b_ht["HTR"] == "H") & (b_ht["FTR"] == "A")) | ((b_ht["HTR"] == "A") & (b_ht["FTR"] == "H"))).mean()) if not b_ht.empty else 0.0
 
     risk_l, risk_cls = risk_seviyesi(ana_p, flip_p)
     eg, dg = tahmini_skor(b, ms_mod)
@@ -4143,7 +4490,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     sonuc = {
         "ana_label": ana_label,
         "ana_p": ana_p,
-        "playable_score": playable_score,
+        "playable_score": round(ana_p * 0.8, 1),
         "ana_raw_p": ana_raw_p,
         "ana_odd": ana_odd,
         "odds_h": round(oran_ev, 3),
@@ -4152,7 +4499,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "alt_label": alt_label,
         "alt_p": alt_p,
         "kg_label": kg_label,
-        "kg_p": int(round(kg_raw * guven_carpani * 100)),
+        "kg_p": int(round(_adj(kg_best_raw, goal_bias, kg_label) * 100)),
         "combo_label": combo_label,
         "combo_p": combo_p,
         "combo_raw_p": combo_raw_p,
@@ -4165,25 +4512,25 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "canli_strateji": canli_strateji,
         "belirsiz": belirsiz,
         "ms_side": ms_side,
-        "ms_p": int(round(ms_raw * guven_carpani * ms_bias * form_market_carpani(ms_side, form_profili) * 100)),
+        "ms_p": int(round(_adj(ms_raw, ms_bias, ms_side) * 100)),
         "ms_mod": ms_mod,
-        "ms1_p": int(round(ms1_raw * guven_carpani * ms_bias * form_market_carpani("MS 1", form_profili) * 100)),
-        "msx_p": int(round(msx_raw * guven_carpani * ms_bias * form_market_carpani("Beraberlik", form_profili) * 100)),
-        "ms2_p": int(round(ms2_raw * guven_carpani * ms_bias * form_market_carpani("MS 2", form_profili) * 100)),
-        "ms25_p": int(round(ms25_raw * guven_carpani * goal_bias * form_market_carpani("2.5 Üst", form_profili) * 100)),
-        "ms25a_p": int(round((1 - ms25_raw) * guven_carpani * goal_bias * form_market_carpani("2.5 Alt", form_profili) * 100)),
-        "ms15_p": int(round(ms15_raw * guven_carpani * goal_bias * 100)),
-        "ms35_p": int(round(ms35_raw * guven_carpani * goal_bias * form_market_carpani("3.5 Üst", form_profili) * 100)),
-        "kg_var_p": int(round(kg_raw * guven_carpani * goal_bias * form_market_carpani("KG Var", form_profili) * 100)),
-        "kg_yok_p": int(round((1 - kg_raw) * guven_carpani * goal_bias * form_market_carpani("KG Yok", form_profili) * 100)),
-        "iy05_p": int(round(iy05_raw * guven_carpani * goal_bias * form_market_carpani("İY 0.5 Üst", form_profili) * 100)),
-        "iy05a_p": int(round((1 - iy05_raw) * guven_carpani * goal_bias * 100)),
-        "iy15_p": int(round(iy15_raw * guven_carpani * goal_bias * form_market_carpani("İY 1.5 Üst", form_profili) * 100)),
-        "iy1_p": int(round(float(iy_vc.get("H", 0)) * guven_carpani * 100)),
-        "iyx_p": int(round(float(iy_vc.get("D", 0)) * guven_carpani * 100)),
-        "iy2_p": int(round(float(iy_vc.get("A", 0)) * guven_carpani * 100)),
+        "ms1_p": int(round(_adj(ms1_raw, ms_bias, "MS 1") * 100)),
+        "msx_p": int(round(_adj(msx_raw, ms_bias, "Beraberlik") * 100)),
+        "ms2_p": int(round(_adj(ms2_raw, ms_bias, "MS 2") * 100)),
+        "ms25_p": int(round(_adj(ms25_raw, goal_bias, "2.5 Üst") * 100)),
+        "ms25a_p": int(round(_adj(1-ms25_raw, goal_bias, "2.5 Alt") * 100)),
+        "ms15_p": int(round(_adj(ms15_raw, goal_bias, "1.5 Üst") * 100)),
+        "ms35_p": int(round(_adj(ms35_raw, goal_bias, "3.5 Üst") * 100)),
+        "kg_var_p": int(round(_adj(kg_raw, goal_bias, "KG Var") * 100)),
+        "kg_yok_p": int(round(_adj(1-kg_raw, goal_bias, "KG Yok") * 100)),
+        "iy05_p": int(round(_adj(iy05_raw, goal_bias, "İY 0.5 Üst", n=len(b_ht)) * 100)),
+        "iy05a_p": int(round(_adj(1-iy05_raw, goal_bias, "İY 0.5 Alt", n=len(b_ht)) * 100)),
+        "iy15_p": int(round(_adj(iy15_raw, goal_bias, "İY 1.5 Üst", n=len(b_ht)) * 100)),
+        "iy1_p": int(round(_adj(float(iy_vc.get("H", 0)), 1.0, "İY 1", n=len(b_ht)) * 100)),
+        "iyx_p": int(round(_adj(float(iy_vc.get("D", 0)), 1.0, "İY X", n=len(b_ht)) * 100)),
+        "iy2_p": int(round(_adj(float(iy_vc.get("A", 0)), 1.0, "İY 2", n=len(b_ht)) * 100)),
         "htft_mod": htft_mod,
-        "htft_p": int(round(htft_raw * guven_carpani * combo_bias * 100)),
+        "htft_p": int(round(_adj(htft_raw, combo_bias, "HT/FT", n=len(b_ht)) * 100)),
         "flip_p": flip_p,
         "risk_label": risk_l,
         "risk_cls": risk_cls,
@@ -4215,7 +4562,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "oynanabilir": oynanabilir,
         "oynanabilir_esik_ok": (ana_p >= 55),
         "fake_drop": fake_drop,
-        "score": score,
+        "score": round(ana_p * 0.8, 1),
+        "model_version": MODEL_VERSION,
         "stability_tols": [],
         "stability_count": 0,
         "stability_text": "",
@@ -4298,194 +4646,11 @@ def market_gecmis_guven_duzeltmesi(etiket, ham_guven, kayitlar=None):
     return duzeltilmis, shrunk_success, n, delta
 
 
-def hassasiyet_birlesik_hesapla(
-    b_df, m_row, min_ornek, sadece_ayni_lig=False, market_gecmis_kayitlari=None
-):
-    # Tüm hassasiyet noktaları aynı temiz geçmiş havuzunu kullansın.
-    b_df = sadece_tam_verili_gecmis(b_df)
-    if b_df is None or getattr(b_df, "empty", True):
-        return None, pd.DataFrame()
-
-    """
-    0.00–0.10 sonuçlarını yeni sıralama mantığıyla birleştirir.
-
-    Ana puan:
-      - Güven: %80
-      - Kararlılık: %20
-      - Örnek sayısı: puan vermez; yalnızca yeterlilik şartıdır.
-      - Çok az medyan örnekte ayrıca ceza uygulanır.
-      - Marketin geçmiş backtest başarısı güvene küçük bir düzeltme yapar.
-    """
-    market_alanlari = {
-        "MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
-        "2.5 Üst": "ms25_p", "2.5 Alt": "ms25a_p",
-        "KG Var": "kg_var_p", "KG Yok": "kg_yok_p",
-    }
-
-    marketler = {}
-    for tol in [round(i / 100, 2) for i in range(11)]:
-        tol_t, tol_b = hesapla(
-            b_df, m_row, tol, sadece_ayni_lig=sadece_ayni_lig,
-            form_aktif=False, kalibrasyon_aktif=False,
-        )
-        if tol_t is None:
-            continue
-
-        ornek = int(tol_t.get("ornek", len(tol_b)) or 0)
-        gerekli = max(
-            int(min_ornek),
-            int(tol_t.get("onerilen_min_mac", dinamik_min_mac(tol)) or 0),
-        )
-
-        # Örnek artık puan üretmiyor; yalnızca yeterlilik kapısı.
-        if ornek < gerekli:
-            continue
-
-        for etiket, alan in market_alanlari.items():
-            guven = int(tol_t.get(alan, 0) or 0)
-            if guven > 60:
-                marketler.setdefault(etiket, []).append({
-                    "guven": guven,
-                    "ornek": ornek,
-                    "gerekli": gerekli,
-                    "tol": tol,
-                    "t": tol_t,
-                    "b": tol_b,
-                })
-
-    sirali = []
-    for etiket, kayitlar in marketler.items():
-        # En az 3 hassasiyette destek görmeyen market birleşik aday olmasın.
-        if len(kayitlar) < 3:
-            continue
-
-        # Güven ortalaması artık örnek sayısıyla ağırlıklandırılmıyor.
-        # Böylece yüksek örnek sayısı dolaylı olarak da puan kazandırmıyor.
-        ort_guven = sum(x["guven"] for x in kayitlar) / len(kayitlar)
-
-        ornekler = sorted(x["ornek"] for x in kayitlar)
-        orta = len(ornekler) // 2
-        medyan_ornek = (
-            ornekler[orta]
-            if len(ornekler) % 2
-            else (ornekler[orta - 1] + ornekler[orta]) / 2
-        )
-
-        kararlilik = len(kayitlar) / 11.0 * 100.0
-
-        # Marketin geçmiş başarısı yalnızca küçük bir güven düzeltmesidir.
-        duzeltilmis_guven, market_basari, market_adet, market_delta = (
-            market_gecmis_guven_duzeltmesi(
-                etiket, ort_guven, market_gecmis_kayitlari
-            )
-        )
-
-        # Birleşik puanda da yalnızca gerçekten tek örnekli yapı cezalandırılır.
-        # 2+ örneğe artık düşük örnek cezası uygulanmaz. 0.00 hassasiyetin tek
-        # örnek durumu sample_factor_hesapla içinde özellikle muaf tutulur.
-        az_ornek_cezasi = 8.0 if medyan_ornek <= 1 else 0.0
-
-        birlesik_puan = (
-            duzeltilmis_guven * 0.80
-            + kararlilik * 0.20
-            - az_ornek_cezasi
-        )
-
-        temsilci = max(
-            kayitlar,
-            key=lambda x: (x["guven"], -x["tol"]),
-        )
-
-        sirali.append({
-            "label": etiket,
-            "guven": int(round(duzeltilmis_guven)),
-            "ham_guven": round(ort_guven, 1),
-            "puan": round(birlesik_puan, 1),
-            "ornek": int(round(medyan_ornek)),
-            "kararlilik": len(kayitlar),
-            "kararlilik_pct": round(kararlilik, 1),
-            "az_ornek_cezasi": az_ornek_cezasi,
-            "market_gecmis_basari": round(market_basari, 1) if market_basari is not None else None,
-            "market_gecmis_adet": int(market_adet),
-            "market_guven_delta": round(market_delta, 2),
-            "toleranslar": [f'{x["tol"]:.2f}' for x in kayitlar],
-            "temsilci": temsilci,
-        })
-
-    sirali.sort(
-        key=lambda x: (x["puan"], x["guven"], x["kararlilik"]),
-        reverse=True,
-    )
-    if not sirali:
-        return None, pd.DataFrame()
-
-    ana, alt = sirali[0], (sirali[1] if len(sirali) > 1 else None)
-    t = dict(ana["temsilci"]["t"])
-    b = ana["temsilci"]["b"]
-
-    t.update({
-        "ana_label": ana["label"],
-        "ana_p": ana["guven"],
-        "ana_ham_guven": ana["ham_guven"],
-        "ana_odd": market_label_to_odd(m_row, ana["label"]),
-        "score": ana["puan"],
-        "playable_score": ana["puan"],
-        "ornek": int(len(b)),
-        "birlesik_ornek_medyan": ana["ornek"],
-        "kullanilan_tolerans": float(ana["temsilci"]["tol"]),
-        "stability_tols": ana["toleranslar"],
-        "stability_count": ana["kararlilik"],
-        "stability_pct": ana["kararlilik_pct"],
-        "stability_text": " · ".join(ana["toleranslar"]),
-        "birlesik_model": True,
-        "birlesik_puan": ana["puan"],
-        "az_ornek_cezasi": ana["az_ornek_cezasi"],
-        "market_gecmis_basari": ana["market_gecmis_basari"],
-        "market_gecmis_adet": ana["market_gecmis_adet"],
-        "market_guven_delta": ana["market_guven_delta"],
-        "puan_formulu": "Güven %80 + Kararlılık %20",
-    })
-
-    t["stability_early_tols"] = [
-        x for x in ana["toleranslar"] if float(x) <= 0.05
-    ]
-    t["stability_late_tols"] = [
-        x for x in ana["toleranslar"] if float(x) > 0.05
-    ]
-    t["stability_early_text"] = " · ".join(t["stability_early_tols"])
-    t["stability_late_text"] = " · ".join(t["stability_late_tols"])
-
-    renk, badge_cls, badge_lbl = guven_renk(t["ana_p"])
-    t["guven_renk"], t["guven_badge_cls"], t["guven_badge_lbl"] = (
-        renk, badge_cls, badge_lbl
-    )
-
-    if alt:
-        t.update({
-            "alt_label": alt["label"],
-            "alt_p": alt["guven"],
-            "alt_ornek": alt["ornek"],
-            "alt_puan": alt["puan"],
-            "alt_kararlilik": alt["kararlilik"],
-            "alt_hassasiyetler": alt["toleranslar"],
-            "alt_hassasiyet": float(alt["temsilci"]["tol"]),
-            "alt_market_gecmis_basari": alt["market_gecmis_basari"],
-            "alt_market_gecmis_adet": alt["market_gecmis_adet"],
-        })
-    else:
-        t.update({
-            "alt_label": "",
-            "alt_p": 0,
-            "alt_ornek": 0,
-            "alt_puan": 0,
-            "alt_kararlilik": 0,
-            "alt_hassasiyetler": [],
-            "alt_hassasiyet": None,
-            "alt_market_gecmis_basari": None,
-            "alt_market_gecmis_adet": 0,
-        })
-
-    return t, b.sort_values("Date", ascending=False)
+def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False,
+                               market_gecmis_kayitlari=None, taramalar=None):
+    havuz = birlesik_market_havuzu(b_df, m_row, min_ornek, sadece_ayni_lig,
+                                 market_gecmis_kayitlari, taramalar=taramalar)
+    return birlesik_tahmin_olustur(havuz[0], havuz, m_row) if havuz else (None, pd.DataFrame())
 
 def kombo_tahmini_oran(label, ana_odd=None):
     """Top 10 Market içinde kombo marketler için yaklaşık oran üretir.
@@ -4511,12 +4676,13 @@ def kombo_tahmini_oran(label, ana_odd=None):
     return round(base * 1.40, 2)
 
 
-def top10_market_adaylari(t):
+def top10_market_adaylari(t, filtreler=None):
     """
     Top 10 için gerçek multi-market aday havuzu.
     Sadece MS'e kilitlenmez; MS / Alt-Üst / KG / İlk Yarı / Kombo marketlerini aynı havuza alır.
     Market türüne göre keyfi bonus vermez; Value/Edge yalnızca gerçek MS oranı varsa hafif sinyal olur.
     """
+    filtreler = st.session_state if filtreler is None else filtreler
     adaylar = []
 
     def safe_int(v, default=0):
@@ -4552,17 +4718,17 @@ def top10_market_adaylari(t):
 
         # Top 10 Market sayfasındaki market aç/kapat filtreleri.
         # Ana maç analizi tarafını etkilemez; sadece Top 10 aday havuzunu filtreler.
-        if not st.session_state.get("top10_filter_ms", True) and tip == "MS":
+        if not filtreler.get("top10_filter_ms", True) and tip == "MS":
             return
-        if not st.session_state.get("top10_filter_25", True) and (tip == "Alt/Üst" or "2.5" in label):
+        if not filtreler.get("top10_filter_25", True) and (tip == "Alt/Üst" or "2.5" in label):
             return
-        if not st.session_state.get("top10_filter_kg", True) and tip == "KG":
+        if not filtreler.get("top10_filter_kg", True) and tip == "KG":
             return
-        if not st.session_state.get("top10_filter_iy05", True) and label == "İY 0.5 Üst":
+        if not filtreler.get("top10_filter_iy05", True) and label == "İY 0.5 Üst":
             return
-        if not st.session_state.get("top10_filter_iy15", True) and label == "İY 1.5 Üst":
+        if not filtreler.get("top10_filter_iy15", True) and label == "İY 1.5 Üst":
             return
-        if not st.session_state.get("top10_filter_combo", True) and tip in ["Kombo", "HT/FT"]:
+        if not filtreler.get("top10_filter_combo", True) and tip in ["Kombo", "HT/FT"]:
             return
 
         # İlk yarı marketleri daha volatil olduğu için Top 10/Top 50'ye kontrollü girsin.
@@ -4669,7 +4835,7 @@ def mac_key(m):
         return str(m)
 
 
-TAHMIN_LOG_PATH = Path(__file__).with_name("vibe_tahmin_sonuclari.json")
+TAHMIN_LOG_PATH = APP_DATA_DIR / "vibe_tahmin_sonuclari.json"
 
 
 def _json_guvenli_deger(value):
@@ -4681,7 +4847,7 @@ def _json_guvenli_deger(value):
         return value.isoformat()
     if hasattr(value, "item"):
         try:
-            return value.item()
+            return _json_guvenli_deger(value.item())
         except Exception:
             pass
     try:
@@ -4827,22 +4993,14 @@ def tahmin_kayitlarini_tekillestir(kayitlar):
 
 def tahmin_logunu_oku():
     try:
-        if TAHMIN_LOG_PATH.exists():
-            veri = json.loads(TAHMIN_LOG_PATH.read_text(encoding="utf-8"))
-            return tahmin_kayitlarini_tekillestir(veri) if isinstance(veri, list) else []
-    except Exception:
-        pass
-    return []
+        return tahmin_kayitlarini_tekillestir(kayit_deposu().read("tahminler", TAHMIN_LOG_PATH))
+    except (OSError, ValueError, sqlite3.Error) as error:
+        kayit_hatasi("Tahmin geçmişi okunamadı", error)
+        return []
 
 
 def tahmin_logunu_yaz(kayitlar):
-    try:
-        gecici = TAHMIN_LOG_PATH.with_suffix(".tmp")
-        gecici.write_text(json.dumps(kayitlar, ensure_ascii=False, indent=2), encoding="utf-8")
-        gecici.replace(TAHMIN_LOG_PATH)
-        return True
-    except Exception:
-        return False
+    return kayitlari_degistir("tahminler", lambda _: kayitlar, TAHMIN_LOG_PATH)
 
 
 def sonuc_takibini_sifirla():
@@ -4851,129 +5009,102 @@ def sonuc_takibini_sifirla():
 
 
 def tahmin_loguna_baglam_yaz(m, label, baglam):
-    """Hesaplanan bağlamı, aynı maç+tahmin kaydına sonuç analizi için snapshot olarak ekler."""
-    try:
-        kayitlar = tahmin_logunu_oku()
-        if not kayitlar or not isinstance(baglam, dict):
-            return False
-        hedef = str(m.get("match_id") or mac_key(m))
-        degisti = False
-        for k in kayitlar:
-            kid = str(k.get("match_id") or k.get("kayit_id") or "")
-            ayni = kid == hedef or (
-                takim_adi_norm(k.get("ev")) == takim_adi_norm(m.get("ev"))
-                and takim_adi_norm(k.get("dep")) == takim_adi_norm(m.get("dep"))
-                and str(k.get("zaman", ""))[:10] == str(m.get("zaman", ""))[:10]
-            )
-            if not ayni or str(k.get("tahmin", "")).strip() != str(label or "").strip():
-                continue
-            k["baglam_ayari"] = float(baglam.get("toplam", 0.0) or 0.0)
-            k["baglam_kaynak"] = str(baglam.get("kaynak", ""))
-            k["baglam_snapshot"] = baglam
-            k["baglam_kaydedildi"] = datetime.now().isoformat(timespec="seconds")
-            degisti = True
-        return tahmin_logunu_yaz(kayitlar) if degisti else False
-    except Exception:
+    if not isinstance(baglam, dict) or not mac_baslamadi_mi(m.get("zaman")):
         return False
+    target = str(m.get("match_id") or mac_key(m))
+    def update(records):
+        for record in records:
+            if tahmin_kaydi_mac_anahtari(record) != target or record.get("tahmin") != label:
+                continue
+            if record.get("durum") == "Tamamlandı" or not mac_baslamadi_mi(record.get("zaman")):
+                continue
+            record.update(baglam_ayari=float(baglam.get("toplam", 0)), baglam_kaynak=str(baglam.get("kaynak", "")),
+                          baglam_snapshot=_json_guvenli_deger(baglam), baglam_kaydedildi=kayit_zamani_iso())
+        return records
+    return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
 
 def analiz_tahminlerini_kaydet(final):
-    """Aynı maç için maç başlamadan önceki en yüksek güvenli tek tahmini saklar."""
-    kayitlar = tahmin_logunu_oku()
-    mevcut = {tahmin_kaydi_mac_anahtari(x): x for x in kayitlar}
-    for item in final:
-        m, t = item.get("m", {}), item.get("t", {})
-        label = str(t.get("ana_label", ""))
-        if not label or label in ["Belirsiz Maç", "Tahmin Zayıf"]:
-            continue
-        zaman = m.get("zaman")
-        zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman)
-        mac_anahtari = str(m.get("match_id") or mac_key(m))
-        eski = mevcut.get(mac_anahtari, {})
-        aday = {
-            "kayit_id": mac_anahtari,
-            "match_id": str(m.get("match_id", "")),
-            "sport_key": str(m.get("sport_key", "")),
-            "lig": str(m.get("lig", "")),
-            "zaman": zaman_iso,
-            "ev": str(m.get("ev", "")),
-            "dep": str(m.get("dep", "")),
-            "h": float(m.get("h")) if m.get("h") is not None else None,
-            "b": float(m.get("b")) if m.get("b") is not None else None,
-            "a": float(m.get("a")) if m.get("a") is not None else None,
-            "tahmin": label,
-            "guven": int(t.get("ana_p", 0)),
-            "alternatif_tahmin": str(t.get("alt_label", "") or ""),
-            "alternatif_guven": int(t.get("alt_p", 0) or 0),
-            "alternatif_ornek": int(t.get("alt_ornek", 0) or 0),
-            "alternatif_puan": float(t.get("alt_puan", 0) or 0),
-            "alternatif_kararlilik": int(t.get("alt_kararlilik", 0) or 0),
-            "alternatif_hassasiyetler": list(t.get("alt_hassasiyetler", []) or []),
-            "ornek": int(t.get("ornek", 0) or 0),
-            "ana_ornek_medyan": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
-            "ana_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
-            "ana_kararlilik": int(t.get("stability_count", 0) or 0),
-            "ana_hassasiyetler": list(t.get("stability_tols", []) or []),
-            "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
-            "oran": float(t.get("ana_odd")) if t.get("ana_odd") is not None else None,
-            "alternatif_oran": (
-                float(market_label_to_odd(m, t.get("alt_label")))
-                if t.get("alt_label") and market_label_to_odd(m, t.get("alt_label")) is not None
-                else None
-            ),
-            "kaydedildi": eski.get("kaydedildi", datetime.now().isoformat(timespec="seconds")),
-            "durum": eski.get("durum", "Bekliyor"),
-            "ev_gol": eski.get("ev_gol"),
-            "dep_gol": eski.get("dep_gol"),
-            "tuttu": eski.get("tuttu"),
-            "alternatif_tuttu": eski.get("alternatif_tuttu"),
-            "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
-            "detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
-        }
-        # Sonuçlanmış ana tahmin dondurulur; yeni tarama yalnızca eksik/daha
-        # güçlü alternatif bilgisini tamamlayabilir.
-        if eski.get("durum") == "Tamamlandı":
-            secilen = dict(eski)
-            if aday.get("detay_snapshot", {}).get("b"):
-                secilen["detay_snapshot"] = aday["detay_snapshot"]
+    """Maç öncesi tahmini atomik kaydeder; başlangıçtan sonra bütün tahmin alanları kilitlidir."""
+    def update(kayitlar):
+        kayitlar = tahmin_kayitlarini_tekillestir(kayitlar)
+        mevcut = {tahmin_kaydi_mac_anahtari(x): x for x in kayitlar}
+        for item in final:
+            m, t = item.get("m", {}), item.get("t", {})
+            label = str(t.get("ana_label", ""))
+            if not label or label in ["Belirsiz Maç", "Tahmin Zayıf"]:
+                continue
+            if not mac_baslamadi_mi(m.get("zaman")):
+                continue
+            zaman = m.get("zaman")
+            zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman)
+            mac_anahtari = str(m.get("match_id") or mac_key(m))
+            eski = mevcut.get(mac_anahtari, {})
+            if eski.get("durum") == "Tamamlandı":
+                continue
+            aday = {
+                "kayit_id": mac_anahtari,
+                "match_id": str(m.get("match_id", "")),
+                "sport_key": str(m.get("sport_key", "")),
+                "lig": str(m.get("lig", "")),
+                "zaman": zaman_iso,
+                "ev": str(m.get("ev", "")),
+                "dep": str(m.get("dep", "")),
+                "h": float(m.get("h")) if m.get("h") is not None else None,
+                "b": float(m.get("b")) if m.get("b") is not None else None,
+                "a": float(m.get("a")) if m.get("a") is not None else None,
+                "tahmin": label,
+                "guven": int(t.get("ana_p", 0)),
+                "alternatif_tahmin": str(t.get("alt_label", "") or ""),
+                "alternatif_guven": int(t.get("alt_p", 0) or 0),
+                "alternatif_ornek": int(t.get("alt_ornek", 0) or 0),
+                "alternatif_puan": float(t.get("alt_puan", 0) or 0),
+                "alternatif_kararlilik": int(t.get("alt_kararlilik", 0) or 0),
+                "alternatif_hassasiyetler": list(t.get("alt_hassasiyetler", []) or []),
+                "ornek": int(t.get("ornek", 0) or 0),
+                "ana_ornek_medyan": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
+                "ana_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
+                "ana_kararlilik": int(t.get("stability_count", 0) or 0),
+                "ana_hassasiyetler": list(t.get("stability_tols", []) or []),
+                "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
+                "oran": float(t.get("ana_odd")) if t.get("ana_odd") is not None else None,
+                "alternatif_oran": (
+                    float(market_label_to_odd(m, t.get("alt_label")))
+                    if t.get("alt_label") and market_label_to_odd(m, t.get("alt_label")) is not None
+                    else None
+                ),
+                "kaydedildi": kayit_zamani_iso(),
+                "ilk_kayit_zamani": eski.get("ilk_kayit_zamani", eski.get("kaydedildi", kayit_zamani_iso())),
+                "model_version": MODEL_VERSION,
+                "durum": eski.get("durum", "Bekliyor"),
+                "ev_gol": eski.get("ev_gol"),
+                "dep_gol": eski.get("dep_gol"),
+                "tuttu": eski.get("tuttu"),
+                "alternatif_tuttu": eski.get("alternatif_tuttu"),
+                "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
+                "detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
+            }
+            if not eski or _tahmin_kaydi_sirasi(aday) > _tahmin_kaydi_sirasi(eski):
+                aday["degisiklikler"] = list(eski.get("degisiklikler", []))
+                if eski:
+                    aday["degisiklikler"].append({"tahmin": eski.get("tahmin"), "guven": eski.get("guven"), "kaydedildi": eski.get("kaydedildi")})
+                    aday["degisiklikler"] = aday["degisiklikler"][-20:]
+                secilen = aday
+            else:
+                secilen = dict(eski)
             alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
                 secilen.get("tahmin"), [eski, aday]
             )
             secilen["alternatif_tahmin"] = alt_etiket
             secilen["alternatif_guven"] = alt_guven
             secilen["alternatif_oran"] = alt_oran
-            if secilen.get("ev_gol") is not None and secilen.get("dep_gol") is not None:
-                alt_tuttu = skor_tahmini_tuttu_mu(
-                    alt_etiket, int(secilen["ev_gol"]), int(secilen["dep_gol"])
-                )
-                secilen["alternatif_tuttu"] = bool(alt_tuttu) if alt_tuttu is not None else None
             mevcut[mac_anahtari] = secilen
-            continue
-        if not eski or _tahmin_kaydi_sirasi(aday) > _tahmin_kaydi_sirasi(eski):
-            secilen = aday
-        else:
-            secilen = dict(eski)
-        alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
-            secilen.get("tahmin"), [eski, aday]
-        )
-        secilen["alternatif_tahmin"] = alt_etiket
-        secilen["alternatif_guven"] = alt_guven
-        secilen["alternatif_oran"] = alt_oran
-        mevcut[mac_anahtari] = secilen
-    return tahmin_logunu_yaz(tahmin_kayitlarini_tekillestir(list(mevcut.values())))
+        return tahmin_kayitlarini_tekillestir(list(mevcut.values()))
+    return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
 
 def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol):
-    toplam = ev_gol + dep_gol
-    return {
-        "MS 1": ev_gol > dep_gol,
-        "Beraberlik": ev_gol == dep_gol,
-        "MS 2": dep_gol > ev_gol,
-        "2.5 Üst": toplam >= 3,
-        "2.5 Alt": toplam <= 2,
-        "KG Var": ev_gol > 0 and dep_gol > 0,
-        "KG Yok": ev_gol == 0 or dep_gol == 0,
-    }.get(str(label))
+    return tahmin_tuttu_mu(label, {"FTHG": ev_gol, "FTAG": dep_gol})
 
 
 def takim_anahtari(ad):
@@ -4981,73 +5112,72 @@ def takim_anahtari(ad):
 
 
 def tahmin_sonuclarini_guncelle(api_key):
-    """Odds API skorlarından son üç gündeki tamamlanan takip kayıtlarını günceller."""
-    kayitlar = tahmin_logunu_oku()
-    bekleyen = [x for x in kayitlar if x.get("durum") != "Tamamlandı"]
-    ligler = sorted({x.get("sport_key") for x in bekleyen if x.get("sport_key")})
-    skorlar = []
-    hata = None
-    for lig in ligler:
+    records = tahmin_logunu_oku()
+    pending = [record for record in records if record.get("durum") != "Tamamlandı"]
+    leagues = sorted({record.get("sport_key") for record in pending if record.get("sport_key")})
+    scores, errors = [], []
+    for league in leagues:
         try:
-            skor_url = f"https://api.the-odds-api.com/v4/sports/{lig}/scores/"
-            skor_param = {"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}
-            r = requests.get(skor_url, params=skor_param, timeout=15)
-            # Oturumda kalmış anahtar geçersizse ve uygulamada farklı bir secret
-            # anahtar varsa sonuç takibini onunla bir kez daha dene.
-            if r.status_code == 401:
-                yedek_key = str(get_secret_value("ODDS_API_KEY", "") or "").strip()
-                if yedek_key and yedek_key != str(api_key).strip():
-                    skor_param["apiKey"] = yedek_key
-                    r = requests.get(skor_url, params=skor_param, timeout=15)
-            if r.status_code == 200 and isinstance(r.json(), list):
-                skorlar.extend(r.json())
-            elif r.status_code == 401:
-                hata = "Odds API anahtarı geçersiz, süresi dolmuş veya aktif değil. Sol menüden anahtarı yeniden gir."
-            else:
-                hata = f"Skor servisi HTTP {r.status_code} yanıtı verdi."
-        except Exception as exc:
-            hata = f"Skorlar alınamadı: {exc}"
-
-    id_map = {str(x.get("id", "")): x for x in skorlar if x.get("id")}
-    ad_map = {
-        (takim_anahtari(x.get("home_team")), takim_anahtari(x.get("away_team"))): x
-        for x in skorlar
-    }
-    guncellenen = 0
-    for kayit in kayitlar:
-        if kayit.get("durum") == "Tamamlandı":
+            response = requests.get(f"https://api.the-odds-api.com/v4/sports/{league}/scores/",
+                                    params={"apiKey": api_key, "daysFrom": 3, "dateFormat": "iso"}, timeout=15)
+            if response.status_code != 200:
+                errors.append(f"{league}: Skor servisi HTTP {response.status_code}")
+                continue
+            payload = response.json()
+            if not isinstance(payload, list):
+                errors.append(f"{league}: Geçersiz skor yanıtı")
+                continue
+            scores.extend(payload)
+        except (requests.RequestException, ValueError):
+            errors.append(f"{league}: Skor servisine ulaşılamadı")
+    id_map = {str(match["id"]): match for match in scores if match.get("id")}
+    results = {}
+    for record in pending:
+        match = id_map.get(str(record.get("match_id", "")))
+        if match is None:
+            kickoff = parse_mac_datetime(record.get("zaman"))
+            candidates = []
+            for candidate in scores:
+                date = parse_mac_datetime(candidate.get("commence_time"))
+                if (kickoff is not None and date is not None and abs((kickoff - date).total_seconds()) <= 900
+                    and candidate.get("sport_key") == record.get("sport_key")
+                    and takim_anahtari(candidate.get("home_team")) == takim_anahtari(record.get("ev"))
+                    and takim_anahtari(candidate.get("away_team")) == takim_anahtari(record.get("dep"))):
+                    candidates.append(candidate)
+            match = candidates[0] if len(candidates) == 1 else None
+        if not match or not match.get("completed") or not match.get("scores"):
             continue
-        mac = id_map.get(str(kayit.get("match_id", "")))
-        if mac is None:
-            mac = ad_map.get((takim_anahtari(kayit.get("ev")), takim_anahtari(kayit.get("dep"))))
-        if not mac or not mac.get("completed") or not mac.get("scores"):
-            continue
-        puanlar = {takim_anahtari(x.get("name")): x.get("score") for x in mac.get("scores", [])}
+        values = {takim_anahtari(value.get("name")): value.get("score") for value in match["scores"]}
         try:
-            ev_gol = int(puanlar[takim_anahtari(kayit.get("ev"))])
-            dep_gol = int(puanlar[takim_anahtari(kayit.get("dep"))])
+            home = int(values[takim_anahtari(record.get("ev"))])
+            away = int(values[takim_anahtari(record.get("dep"))])
         except (KeyError, TypeError, ValueError):
             continue
-        tuttu = skor_tahmini_tuttu_mu(kayit.get("tahmin"), ev_gol, dep_gol)
-        if tuttu is None:
-            continue
-        kayit.update({
-            "durum": "Tamamlandı", "ev_gol": ev_gol, "dep_gol": dep_gol,
-            "tuttu": bool(tuttu), "sonuc_guncelleme": datetime.now().isoformat(timespec="seconds"),
-            "alternatif_tuttu": (
-                bool(skor_tahmini_tuttu_mu(kayit.get("alternatif_tahmin"), ev_gol, dep_gol))
-                if skor_tahmini_tuttu_mu(kayit.get("alternatif_tahmin"), ev_gol, dep_gol) is not None
-                else None
-            ),
-        })
-        guncellenen += 1
-    tahmin_logunu_yaz(kayitlar)
-    return guncellenen, hata
+        results[tahmin_kaydi_mac_anahtari(record)] = (home, away)
+    updated = []
+    def update(current):
+        for record in current:
+            key = tahmin_kaydi_mac_anahtari(record)
+            if key not in results or record.get("durum") == "Tamamlandı":
+                continue
+            home, away = results[key]
+            hit = skor_tahmini_tuttu_mu(record.get("tahmin"), home, away)
+            if hit is None:
+                continue
+            alt_hit = skor_tahmini_tuttu_mu(record.get("alternatif_tahmin"), home, away)
+            record.update(durum="Tamamlandı", ev_gol=home, dep_gol=away, tuttu=bool(hit),
+                          alternatif_tuttu=bool(alt_hit) if alt_hit is not None else None,
+                          sonuc_guncelleme=kayit_zamani_iso())
+            updated.append(key)
+        return current
+    if results and not kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH):
+        return 0, "Sonuçlar kaydedilemedi. Önceki kayıtlar korundu."
+    return len(updated), " · ".join(errors) or None
 
 
 def tahmini_mac_dakikasi(baslangic, simdi=None):
     """Başlangıç saatinden yaklaşık futbol dakikası üretir; API gerçek dakika sağlamaz."""
-    simdi = simdi or (datetime.utcnow() + timedelta(hours=3))
+    simdi = simdi or (tr_simdi())
     gecen = max(0, int((simdi - baslangic).total_seconds() // 60))
     if gecen <= 50:
         return min(gecen, 45), f"~{min(gecen, 45)}'"
@@ -5136,7 +5266,7 @@ def canli_analizleri_getir(api_key):
         except Exception as exc:
             hatalar.append(f"{lig}: {exc}")
 
-    simdi = datetime.utcnow() + timedelta(hours=3)
+    simdi = tr_simdi()
     canlilar = []
     for kayit in bekleyen:
         eslesen = next((s for s in skorlar if str(s.get("id", "")) == str(kayit.get("match_id", "")) and s.get("id")), None)
@@ -5148,7 +5278,7 @@ def canli_analizleri_getir(api_key):
             baslangic = datetime.fromisoformat(str(eslesen.get("commence_time", "")).replace("Z", "+00:00")).replace(tzinfo=None) + timedelta(hours=3)
         except Exception:
             baslangic = parse_mac_datetime(kayit.get("zaman"))
-        if simdi < baslangic or simdi > baslangic + timedelta(hours=3):
+        if baslangic is None or simdi < baslangic or simdi > baslangic + timedelta(hours=3):
             continue
         puanlar = {takim_anahtari(x.get("name")): int(x.get("score", 0)) for x in (eslesen.get("scores") or [])}
         try:
@@ -5174,395 +5304,120 @@ def kupon_marketi_uygun(label):
 
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                          sadece_ayni_lig=False, kupon_modu=False,
-                         kupon_profili=None, tum_marketler=False):
-    """
-    Top10 / Top50 özel liste üretici.
-
-    ÖNEMLİ:
-    Bu fonksiyon sidebar'daki hassasiyet slider'ına bağlı çalışmaz.
-    Her maç için 0.00 - 0.10 aralığını 0.01 adımlarla tarar ve aynı maç + aynı market
-    kaç farklı hassasiyette çıkıyorsa bunu stabilite skoru olarak kullanır.
-
-    Böylece slider 0.05 / 0.08 / 0.10 değişince Top10/Top50 listesi zıplamaz.
-    """
-    top_toleranslar = [round(i / 100, 2) for i in range(11)]
+                         kupon_profili=None, tum_marketler=False,
+                         market_gecmis_kayitlari=None, filtreler=None, taramalar=None):
+    if gecmis_df is None or bulten_df is None or gecmis_df.empty or bulten_df.empty:
+        return []
     adaylar = []
-
-    if gecmis_df is None or bulten_df is None:
-        return []
-    if getattr(gecmis_df, "empty", True) or getattr(bulten_df, "empty", True):
-        return []
-
-    min_ornek_val = max(1, int(min_ornek or 1))
-
     for _, m in bulten_df.iterrows():
-        # Aynı maç içinde market bazlı gruplama:
-        # Örnek: Arsenal - Chelsea / 2.5 Üst
-        # 0.01, 0.02, 0.03 ... 0.10 noktalarında çıkıyorsa stabil sayılır.
-        market_gruplari = {}
-
-        for tol in top_toleranslar:
-            try:
-                t, b_det = hesapla(gecmis_df, m, tol, sadece_ayni_lig=sadece_ayni_lig)
-            except Exception:
+        scan = taramalar.get(mac_key(m.to_dict())) if taramalar is not None else None
+        havuz = birlesik_market_havuzu(gecmis_df, m, min_ornek, sadece_ayni_lig,
+                                      market_gecmis_kayitlari, ek_marketler=True,
+                                      filtreler=filtreler, taramalar=scan)
+        for candidate in havuz:
+            if kupon_modu and not kupon_marketi_uygun(candidate["label"]):
                 continue
-
-            if t is None or t.get("belirsiz"):
+            if kupon_modu and kupon_profili == "Yüksek Oran" and "+" not in candidate["label"]:
                 continue
-
-            ornek = int(t.get("ornek", 0) or 0)
-            if ornek < min_ornek_val:
+            if kupon_modu and kupon_profili == "Temkinli" and "+" in candidate["label"]:
                 continue
-
-            marketler = top10_market_adaylari(t)
-            if not marketler:
-                continue
-
-            tol_ceza = round(float(tol) * 100, 1)
-            dusuk_tol_bonus = 8 if tol <= 0.02 else 5 if tol <= 0.04 else 2 if tol <= 0.06 else 0
-            risk_ceza = 8 if t.get("risk_label") == "YÜKSEK" else 3 if t.get("risk_label") == "ORTA" else 0
-            fake_ceza = 5 if t.get("fake_drop") else 0
-            sample_bonus = min(ornek, 25) * 0.25
-            playable = float(t.get("playable_score", 0) or 0)
-
-            for mk in marketler:
-                label = str(mk.get("label", "")).strip()
-                tip = str(mk.get("tip", "")).strip()
-                if not label:
-                    continue
-                if kupon_modu and not kupon_marketi_uygun(label):
-                    continue
-
-                guven = int(mk.get("guven", 0) or 0)
-
-                # Tek toleranstaki ham skor.
-                # Kalibre Value/Edge bu aşamada yalnızca ölçülür; Top 50 skorunu etkilemez.
-                tekil_skor = (
-                    guven * 1.00
-                    + playable * 0.22
-                    + sample_bonus
-                    + float(mk.get("bonus", 0) or 0)
-                    + dusuk_tol_bonus
-                    - tol_ceza
-                    - risk_ceza
-                    - fake_ceza
-                )
-
-                grup_key = f"{label}|{tip}"
-                if grup_key not in market_gruplari:
-                    market_gruplari[grup_key] = {
-                        "label": label,
-                        "tip": tip,
-                        "kayitlar": [],
-                    }
-
-                t_secili = t.copy()
-                t_secili["top10_market_label"] = label
-                t_secili["top10_market_tip"] = tip
-                t_secili["top10_market_guven"] = guven
-                t_secili["top10_market_oran"] = mk.get("oran")
-                t_secili["top10_market_oran_tahmini"] = bool("+" in label and mk.get("oran") is not None)
-
-                # Detay ekranı ve kartlar seçilen marketi ana tahmin gibi gösterebilsin.
-                t_secili["ana_label"] = label
-                t_secili["ana_p"] = guven
-                # Seçilen marketin gerçek oranı yoksa önceki ana marketin
-                # 1/X/2 oranını yanlışlıkla kombinasyon oranı gibi taşıma.
-                t_secili["ana_odd"] = mk.get("oran")
-
-                market_gruplari[grup_key]["kayitlar"].append({
-                    "tol": round(float(tol), 2),
-                    "skor": round(float(tekil_skor), 2),
-                    "guven": guven,
-                    "ornek": ornek,
-                    "t": t_secili,
-                    "b": b_det,
-                    "mk": mk,
-                })
-
-        if not market_gruplari:
-            continue
-
-        en_iyi = None
-        mac_adaylari = []
-
-        for _, grup in market_gruplari.items():
-            kayitlar = grup["kayitlar"]
-            if not kayitlar:
-                continue
-
-            hassasiyetler = sorted({k["tol"] for k in kayitlar})
-            stabilite_sayisi = len(hassasiyetler)
-
-            # Aynı market birden fazla hassasiyette çıkıyorsa ciddi bonus.
-            # 11/11 çıkan market Top10/Top50'de en stabil kabul edilir.
-            stabilite_orani = stabilite_sayisi / max(len(top_toleranslar), 1)
-            stabilite_bonus = stabilite_sayisi * (45.0 / 11.0)
-
-            max_skor = max(float(k["skor"]) for k in kayitlar)
-            ort_skor = sum(float(k["skor"]) for k in kayitlar) / len(kayitlar)
-            max_guven = max(int(k["guven"]) for k in kayitlar)
-            ort_guven = sum(int(k["guven"]) for k in kayitlar) / len(kayitlar)
-            max_ornek = max(int(k["ornek"]) for k in kayitlar)
-
-            # Stabilite odaklı final skor:
-            # - Sadece tek toleransta patlayan adaylar geriye düşer.
-            # - Birkaç hassasiyette sürekli çıkan adaylar öne gelir.
-            stabilite_skoru = (
-                max_skor * 0.55
-                + ort_skor * 0.30
-                + ort_guven * 0.10
-                + min(max_ornek, 30) * 0.15
-                + stabilite_bonus
-            )
-
-            # Kupon modunda herhangi bir toleransta yüksek güven bulan marketi
-            # sırf diğer toleranslarda tekrarlanmadı diye kaybetme. Bu bonus
-            # 0.00 dahil taranan bütün hassasiyetlere eşit uygulanır.
-            tekil_yuksek_guven = kupon_modu and max_guven >= 70
-            if tekil_yuksek_guven:
-                stabilite_skoru += 30 + (max_guven - 70) * 3
-
-            # Her profil aynı kuponu üretmesin: Temkinli güven/kararlılığı,
-            # Dengeli market çeşitliliğini, Yüksek Oran ise kombinasyonları
-            # ve oran potansiyelini farklı ağırlıklarla değerlendirir.
-            if kupon_modu:
-                etiket = str(grup.get("label", ""))
-                kombinasyon = "+" in etiket
-                if kupon_profili == "Temkinli":
-                    stabilite_skoru += max_guven * 0.18 + stabilite_sayisi * (15.0 / 11.0)
-                    if kombinasyon:
-                        stabilite_skoru -= 9
-                    elif etiket in {"MS 1", "MS1", "Beraberlik", "MS X", "MSX", "MS 2", "MS2"}:
-                        stabilite_skoru += 12
-                elif kupon_profili == "Dengeli":
-                    if "KG" in etiket or "2.5" in etiket:
-                        stabilite_skoru += 10
-                    if kombinasyon:
-                        stabilite_skoru += 7
-                elif kupon_profili == "Yüksek Oran":
-                    if kombinasyon:
-                        stabilite_skoru += 42
-                    elif "KG" in etiket or "2.5" in etiket:
-                        stabilite_skoru += 14
-
-            # Tek hassasiyette çıkan ama skoru çok yüksek olanları biraz törpüle.
-            if stabilite_sayisi <= 2 and not tekil_yuksek_guven:
-                stabilite_skoru -= 14
-            elif stabilite_sayisi <= 4:
-                stabilite_skoru -= 5
-
-            # Temsilci kayıt: finalde detay ekranı için en iyi tekil skorun datasını kullan.
-            temsilci = max(
-                kayitlar,
-                key=lambda k: (
-                    k["skor"],
-                    k["guven"],
-                    k["ornek"],
-                    -k["tol"],
-                )
-            )
-
-            t_final = temsilci["t"].copy()
-            t_final["top10_hassasiyetler"] = hassasiyetler
-            t_final["top10_hassasiyet_sayisi"] = stabilite_sayisi
-            t_final["top10_stabilite_skoru"] = round(stabilite_skoru, 1)
-            t_final["top10_stabilite_orani"] = round(stabilite_orani * 100, 0)
-            t_final["stability_tols"] = [f"{x:.2f}" for x in hassasiyetler]
-            t_final["stability_count"] = stabilite_sayisi
-            t_final["stability_early_tols"] = [f"{x:.2f}" for x in hassasiyetler if x <= 0.05]
-            t_final["stability_late_tols"] = [f"{x:.2f}" for x in hassasiyetler if x > 0.05]
-            t_final["hassasiyet_taramali"] = True
-
-            aday = {
-                "m": m.to_dict(),
-                "t": t_final,
-                "b": temsilci["b"],
-                "top10_tol": round(float(temsilci["tol"]), 2),
-                "top10_skor": round(stabilite_skoru, 1),
-                "top10_market": temsilci["mk"],
-                "top10_hassasiyetler": hassasiyetler,
-                "top10_hassasiyet_sayisi": stabilite_sayisi,
-                "top10_stabilite_skoru": round(stabilite_skoru, 1),
-                "top10_stabilite_orani": round(stabilite_orani * 100, 0),
-            }
-            aday["m"]["durum"] = mac_canli_durumu(aday["m"].get("zaman"))
-
-            if tum_marketler:
-                # "Tüm aday listeleri" görünümünde maçın yalnızca tek marketini
-                # seçme; profil koşullarını geçebilecek bütün güçlü marketleri taşı.
-                mac_adaylari.append(aday)
-            elif en_iyi is None or aday["top10_skor"] > en_iyi["top10_skor"]:
-                en_iyi = aday
-
-        if tum_marketler:
-            adaylar.extend(mac_adaylari)
-        elif en_iyi:
-            adaylar.append(en_iyi)
-
-    adaylar.sort(
-        key=lambda x: (
-            x.get("top10_stabilite_skoru", x.get("top10_skor", 0)),
-            x.get("top10_hassasiyet_sayisi", 0),
-            x.get("t", {}).get("top10_market_guven", 0),
-            x.get("t", {}).get("ornek", 0),
-        ),
-        reverse=True,
-    )
-
-    # Tüm profil adayları görünümünde çeşitlilik kotası uygulama.
-    # Amaç maçın profil kriterini karşılayan bütün marketlerini kullanıcıya göstermek.
-    if tum_marketler:
-        if limit is None or int(limit or 0) <= 0:
-            return adaylar
-        return adaylar[:int(limit)]
-
-    # Top 10 sadece MS1/MS2 dolmasın diye küçük çeşitlilik kuralı.
-    # Top50 için limit yüksek olduğundan aynı kural listeyi boğmaz.
-    secilen = []
-    ms_sayisi = 0
-    max_ms = 4 if int(limit or 10) <= 10 else 18
-
-    for item in adaylar:
-        tip = str(item.get("t", {}).get("top10_market_tip", ""))
-        if tip == "MS" and ms_sayisi >= max_ms:
-            continue
-        secilen.append(item)
-        if tip == "MS":
-            ms_sayisi += 1
-        if len(secilen) >= limit:
-            break
-
-    # Eğer yeterli aday dolmadıysa kalanları sıralamadan tamamla.
-    if len(secilen) < limit:
-        used = {mac_key(x.get("m", {})) + str(x.get("t", {}).get("top10_market_label", "")) for x in secilen}
-        for item in adaylar:
-            k = mac_key(item.get("m", {})) + str(item.get("t", {}).get("top10_market_label", ""))
-            if k in used:
-                continue
-            secilen.append(item)
-            if len(secilen) >= limit:
+            t, b = birlesik_tahmin_olustur(candidate, havuz, m)
+            mk = dict(candidate["temsilci"]["mk"])
+            label = candidate["label"]
+            tip = mk.get("tip") or ("MS" if _tahmin_market_ailesi(label) == "ms" else "KG" if "KG" in label else "Alt/Üst")
+            tols = [float(value) for value in candidate["toleranslar"]]
+            mk.update(label=label, tip=tip, guven=t["ana_p"], oran=t["ana_odd"])
+            t.update(top10_market_label=label, top10_market_tip=tip, top10_market_guven=t["ana_p"],
+                     top10_market_oran=t["ana_odd"], top10_market_oran_tahmini=False,
+                     top10_hassasiyetler=tols, top10_hassasiyet_sayisi=len(tols),
+                     top10_stabilite_skoru=t["score"], top10_stabilite_orani=t["stability_pct"], hassasiyet_taramali=True)
+            match = m.to_dict()
+            match["durum"] = mac_canli_durumu(match.get("zaman"))
+            adaylar.append({"m": match, "t": t, "b": b,
+                            "top10_tol": t["kullanilan_tolerans"], "top10_skor": t["score"], "top10_market": mk,
+                            "top10_hassasiyetler": tols, "top10_hassasiyet_sayisi": len(tols),
+                            "top10_stabilite_skoru": t["score"], "top10_stabilite_orani": t["stability_pct"]})
+            if not tum_marketler:
                 break
-
-    return secilen[:limit]
+    if tum_marketler:
+        adaylar.sort(key=lambda item: (item["t"]["score"], item["t"]["ana_p"], item["t"]["stability_count"]), reverse=True)
+        return adaylar[:int(limit)] if limit and int(limit) > 0 else adaylar
+    return top50_liste_sec(adaylar, limit=limit)
 
 
 def tahmin_tuttu_mu(label, row):
-    toplam_gol = float(row["FTHG"]) + float(row["FTAG"])
-    kg_var = float(row["FTHG"]) > 0 and float(row["FTAG"]) > 0
-    return {
-        "MS 1": row["FTR"] == "H",
-        "Beraberlik": row["FTR"] == "D",
-        "MS 2": row["FTR"] == "A",
-        "2.5 Üst": toplam_gol >= 3,
-        "2.5 Alt": toplam_gol <= 2,
-        "KG Var": kg_var,
-        "KG Yok": not kg_var,
-    }.get(str(label))
+    label = str(label or "").strip()
+    label = {"MS1": "MS 1", "MSX": "Beraberlik", "MS2": "MS 2", "MS X": "Beraberlik"}.get(label, label)
+    if "+" in label:
+        results = [tahmin_tuttu_mu(part.strip(), row) for part in label.split("+")]
+        return None if any(result is None for result in results) else all(results)
+    if label.startswith("HT/FT "):
+        if pd.isna(row.get("HTR")) or pd.isna(row.get("FTR")):
+            return None
+        translate = {"H": "1", "D": "X", "A": "2"}
+        return f'{translate.get(row["HTR"], "?")}/{translate.get(row["FTR"], "?")}' == label[6:]
+    half = label.startswith("İY ")
+    home, away = row.get("HTHG" if half else "FTHG"), row.get("HTAG" if half else "FTAG")
+    if home is None or away is None or pd.isna(home) or pd.isna(away):
+        return None
+    home, away = float(home), float(away)
+    known = {"MS 1": home > away, "Beraberlik": home == away, "MS 2": home < away,
+             "KG Var": home > 0 and away > 0, "KG Yok": home == 0 or away == 0}
+    if label in known:
+        return known[label]
+    match = re.fullmatch(r"(?:İY )?(0\.5|1\.5|2\.5|3\.5) (Üst|Alt)", label)
+    if match:
+        line = float(match.group(1))
+        return home + away > line if match.group(2) == "Üst" else home + away < line
+    return None
 
 
 def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
                       sadece_ayni_lig=False, lig_kodlari=None, max_test=500,
-                      birlesik_hassasiyet=False):
-    """Her maçı yalnızca daha eski maçlarla analiz eden tarih sıralı backtest."""
+                      birlesik_hassasiyet=False, top50_model=False,
+                      filtreler=None, _taramalar=None):
     if gecmis_df is None or gecmis_df.empty:
         return pd.DataFrame()
-
-    veri = gecmis_df.copy()
-    veri["Date"] = pd.to_datetime(veri["Date"], errors="coerce")
-    veri = veri.dropna(subset=["Date", "FTHG", "FTAG", "FTR"])
-    # Aynı karşılaşma veri birleşiminde birden fazla kez geldiyse tek maç say.
-    veri = veri.sort_values("Date").drop_duplicates(
-        subset=["Date", "league_code", "HomeTeam", "AwayTeam"], keep="last"
-    )
-    test = veri[veri["season_code"].astype(str) == str(test_sezonu)].copy()
-    if lig_kodlari:
-        test = test[test["league_code"].isin(set(lig_kodlari))]
-    test = test.sort_values("Date").tail(int(max_test))
-
+    veri, test = backtest_verisini_hazirla(gecmis_df, test_sezonu, lig_kodlari, max_test)
     sonuclar = []
-    for _, row in test.iterrows():
-        train = veri[veri["Date"] < row["Date"]]
-        if sadece_ayni_lig:
-            train = train[train["league_code"] == row["league_code"]]
-        if train.empty:
-            continue
-
-        h_col = "REF_H" if "REF_H" in row.index and pd.notna(row.get("REF_H")) else "B365H"
-        d_col = "REF_D" if "REF_D" in row.index and pd.notna(row.get("REF_D")) else "B365D"
-        a_col = "REF_A" if "REF_A" in row.index and pd.notna(row.get("REF_A")) else "B365A"
-        try:
-            hedef = {
-                "h": float(row[h_col]), "b": float(row[d_col]), "a": float(row[a_col]),
-                "ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
-                "zaman": row["Date"],
-            }
-        except Exception:
-            continue
-        # Aynı maç için hem güncel-formlu hem formsuz model çalıştırılır.
-        # İkisi de yalnızca row["Date"] öncesindeki train verisini görür.
-        if birlesik_hassasiyet:
-            t, benzerler = hassasiyet_birlesik_hesapla(
-                train, hedef, min_ornek, sadece_ayni_lig=False,
-                market_gecmis_kayitlari=sonuclar,
-            )
-        else:
-            t, benzerler = hesapla(train, hedef, tolerans, form_aktif=False, kalibrasyon_aktif=False)
-        if t is None or len(benzerler) < int(min_ornek):
-            continue
-
-        # Backtest yalnızca %60'ın ÜSTÜNDE güvene sahip tahminleri değerlendirir.
-        # %60 tam değer dahil değildir; %61 ve üzeri kabul edilir.
-        if int(t.get("ana_p", 0) or 0) <= 60:
-            continue
-
-        label = t.get("ana_label", "")
-        tuttu = tahmin_tuttu_mu(label, row)
-        if tuttu is None:
-            continue
-
-        oran = market_label_to_odd(hedef, label)
-        alternatif_label = str(t.get("alt_label", "") or "")
-        alternatif_guven = int(t.get("alt_p", 0) or 0)
-        alternatif_tuttu = (
-            tahmin_tuttu_mu(alternatif_label, row)
-            if alternatif_label and alternatif_guven > 60
-            else None
-        )
-        kar = None
-        if oran is not None:
-            kar = round((float(oran) - 1) * 100 if tuttu else -100, 2)
-
-        sonuc_kaydi = {
-            "Tarih": row["Date"].date(),
-            "Lig": row.get("league_code", "-"),
-            "Maç": f"{row.get('HomeTeam', '')} - {row.get('AwayTeam', '')}",
-            "Tahmin": label,
-            "Güven": int(t.get("ana_p", 0)),
-            "Ana Puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
-            "Ana Medyan Örnek": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
-            "Ana Kararlılık": int(t.get("stability_count", 0) or 0),
-            "Ana Hassasiyetler": " · ".join(t.get("stability_tols", []) or []),
-            "Alternatif Tahmin": alternatif_label if alternatif_guven > 60 else "",
-            "Alt. Güven": alternatif_guven if alternatif_guven > 60 else None,
-            "Alt. Örnek": int(t.get("alt_ornek", 0) or 0) if alternatif_guven > 60 else None,
-            "Alt. Puan": float(t.get("alt_puan", 0) or 0) if alternatif_guven > 60 else None,
-            "Alt. Kararlılık": int(t.get("alt_kararlilik", 0) or 0) if alternatif_guven > 60 else None,
-            "Alt. Hassasiyetler": " · ".join(t.get("alt_hassasiyetler", []) or []) if alternatif_guven > 60 else "",
-            "Alt. Tuttu": bool(alternatif_tuttu) if alternatif_tuttu is not None else None,
-            "Örnek": int(t.get("ornek", 0)),
-            "Sonuç": f"{int(row['FTHG'])}-{int(row['FTAG'])}",
-            "Tuttu": bool(tuttu),
-            "Oran": round(float(oran), 2) if oran is not None else None,
-            "Kâr (100 TL)": kar,
-        }
-        sonuclar.append(sonuc_kaydi)
-    sonuc_df = pd.DataFrame(sonuclar)
-    if sonuc_df.empty:
-        return sonuc_df
-    # Güven eşitse daha çok örneği olan tahmin resmî kayıt olur.
-    sonuc_df = sonuc_df.sort_values(["Güven", "Örnek"], ascending=[False, False])
-    return sonuc_df.drop_duplicates(subset=["Tarih", "Lig", "Maç"], keep="first").sort_values("Tarih")
+    for _, day in test.groupby("Date", sort=True):
+        # Kalibrasyon gün başında sabitlenir. Gün içindeki satır sırası sonucu etkilemez.
+        prior = list(sonuclar)
+        candidates = []
+        for _, row in day.iterrows():
+            target = backtest_hedefi(row)
+            if target is None:
+                continue
+            key = mac_key(target)
+            scan = _taramalar.get(key) if _taramalar is not None else None
+            if top50_model:
+                items = gunun_en_iyi_10_uret(veri, pd.DataFrame([target]), min_ornek, limit=1,
+                    sadece_ayni_lig=sadece_ayni_lig, market_gecmis_kayitlari=prior,
+                    filtreler=filtreler, taramalar={key: scan} if scan is not None else None)
+                if not items:
+                    continue
+                item = items[0]
+                t, b = item["t"], item["b"]
+            elif birlesik_hassasiyet:
+                t, b = hassasiyet_birlesik_hesapla(veri, target, min_ornek, sadece_ayni_lig,
+                                                 market_gecmis_kayitlari=prior, taramalar=scan)
+            elif scan is not None and round(float(tolerans), 2) in scan:
+                t, b = scan[round(float(tolerans), 2)]
+            else:
+                t, b = hesapla(veri, target, tolerans, sadece_ayni_lig=sadece_ayni_lig,
+                               form_aktif=False, kalibrasyon_aktif=False)
+            if t is None or len(b) < int(min_ornek):
+                continue
+            record = backtest_kaydi(row, target, t)
+            if record is not None:
+                candidates.append({"m": target, "t": t, "record": record})
+        selected = top50_liste_sec(candidates, limit=50) if top50_model else candidates
+        sonuclar.extend(item["record"] for item in selected)
+    result = pd.DataFrame(sonuclar)
+    if not result.empty:
+        result = result.sort_values(["Tarih", "Lig", "Maç"], kind="stable").reset_index(drop=True)
+    result.attrs.update(model_version=MODEL_VERSION, model="Top 50 Market" if top50_model else "Birleşik" if birlesik_hassasiyet else "Tekli")
+    return result
 
 
 
@@ -5694,46 +5549,58 @@ def _backtest_uzlasi_ozeti(tolerans_sonuclari):
 
 
 def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min_ornek,
-                                    sadece_ayni_lig=False, lig_kodlari=None, max_test=500):
-    """0.00–0.10 arasındaki 11 toleransı test eder ve uzlaşı performansını ölçer."""
-    toleranslar = [round(i / 100.0, 2) for i in range(11)]
-    satirlar = []
-    tolerans_sonuclari = {}
-    for tol in toleranslar:
-        bt = backtest_calistir(
-            gecmis_df, test_sezonu, tol, min_ornek,
-            sadece_ayni_lig=sadece_ayni_lig,
-            lig_kodlari=lig_kodlari,
-            max_test=max_test,
-        )
-        tolerans_sonuclari[tol] = bt
-        if bt is None or bt.empty:
-            satirlar.append({
-                "Hassasiyet": f"{tol:.2f}", "Tahmin": 0,
-                "Başarı %": None, "MS Tahmin": 0, "MS ROI %": None,
-            })
-            continue
-        toplam = len(bt)
-        basari = float(bt["Tuttu"].astype(bool).mean() * 100.0)
-        ms = bt[bt["Kâr (100 TL)"].notna()].copy()
-        ms_roi = float(ms["Kâr (100 TL)"].sum()) / (len(ms) * 100.0) * 100.0 if len(ms) else None
-        satirlar.append({
-            "Hassasiyet": f"{tol:.2f}",
-            "Tahmin": int(toplam),
-            "Başarı %": round(basari, 1),
-            "MS Tahmin": int(len(ms)),
-            "MS ROI %": round(ms_roi, 1) if ms_roi is not None else None,
-        })
-
-    uzlasi_df, tek_uzlasi_df, tahmin_uzlasi_df = _backtest_uzlasi_ozeti(tolerans_sonuclari)
-
-    secili_df = backtest_calistir(
-        gecmis_df, test_sezonu, secili_tolerans, min_ornek,
-        sadece_ayni_lig=sadece_ayni_lig,
-        lig_kodlari=lig_kodlari, max_test=max_test,
-        birlesik_hassasiyet=True,
-    )
-    return pd.DataFrame(satirlar), secili_df, uzlasi_df, tek_uzlasi_df, tahmin_uzlasi_df
+                                    sadece_ayni_lig=False, lig_kodlari=None, max_test=500,
+                                    top50_model=False, filtreler=None):
+    if gecmis_df is None or gecmis_df.empty:
+        return tuple(pd.DataFrame() for _ in range(5))
+    veri, test = backtest_verisini_hazirla(gecmis_df, test_sezonu, lig_kodlari, max_test)
+    tolerances = [round(i / 100, 2) for i in range(11)]
+    records = {tolerance: [] for tolerance in tolerances}
+    selected_records = []
+    for _, day in test.groupby("Date", sort=True):
+        prior = list(selected_records)
+        daily = []
+        for _, row in day.iterrows():
+            target = backtest_hedefi(row)
+            if target is None:
+                continue
+            # Keep only the current match's eleven samples, not 2000 x 11 DataFrames.
+            scan = hassasiyet_taramasi(veri, tarama_hedefi(target), sadece_ayni_lig)
+            for tolerance in tolerances:
+                t, examples = scan.get(tolerance, (None, pd.DataFrame()))
+                if t is None or len(examples) < int(min_ornek):
+                    continue
+                record = backtest_kaydi(row, target, t)
+                if record is not None:
+                    records[tolerance].append(record)
+            if top50_model:
+                items = gunun_en_iyi_10_uret(veri, pd.DataFrame([target]), min_ornek, limit=1,
+                    sadece_ayni_lig=sadece_ayni_lig, market_gecmis_kayitlari=prior,
+                    filtreler=filtreler, taramalar={mac_key(target): scan})
+                t = items[0]["t"] if items else None
+            else:
+                t, _ = hassasiyet_birlesik_hesapla(veri, target, min_ornek, sadece_ayni_lig,
+                                                 market_gecmis_kayitlari=prior, taramalar=scan)
+            if t is not None:
+                record = backtest_kaydi(row, target, t)
+                if record is not None:
+                    daily.append({"m": target, "t": t, "record": record})
+        chosen = top50_liste_sec(daily, 50) if top50_model else daily
+        selected_records.extend(item["record"] for item in chosen)
+    per_tolerance, summary = {}, []
+    for tolerance in tolerances:
+        result = pd.DataFrame(records[tolerance])
+        per_tolerance[tolerance] = result
+        ms = result[result["Kâr (100 TL)"].notna()] if not result.empty else result
+        summary.append({"Hassasiyet": f"{tolerance:.2f}", "Tahmin": len(result),
+                        "Başarı %": round(result["Tuttu"].mean() * 100, 1) if not result.empty else None,
+                        "MS Tahmin": len(ms), "MS ROI %": round(ms["Kâr (100 TL)"].sum() / len(ms), 1) if not ms.empty else None})
+    consensus, individual, cross = _backtest_uzlasi_ozeti(per_tolerance)
+    selected = pd.DataFrame(selected_records)
+    if not selected.empty:
+        selected = selected.sort_values(["Tarih", "Lig", "Maç"], kind="stable").reset_index(drop=True)
+    selected.attrs.update(model_version=MODEL_VERSION, model="Top 50 Market" if top50_model else "Birleşik")
+    return pd.DataFrame(summary), selected, consensus, individual, cross
 
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
@@ -5863,7 +5730,7 @@ def gecmis_ornek_siralama_anahtari(item):
     # - 0.01+ hassasiyette yalnızca 1 örnekli maçlar, tüm 2+ örnekli maçların
     #   altında; 0 örnekli maçların ise hemen üstünde tutulur.
     try:
-        aktif_hassasiyet = float(TOLERANS or 0.0)
+        aktif_hassasiyet = float(st.session_state.get("top_tol", 0.0) or 0.0)
     except Exception:
         aktif_hassasiyet = 0.0
 
@@ -6469,10 +6336,13 @@ def tarih_secimine_gore_date(secim: str, bugun_tarih, ozel_tarih):
 
 
 def mac_canli_durumu(mac_zamani):
-    now = datetime.now()
-    if now < mac_zamani:
+    kickoff = parse_mac_datetime(mac_zamani)
+    if kickoff is None:
+        return "Saat bilinmiyor"
+    now = tr_simdi()
+    if now < kickoff:
         return "Başlamamış"
-    if now <= mac_zamani + timedelta(hours=2, minutes=15):
+    if now <= kickoff + timedelta(hours=2, minutes=15):
         return "Canlı"
     return "Bitti"
 
@@ -6496,7 +6366,7 @@ try:
     from zoneinfo import ZoneInfo
     sistem_simdi = datetime.now(ZoneInfo("Europe/Istanbul"))
 except Exception:
-    sistem_simdi = datetime.utcnow() + timedelta(hours=3)
+    sistem_simdi = tr_simdi()
 bugun = sistem_simdi.date()
 API_KEY = get_app_api_key()
 
@@ -6766,7 +6636,7 @@ if st.session_state.get('date_mode') == '3 gün sonra':
 
 def sistem_gununu_yenile():
     """Gece yarısından kalan oturum verilerini temizleyip gerçek bugüne döner."""
-    yeni_bugun = (datetime.utcnow() + timedelta(hours=3)).date()
+    yeni_bugun = (tr_simdi()).date()
     st.session_state["date_mode"] = "Bugün"
     st.session_state["special_date"] = yeni_bugun
     st.session_state["final_list"] = []
@@ -7015,714 +6885,22 @@ with st.container(key="sticky_analysis_controls"):
 # AÇIK / KOYU TEMA
 # ==========================================================
 def uygula_tema_css(koyu_mod: bool):
-    """Uygulamanın tüm ana Streamlit bileşenlerini seçilen temaya uyarlar."""
-    if not koyu_mod:
-        return
-
-    st.markdown(
-        """
-        <style>
-        /* === YAPAIKUPON DARK MODE === */
-        :root {
-            color-scheme: dark;
-            --yk-bg:#07111f;
-            --yk-bg2:#0a1830;
-            --yk-surface:#0b1628;
-            --yk-surface2:#0f1b31;
-            --yk-card:#111827;
-            --yk-border:#284977;
-            --yk-border-soft:#1f2a44;
-            --yk-text:#f8fafc;
-            --yk-muted:#9db2d1;
-            --yk-muted2:#cbd5e1;
-            --yk-accent:#facc15;
-            --yk-blue:#77b4ff;
-        }
-
-        html, body, [class*="css"], .stApp,
-        [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-            background:#07111f !important;
-            color:#f8fafc !important;
-        }
-        .stApp, [data-testid="stAppViewContainer"] {
-            background:linear-gradient(180deg,#07111f 0%,#081426 48%,#0a1830 100%) !important;
-        }
-
-        /* === GLOBAL SCROLL FIX v2 ===
-           stMain'e ayrı scroll vermek bazı Streamlit sürümlerinde iç içe
-           scroll alanı oluşturup sayfanın altını kesiyordu. Tek scroll sahibi
-           AppViewContainer olsun; main ve block-container doğal yükseklikte aksın. */
-        html, body {
-            height:100% !important;
-            min-height:100% !important;
-            overflow-x:hidden !important;
-        }
-        .stApp {
-            min-height:100vh !important;
-            height:auto !important;
-            overflow:visible !important;
-        }
-        [data-testid="stAppViewContainer"] {
-            height:100vh !important;
-            min-height:100vh !important;
-            overflow-y:scroll !important;
-            overflow-x:hidden !important;
-            overscroll-behavior-y:auto !important;
-        }
-        [data-testid="stMain"] {
-            height:auto !important;
-            min-height:100% !important;
-            max-height:none !important;
-            overflow:visible !important;
-        }
-        .main .block-container,
-        [data-testid="stMainBlockContainer"] {
-            height:auto !important;
-            min-height:0 !important;
-            max-height:none !important;
-            overflow:visible !important;
-            padding-bottom:6rem !important;
-        }
-        /* === DYNAMIC EXPANDER SCROLL FIX v3 ===
-           Alt sıradaki bir expander açıldığında sayfa yüksekliği anlık büyüyor.
-           Scroll'u sabit 100vh AppViewContainer'a kilitlemek yerine belge akışına
-           bırakıyoruz; böylece Oran Filtresi / Yüksek Oran Filtresi son kartı
-           açıldığında oluşan yeni içerik de kaydırılabilir kalıyor. */
-        html, body {
-            height:auto !important;
-            min-height:100% !important;
-            overflow-y:auto !important;
-            overflow-x:hidden !important;
-        }
-        .stApp,
-        [data-testid="stAppViewContainer"],
-        [data-testid="stMain"],
-        [data-testid="stMainBlockContainer"],
-        .main .block-container {
-            height:auto !important;
-            min-height:100vh !important;
-            max-height:none !important;
-            overflow:visible !important;
-        }
-        [data-testid="stAppViewContainer"] {
-            position:relative !important;
-        }
-        div[data-testid="stExpander"],
-        div[data-testid="stExpander"] details,
-        div[data-testid="stExpanderDetails"],
-        div[data-testid="stExpanderDetails"] > div {
-            max-height:none !important;
-            overflow:visible !important;
-            contain:none !important;
-        }
-
-        [data-testid="stHeader"] {
-            background:rgba(7,17,31,.94) !important;
-        }
-        .main .block-container, [data-testid="stMainBlockContainer"] {
-            background:transparent !important;
-        }
-
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background:#091526 !important;
-            border-color:#223c63 !important;
-            height:100vh !important;
-            min-height:100vh !important;
-            max-height:100vh !important;
-            overflow:hidden !important;
-            position:sticky !important;
-            position:-webkit-sticky !important;
-            top:0 !important;
-            align-self:flex-start !important;
-            z-index:100 !important;
-        }
-        section[data-testid="stSidebar"] > div,
-        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-            background:#091526 !important;
-            border-color:#223c63 !important;
-            height:100vh !important;
-            min-height:100vh !important;
-            max-height:100vh !important;
-            overflow-y:auto !important;
-            overflow-x:hidden !important;
-        }
-        section[data-testid="stSidebar"] label,
-        section[data-testid="stSidebar"] label *,
-        section[data-testid="stSidebar"] p,
-        section[data-testid="stSidebar"] span:not([data-baseweb="tag"] span),
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3,
-        section[data-testid="stSidebar"] h4 {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
-            color:#9db2d1 !important;
-            -webkit-text-fill-color:#9db2d1 !important;
-        }
-
-        /* Tema anahtarı */
-        .st-key-koyu_mod_toggle {
-            background:#0b1628 !important;
-            border:1px solid #284977 !important;
-            border-radius:12px !important;
-            padding:7px 10px 4px 10px !important;
-            margin:2px 0 2px 0 !important;
-        }
-        .st-key-koyu_mod_toggle label,
-        .st-key-koyu_mod_toggle label * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-            font-weight:800 !important;
-        }
-
-        /* Saat kutusu */
-        .st-key-sidebar_system_clock {
-            background:#0b1628 !important;
-            border:1px solid #284977 !important;
-            box-shadow:0 4px 14px rgba(0,0,0,.28) !important;
-        }
-        .st-key-sidebar_system_clock .system-clock-label,
-        .st-key-sidebar_system_clock .system-clock-label *,
-        .st-key-sidebar_system_clock .system-clock-time {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-
-        /* Başlıklar ve açık sayfa metinleri */
-        .top-header h2, .list-heading, .panel-title,
-        .topbar-wrap h1, .topbar-wrap h2, .topbar-wrap h3,
-        [data-testid="stMain"] h1, [data-testid="stMain"] h2,
-        [data-testid="stMain"] h3, [data-testid="stMain"] h4,
-        [data-testid="stMain"] p, [data-testid="stMain"] label {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-        .top-header .sub, .panel-date, .summary-note, .list-subheading,
-        .control-label, .section-kicker, .league-chip-note {
-            color:#9db2d1 !important;
-            -webkit-text-fill-color:#9db2d1 !important;
-        }
-
-        /* Üst filtre/kontrol yüzeyleri */
-        .top-shell, .topbar-wrap, .control-card, .metrics-card,
-        .helper-bar, .rehber-box, .top-hero {
-            background:linear-gradient(180deg,#0b1628 0%,#0a1830 100%) !important;
-            border-color:#284977 !important;
-            color:#f8fafc !important;
-            box-shadow:0 10px 30px rgba(0,0,0,.20) !important;
-        }
-
-        /* Inputs / select / multiselect / date / number */
-        div[data-baseweb="select"] > div,
-        div[data-baseweb="input"] > div,
-        div[data-testid="stNumberInput"] div[data-baseweb="input"] > div,
-        div[data-testid="stTextInput"] div[data-baseweb="input"] > div,
-        div[data-testid="stDateInput"] div[data-baseweb="input"] > div,
-        div[data-testid="stNumberInputContainer"],
-        div[data-testid="stTextInputRootElement"],
-        textarea, input {
-            background:#0f1b31 !important;
-            border-color:#284977 !important;
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-        div[data-baseweb="select"] *,
-        [data-baseweb="popover"] *,
-        [role="listbox"] *, [role="option"] * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-        [data-baseweb="popover"], [role="listbox"] {
-            background:#0b1628 !important;
-            border-color:#284977 !important;
-        }
-        [role="option"]:hover, [aria-selected="true"][role="option"] {
-            background:#17304d !important;
-        }
-
-        /* Butonlar */
-        .stButton > button,
-        div[data-testid="stPopover"] button,
-        div[data-testid="stPopoverButton"] > button,
-        [data-testid="baseButton-secondary"] {
-            background:linear-gradient(180deg,#0f1b31 0%,#0b1628 100%) !important;
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-            border-color:#315487 !important;
-        }
-        .stButton > button:hover,
-        div[data-testid="stPopoverButton"] > button:hover {
-            border-color:#facc15 !important;
-            color:#ffffff !important;
-        }
-        button[kind="primary"], [data-testid="baseButton-primary"] {
-            color:#ffffff !important;
-            -webkit-text-fill-color:#ffffff !important;
-        }
-
-        /* Expanders / radio / checkbox / toggle / tabs */
-        div[data-testid="stExpander"],
-        div[data-testid="stExpander"] details,
-        div[data-testid="stExpander"] summary,
-        .streamlit-expanderHeader {
-            background:linear-gradient(90deg,#0b1628 0%,#0a1830 100%) !important;
-            border-color:#284977 !important;
-            color:#f8fafc !important;
-        }
-        div[data-testid="stExpander"] *,
-        .stCheckbox label *, .stRadio label *,
-        div[data-testid="stToggle"] label * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-        div[data-testid="stTabs"] button,
-        div[data-testid="stTabs"] button * {
-            color:#cbd5e1 !important;
-            -webkit-text-fill-color:#cbd5e1 !important;
-        }
-
-        /* Sabit filtre checkboxları: Top 50 görünümü gibi kırmızı kutu + beyaz tik */
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child,
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] span:first-child {
-            border-radius:4px !important;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked ~ div:first-of-type,
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked + div {
-            background:#ff4b55 !important;
-            background-color:#ff4b55 !important;
-            border-color:#ff4b55 !important;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked ~ div:first-of-type svg,
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked + div svg {
-            color:#fff !important;
-            fill:#fff !important;
-            stroke:#fff !important;
-        }
-
-        /* Sabit filtre checkbox tikleri kırmızı */
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input:checked + div {
-            background-color:#ef4444 !important;
-            border-color:#ef4444 !important;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input:checked + div svg {
-            color:#ffffff !important;
-            fill:#ffffff !important;
-            stroke:#ffffff !important;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] [aria-checked="true"] {
-            background-color:#ef4444 !important;
-            border-color:#ef4444 !important;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] [aria-checked="true"] svg {
-            color:#ffffff !important;
-            fill:#ffffff !important;
-            stroke:#ffffff !important;
-        }
-
-        /* Metric / info / warning / success alanları */
-        [data-testid="stMetric"], [data-testid="metric-container"] {
-            background:#0b1628 !important;
-            border:1px solid #223c63 !important;
-            border-radius:12px !important;
-            padding:10px !important;
-        }
-        [data-testid="stMetric"] *, [data-testid="metric-container"] * {
-            color:#f8fafc !important;
-        }
-        div[data-testid="stAlert"] {
-            background:#0b1628 !important;
-            border-color:#284977 !important;
-            color:#f8fafc !important;
-        }
-        div[data-testid="stAlert"] * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-
-        /* Dataframe / tablo çevresi */
-        [data-testid="stDataFrame"], [data-testid="stTable"] {
-            background:#0b1628 !important;
-            border-radius:12px !important;
-            border:1px solid #223c63 !important;
-            overflow:hidden !important;
-        }
-        [data-testid="stDataFrame"] iframe {
-            background:#0b1628 !important;
-        }
-        table, thead, tbody, tr, th, td {
-            border-color:#223c63 !important;
-        }
-        [data-testid="stTable"] table,
-        [data-testid="stTable"] th,
-        [data-testid="stTable"] td {
-            background:#0b1628 !important;
-            color:#f8fafc !important;
-        }
-
-        /* Uygulamanın kendi kartları */
-        .mac-kart, .tahmin-kart, .diger-kart, .neden-kart, .kupon-kart,
-        .combo-kart, .canli-kart, .strateji-kart, .oranlar-kart,
-        .history-card, .ai-comment, .ai-inline, .coupon-item,
-        .recent-match-row, .detail-form-sidebar-title {
-            background:linear-gradient(135deg,#0b1628,#111827) !important;
-            border-color:#223c63 !important;
-            color:#f8fafc !important;
-        }
-        .mac-kart *, .tahmin-kart *, .diger-kart *, .neden-kart *,
-        .kupon-kart *, .combo-kart *, .canli-kart *, .strateji-kart *,
-        .oranlar-kart *, .history-card *, .ai-comment *, .ai-inline * {
-            color:#f8fafc;
-        }
-        .history-sub, .mk-mini, .tk-key, .diger-sub, .hb-sub, .hb-label,
-        .mk-label, .recent-top {
-            color:#9db2d1 !important;
-            -webkit-text-fill-color:#9db2d1 !important;
-        }
-
-        /* Detay modal */
-        div[data-testid="stDialog"] div[role="dialog"] {
-            background:linear-gradient(180deg,#07111f 0%,#0a1830 100%) !important;
-            border-color:#284977 !important;
-        }
-        div[data-testid="stDialog"] div[role="dialog"] p,
-        div[data-testid="stDialog"] div[role="dialog"] label,
-        div[data-testid="stDialog"] div[role="dialog"] h1,
-        div[data-testid="stDialog"] div[role="dialog"] h2,
-        div[data-testid="stDialog"] div[role="dialog"] h3 {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-
-        /* Sidebar özel açık kutular */
-        .sidebar-high-market-title {
-            background:#102340 !important;
-            border-color:#315487 !important;
-        }
-        .sidebar-high-market-title b {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-        .sidebar-high-market-title span {
-            color:#cbd5e1 !important;
-            -webkit-text-fill-color:#cbd5e1 !important;
-        }
-
-        /* Linkler / ayraçlar / spinner */
-        a { color:#77b4ff !important; }
-        hr { border-color:#223c63 !important; }
-        div[data-testid="stSpinner"], div[data-testid="stSpinner"] *,
-        div[data-testid="stStatusWidget"], div[data-testid="stStatusWidget"] * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-
-        /* === DARK MODE OKUNABİLİRLİK FIX: Ana Analiz Ayarları + Görünüm === */
-        .st-key-sticky_analysis_controls {
-            background:linear-gradient(180deg,#0b1628 0%,#0a1830 100%) !important;
-            border-color:#315487 !important;
-            box-shadow:0 8px 24px rgba(0,0,0,.30) !important;
-        }
-        /* Ana analiz panelinde Streamlit'in beyaz iç katmanlarını da kapat */
-        .st-key-sticky_analysis_controls > div,
-        .st-key-sticky_analysis_controls [data-testid="stVerticalBlock"],
-        .st-key-sticky_analysis_controls [data-testid="stHorizontalBlock"],
-        .st-key-sticky_analysis_controls [data-testid="column"],
-        .st-key-sticky_analysis_controls div[data-testid="stElementContainer"] {
-            background:transparent !important;
-        }
-        .st-key-sticky_analysis_controls {
-            background-color:#0b1628 !important;
-        }
-        .st-key-sticky_analysis_controls .top-analysis-controls b,
-        .st-key-sticky_analysis_controls label,
-        .st-key-sticky_analysis_controls label *,
-        .st-key-sticky_analysis_controls p,
-        .st-key-sticky_analysis_controls span,
-        .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"],
-        .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"] * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-            opacity:1 !important;
-        }
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] label,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] label *,
-        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] label,
-        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] label *,
-        .st-key-sticky_analysis_controls [data-testid="stSelectbox"] label,
-        .st-key-sticky_analysis_controls [data-testid="stSelectbox"] label * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-            font-weight:800 !important;
-        }
-        .st-key-sticky_analysis_controls [data-baseweb="select"] > div,
-        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] div[data-baseweb="input"] > div {
-            background:#0f1b31 !important;
-            border-color:#315487 !important;
-        }
-        .st-key-sticky_analysis_controls [data-baseweb="select"] *,
-        .st-key-sticky_analysis_controls input {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-
-        /* Sidebar Görünüm başlığı ve tüm radio seçenekleri */
-        .st-key-sayfa_modu,
-        .st-key-sayfa_modu [data-testid="stRadio"] {
-            color:#f8fafc !important;
-        }
-        .st-key-sayfa_modu label,
-        .st-key-sayfa_modu label *,
-        .st-key-sayfa_modu p,
-        .st-key-sayfa_modu span,
-        .st-key-sayfa_modu [data-testid="stWidgetLabel"],
-        .st-key-sayfa_modu [data-testid="stWidgetLabel"] * {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-            opacity:1 !important;
-        }
-        .st-key-sayfa_modu [role="radiogroup"] label,
-        .st-key-sayfa_modu [role="radiogroup"] label *,
-        section[data-testid="stSidebar"] .st-key-sayfa_modu [role="radiogroup"] p {
-            color:#f8fafc !important;
-            -webkit-text-fill-color:#f8fafc !important;
-            font-weight:700 !important;
-        }
-
-        /* === SLIDER / ANA ANALİZ AYARLARI KOYU MOD NETLİK FIX === */
-        .st-key-sticky_analysis_controls .top-analysis-controls,
-        .st-key-sticky_analysis_controls .top-analysis-controls *,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] label,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] label *,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stWidgetLabel"],
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stWidgetLabel"] *,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBar"],
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBar"] *,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBarMin"],
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBarMax"],
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"],
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"] * {
-            color:#ffffff !important;
-            -webkit-text-fill-color:#ffffff !important;
-            opacity:1 !important;
-        }
-        .st-key-sticky_analysis_controls .top-analysis-controls b {
-            color:#ffffff !important;
-            -webkit-text-fill-color:#ffffff !important;
-            text-shadow:0 1px 1px rgba(0,0,0,.35) !important;
-        }
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] svg,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] button svg,
-        .st-key-sticky_analysis_controls [data-testid="stTooltipIcon"] svg {
-            color:#f8fafc !important;
-            fill:#f8fafc !important;
-            stroke:#f8fafc !important;
-            opacity:1 !important;
-        }
-        /* Slider uç değerleri (örn. 0.00 / 0.30) ve aktif değer (örn. 0.02) */
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] div,
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] span {
-            -webkit-text-fill-color:#f8fafc !important;
-        }
-        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"] {
-            background:#facc15 !important;
-            border-color:#ffe27a !important;
-        }
-
-        /* Footer */
-        [data-testid="stMain"] div[style*="text-align:center"][style*="font-size:12px"] {
-            color:#9db2d1 !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Açık/koyu renkler ve tek kaydırma düzeni ortak kaynaktan uygulanır."""
+    colors = {'bg': ('#07111f', '#f6f8fc'), 'bg2': ('#0a1830', '#eef3fb'), 'surface': ('#091526', '#eef3fb'), 'surface2': ('#0f1b31', '#ffffff'), 'card': ('#111827', '#ffffff'), 'border': ('#284977', '#cbd5e1'), 'border-soft': ('#223c63', '#d6e0ef'), 'text': ('#f8fafc', '#0f172a'), 'muted': ('#9db2d1', '#475569'), 'muted2': ('#cbd5e1', '#334155'), 'accent': ('#facc15', '#ca8a04'), 'blue': ('#77b4ff', '#1d4ed8')}
+    variables = ";".join(f"--yk-{name}:{values[0 if koyu_mod else 1]}" for name, values in colors.items())
+    scheme = "dark" if koyu_mod else "light"
+    css = ":root {color-scheme:" + scheme + ";" + variables + ";}\n"
+    css += 'html, body, [class*="css"], .stApp,\n        [data-testid="stAppViewContainer"], [data-testid="stMain"] {\nbackground:var(--yk-bg) !important;\n            color:var(--yk-text) !important;\n}\n.stApp, [data-testid="stAppViewContainer"] {\nbackground:linear-gradient(180deg,var(--yk-bg) 0%,var(--yk-bg2) 48%,var(--yk-bg2) 100%) !important;\n}\n[data-testid="stHeader"] {\nbackground:var(--yk-bg) !important;\n}\n.main .block-container, [data-testid="stMainBlockContainer"] {\nbackground:transparent !important;\n}\nsection[data-testid="stSidebar"] {\nbackground:var(--yk-surface) !important;\n            border-color:var(--yk-border-soft) !important;\n            \n            \n            \n            \n            \n            \n            \n            \n            z-index:100 !important;\n}\nsection[data-testid="stSidebar"] > div,\n        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {\nbackground:var(--yk-surface) !important;\n            border-color:var(--yk-border-soft) !important;\n}\nsection[data-testid="stSidebar"] label,\n        section[data-testid="stSidebar"] label *,\n        section[data-testid="stSidebar"] p,\n        section[data-testid="stSidebar"] span:not([data-baseweb="tag"] span),\n        section[data-testid="stSidebar"] h1,\n        section[data-testid="stSidebar"] h2,\n        section[data-testid="stSidebar"] h3,\n        section[data-testid="stSidebar"] h4 {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\nsection[data-testid="stSidebar"] [data-testid="stCaptionContainer"],\n        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {\ncolor:var(--yk-muted) !important;\n            -webkit-text-fill-color:var(--yk-muted) !important;\n}\n.st-key-koyu_mod_toggle {\nbackground:var(--yk-surface) !important;\n            border:1px solid var(--yk-border) !important;\n            border-radius:12px !important;\n            padding:7px 10px 4px 10px !important;\n            margin:2px 0 2px 0 !important;\n}\n.st-key-koyu_mod_toggle label,\n        .st-key-koyu_mod_toggle label * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            font-weight:800 !important;\n}\n.st-key-sidebar_system_clock {\nbackground:var(--yk-surface) !important;\n            border:1px solid var(--yk-border) !important;\n            box-shadow:0 4px 14px rgba(0,0,0,.28) !important;\n}\n.st-key-sidebar_system_clock .system-clock-label,\n        .st-key-sidebar_system_clock .system-clock-label *,\n        .st-key-sidebar_system_clock .system-clock-time {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n.top-header h2, .list-heading, .panel-title,\n        .topbar-wrap h1, .topbar-wrap h2, .topbar-wrap h3,\n        [data-testid="stMain"] h1, [data-testid="stMain"] h2,\n        [data-testid="stMain"] h3, [data-testid="stMain"] h4,\n        [data-testid="stMain"] p, [data-testid="stMain"] label {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n.top-header .sub, .panel-date, .summary-note, .list-subheading,\n        .control-label, .section-kicker, .league-chip-note {\ncolor:var(--yk-muted) !important;\n            -webkit-text-fill-color:var(--yk-muted) !important;\n}\n.top-shell, .topbar-wrap, .control-card, .metrics-card,\n        .helper-bar, .rehber-box, .top-hero {\nbackground:linear-gradient(180deg,var(--yk-surface) 0%,var(--yk-bg2) 100%) !important;\n            border-color:var(--yk-border) !important;\n            color:var(--yk-text) !important;\n            box-shadow:0 10px 30px rgba(0,0,0,.20) !important;\n}\ndiv[data-baseweb="select"] > div,\n        div[data-baseweb="input"] > div,\n        div[data-testid="stNumberInput"] div[data-baseweb="input"] > div,\n        div[data-testid="stTextInput"] div[data-baseweb="input"] > div,\n        div[data-testid="stDateInput"] div[data-baseweb="input"] > div,\n        div[data-testid="stNumberInputContainer"],\n        div[data-testid="stTextInputRootElement"],\n        textarea, input {\nbackground:var(--yk-surface2) !important;\n            border-color:var(--yk-border) !important;\n            color:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\ndiv[data-baseweb="select"] *,\n        [data-baseweb="popover"] *,\n        [role="listbox"] *, [role="option"] * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n[data-baseweb="popover"], [role="listbox"] {\nbackground:var(--yk-surface) !important;\n            border-color:var(--yk-border) !important;\n}\n[role="option"]:hover, [aria-selected="true"][role="option"] {\nbackground:#17304d !important;\n}\n.stButton > button,\n        div[data-testid="stPopover"] button,\n        div[data-testid="stPopoverButton"] > button,\n        [data-testid="baseButton-secondary"] {\nbackground:linear-gradient(180deg,var(--yk-surface2) 0%,var(--yk-surface) 100%) !important;\n            color:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            border-color:#315487 !important;\n}\n.stButton > button:hover,\n        div[data-testid="stPopoverButton"] > button:hover {\nborder-color:var(--yk-accent) !important;\n            color:var(--yk-text) !important;\n}\nbutton[kind="primary"], [data-testid="baseButton-primary"] {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\ndiv[data-testid="stExpander"],\n        div[data-testid="stExpander"] details,\n        div[data-testid="stExpander"] summary,\n        .streamlit-expanderHeader {\nbackground:linear-gradient(90deg,var(--yk-surface) 0%,var(--yk-bg2) 100%) !important;\n            border-color:var(--yk-border) !important;\n            color:var(--yk-text) !important;\n}\ndiv[data-testid="stExpander"] *,\n        .stCheckbox label *, .stRadio label *,\n        div[data-testid="stToggle"] label * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\ndiv[data-testid="stTabs"] button,\n        div[data-testid="stTabs"] button * {\ncolor:var(--yk-muted2) !important;\n            -webkit-text-fill-color:var(--yk-muted2) !important;\n}\nsection[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child,\n        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] span:first-child {\nborder-radius:4px !important;\n}\nsection[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked ~ div:first-of-type,\n        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked + div {\nbackground:#ff4b55 !important;\n            background-color:#ff4b55 !important;\n            border-color:#ff4b55 !important;\n}\nsection[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked ~ div:first-of-type svg,\n        section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label[data-baseweb="checkbox"] input:checked + div svg {\ncolor:var(--yk-text) !important;\n            fill:var(--yk-text) !important;\n            stroke:var(--yk-text) !important;\n}\nsection[data-testid="stSidebar"] div[data-testid="stCheckbox"] input:checked + div {\nbackground-color:#ef4444 !important;\n            border-color:#ef4444 !important;\n}\nsection[data-testid="stSidebar"] div[data-testid="stCheckbox"] input:checked + div svg {\ncolor:var(--yk-text) !important;\n            fill:var(--yk-text) !important;\n            stroke:var(--yk-text) !important;\n}\nsection[data-testid="stSidebar"] div[data-testid="stCheckbox"] [aria-checked="true"] {\nbackground-color:#ef4444 !important;\n            border-color:#ef4444 !important;\n}\nsection[data-testid="stSidebar"] div[data-testid="stCheckbox"] [aria-checked="true"] svg {\ncolor:var(--yk-text) !important;\n            fill:var(--yk-text) !important;\n            stroke:var(--yk-text) !important;\n}\n[data-testid="stMetric"], [data-testid="metric-container"] {\nbackground:var(--yk-surface) !important;\n            border:1px solid var(--yk-border-soft) !important;\n            border-radius:12px !important;\n            padding:10px !important;\n}\n[data-testid="stMetric"] *, [data-testid="metric-container"] * {\ncolor:var(--yk-text) !important;\n}\ndiv[data-testid="stAlert"] {\nbackground:var(--yk-surface) !important;\n            border-color:var(--yk-border) !important;\n            color:var(--yk-text) !important;\n}\ndiv[data-testid="stAlert"] * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n[data-testid="stDataFrame"], [data-testid="stTable"] {\nbackground:var(--yk-surface) !important;\n            border-radius:12px !important;\n            border:1px solid var(--yk-border-soft) !important;\n            overflow:hidden !important;\n}\n[data-testid="stDataFrame"] iframe {\nbackground:var(--yk-surface) !important;\n}\ntable, thead, tbody, tr, th, td {\nborder-color:var(--yk-border-soft) !important;\n}\n[data-testid="stTable"] table,\n        [data-testid="stTable"] th,\n        [data-testid="stTable"] td {\nbackground:var(--yk-surface) !important;\n            color:var(--yk-text) !important;\n}\n.mac-kart, .tahmin-kart, .diger-kart, .neden-kart, .kupon-kart,\n        .combo-kart, .canli-kart, .strateji-kart, .oranlar-kart,\n        .history-card, .ai-comment, .ai-inline, .coupon-item,\n        .recent-match-row, .detail-form-sidebar-title {\nbackground:linear-gradient(135deg,var(--yk-surface),var(--yk-card)) !important;\n            border-color:var(--yk-border-soft) !important;\n            color:var(--yk-text) !important;\n}\n.mac-kart *, .tahmin-kart *, .diger-kart *, .neden-kart *,\n        .kupon-kart *, .combo-kart *, .canli-kart *, .strateji-kart *,\n        .oranlar-kart *, .history-card *, .ai-comment *, .ai-inline * {\ncolor:var(--yk-text);\n}\n.history-sub, .mk-mini, .tk-key, .diger-sub, .hb-sub, .hb-label,\n        .mk-label, .recent-top {\ncolor:var(--yk-muted) !important;\n            -webkit-text-fill-color:var(--yk-muted) !important;\n}\ndiv[data-testid="stDialog"] div[role="dialog"] {\nbackground:linear-gradient(180deg,var(--yk-bg) 0%,var(--yk-bg2) 100%) !important;\n            border-color:var(--yk-border) !important;\n}\ndiv[data-testid="stDialog"] div[role="dialog"] p,\n        div[data-testid="stDialog"] div[role="dialog"] label,\n        div[data-testid="stDialog"] div[role="dialog"] h1,\n        div[data-testid="stDialog"] div[role="dialog"] h2,\n        div[data-testid="stDialog"] div[role="dialog"] h3 {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n.sidebar-high-market-title {\nbackground:#102340 !important;\n            border-color:#315487 !important;\n}\n.sidebar-high-market-title b {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n.sidebar-high-market-title span {\ncolor:var(--yk-muted2) !important;\n            -webkit-text-fill-color:var(--yk-muted2) !important;\n}\na {\ncolor:var(--yk-blue) !important;\n}\nhr {\nborder-color:var(--yk-border-soft) !important;\n}\ndiv[data-testid="stSpinner"], div[data-testid="stSpinner"] *,\n        div[data-testid="stStatusWidget"], div[data-testid="stStatusWidget"] * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n.st-key-sticky_analysis_controls {\nbackground:linear-gradient(180deg,var(--yk-surface) 0%,var(--yk-bg2) 100%) !important;\n            border-color:#315487 !important;\n            box-shadow:0 8px 24px rgba(0,0,0,.30) !important;\n}\n.st-key-sticky_analysis_controls > div,\n        .st-key-sticky_analysis_controls [data-testid="stVerticalBlock"],\n        .st-key-sticky_analysis_controls [data-testid="stHorizontalBlock"],\n        .st-key-sticky_analysis_controls [data-testid="column"],\n        .st-key-sticky_analysis_controls div[data-testid="stElementContainer"] {\nbackground:transparent !important;\n}\n.st-key-sticky_analysis_controls {\nbackground-color:var(--yk-surface) !important;\n}\n.st-key-sticky_analysis_controls .top-analysis-controls b,\n        .st-key-sticky_analysis_controls label,\n        .st-key-sticky_analysis_controls label *,\n        .st-key-sticky_analysis_controls p,\n        .st-key-sticky_analysis_controls span,\n        .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"],\n        .st-key-sticky_analysis_controls [data-testid="stWidgetLabel"] * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            opacity:1 !important;\n}\n.st-key-sticky_analysis_controls [data-testid="stSlider"] label,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] label *,\n        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] label,\n        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] label *,\n        .st-key-sticky_analysis_controls [data-testid="stSelectbox"] label,\n        .st-key-sticky_analysis_controls [data-testid="stSelectbox"] label * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            font-weight:800 !important;\n}\n.st-key-sticky_analysis_controls [data-baseweb="select"] > div,\n        .st-key-sticky_analysis_controls [data-testid="stNumberInput"] div[data-baseweb="input"] > div {\nbackground:var(--yk-surface2) !important;\n            border-color:#315487 !important;\n}\n.st-key-sticky_analysis_controls [data-baseweb="select"] *,\n        .st-key-sticky_analysis_controls input {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n}\n.st-key-sayfa_modu,\n        .st-key-sayfa_modu [data-testid="stRadio"] {\ncolor:var(--yk-text) !important;\n}\n.st-key-sayfa_modu label,\n        .st-key-sayfa_modu label *,\n        .st-key-sayfa_modu p,\n        .st-key-sayfa_modu span,\n        .st-key-sayfa_modu [data-testid="stWidgetLabel"],\n        .st-key-sayfa_modu [data-testid="stWidgetLabel"] * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            opacity:1 !important;\n}\n.st-key-sayfa_modu [role="radiogroup"] label,\n        .st-key-sayfa_modu [role="radiogroup"] label *,\n        section[data-testid="stSidebar"] .st-key-sayfa_modu [role="radiogroup"] p {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            font-weight:700 !important;\n}\n.st-key-sticky_analysis_controls .top-analysis-controls,\n        .st-key-sticky_analysis_controls .top-analysis-controls *,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] label,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] label *,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stWidgetLabel"],\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stWidgetLabel"] *,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBar"],\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBar"] *,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBarMin"],\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [data-testid="stTickBarMax"],\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"],\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"] * {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            opacity:1 !important;\n}\n.st-key-sticky_analysis_controls .top-analysis-controls b {\ncolor:var(--yk-text) !important;\n            -webkit-text-fill-color:var(--yk-text) !important;\n            text-shadow:0 1px 1px rgba(0,0,0,.35) !important;\n}\n.st-key-sticky_analysis_controls [data-testid="stSlider"] svg,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] button svg,\n        .st-key-sticky_analysis_controls [data-testid="stTooltipIcon"] svg {\ncolor:var(--yk-text) !important;\n            fill:var(--yk-text) !important;\n            stroke:var(--yk-text) !important;\n            opacity:1 !important;\n}\n.st-key-sticky_analysis_controls [data-testid="stSlider"] div,\n        .st-key-sticky_analysis_controls [data-testid="stSlider"] span {\n-webkit-text-fill-color:var(--yk-text) !important;\n}\n.st-key-sticky_analysis_controls [data-testid="stSlider"] [role="slider"] {\nbackground:var(--yk-accent) !important;\n            border-color:#ffe27a !important;\n}\n[data-testid="stMain"] div[style*="text-align:center"][style*="font-size:12px"] {\ncolor:var(--yk-muted) !important;\n}\n/* Tek kaydırma düzeni. Sidebar ana içerikle birlikte hareket etmez. */\nhtml, body {height:100%; min-height:100%; overflow:hidden; background:var(--yk-bg); color:var(--yk-text);}\n.stApp, [data-testid="stAppViewContainer"] {\n    height:100dvh !important; min-height:0 !important; max-height:100dvh !important;\n    overflow:hidden !important; background:var(--yk-bg) !important;\n}\n[data-testid="stAppViewContainer"] > div {gap:0; background:var(--yk-bg);}\nsection[data-testid="stSidebar"] {\n    position:relative !important; top:auto !important; align-self:stretch !important;\n    height:100dvh !important; min-height:0 !important; max-height:100dvh !important;\n    overflow:hidden !important; margin-right:0; box-shadow:none;\n    background:var(--yk-surface) !important; border-color:var(--yk-border-soft) !important;\n}\nsection[data-testid="stSidebar"] > div,\nsection[data-testid="stSidebar"] [data-testid="stSidebarContent"] {\n    height:100% !important; min-height:0 !important; max-height:100% !important;\n    overflow-y:auto !important; overflow-x:hidden !important; background:var(--yk-surface) !important;\n}\n[data-testid="stMain"] {\n    height:100dvh !important; min-height:0 !important; max-height:100dvh !important; min-width:0;\n    overflow-y:auto !important; overflow-x:hidden !important; margin-left:0;\n    overscroll-behavior-y:contain; scrollbar-gutter:stable; background:var(--yk-bg) !important;\n}\n[data-testid="stMainBlockContainer"], .main .block-container {\n    height:auto !important; min-height:100% !important; max-height:none !important;\n    overflow:visible !important; padding-bottom:6rem; background:transparent !important;\n}\ndiv[data-testid="stExpander"], div[data-testid="stExpander"] details,\ndiv[data-testid="stExpanderDetails"], div[data-testid="stExpanderDetails"] > div {\n    max-height:none; overflow:visible; contain:none;\n}\n.st-key-koyu_mod_toggle {margin-bottom:0;}\n.st-key-sidebar_system_clock {\n    background:var(--yk-surface2) !important; border:1px solid var(--yk-border) !important;\n    border-radius:12px; padding:6px 8px; margin:0 0 8px; box-shadow:none;\n}\n.st-key-sidebar_system_clock [data-testid="stHorizontalBlock"] {align-items:center; gap:.45rem;}\n.st-key-sidebar_system_clock .system-clock-label {\n    width:100%; min-height:40px; display:flex; flex-direction:column; justify-content:center;\n    align-items:center; text-align:center; font-size:.72rem; line-height:1.18;\n    font-weight:700; padding:0; margin:0; color:var(--yk-text) !important;\n}\n.st-key-sidebar_system_clock .system-clock-label *,\n.st-key-sidebar_system_clock .system-clock-time {color:var(--yk-text) !important; -webkit-text-fill-color:var(--yk-text) !important;}\n.st-key-sidebar_system_clock .system-clock-time {display:block; margin-top:2px; font-size:.82rem; font-weight:900;}\n.st-key-sidebar_system_clock .system-clock-label > span:last-child {color:var(--yk-muted) !important; -webkit-text-fill-color:var(--yk-muted) !important;}\n.st-key-sidebar_system_clock button {min-height:40px; height:40px; font-weight:800;}\n.st-key-sticky_analysis_controls, .backtest-header-fix,\ndiv[data-testid="stMetric"] {background:var(--yk-surface2) !important; border-color:var(--yk-border) !important;}\n.backtest-header-fix, .backtest-header-fix *,\ndiv[data-testid="stMetric"] label, div[data-testid="stMetric"] label *,\ndiv[data-testid="stMetric"] [data-testid="stMetricValue"], div[data-testid="stMetric"] [data-testid="stMetricValue"] * {\n    color:var(--yk-text) !important; -webkit-text-fill-color:var(--yk-text) !important;\n}\n* {scrollbar-width:thin; scrollbar-color:var(--yk-accent) var(--yk-surface);}\n*::-webkit-scrollbar-track {background:var(--yk-surface);}\n*::-webkit-scrollbar-thumb {background:var(--yk-accent); border-color:var(--yk-surface);}\n'
+    st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
 
 
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
 with st.sidebar:
     with st.container(key="koyu_mod_toggle"):
-        koyu_mod = st.toggle("🌙 Koyu Mod", value=bool(st.session_state.get("koyu_mod", True)), key="koyu_mod")
+        koyu_mod = st.toggle("🌙 Koyu Mod", key="koyu_mod")
     uygula_tema_css(koyu_mod)
 
-    # === SABİT SIDEBAR / SADECE SAĞ TARAF SCROLL ===
-    # Sol panel ekran boyunca sabit kalır; tüm dikey kaydırma ana içerikte yapılır.
-    st.markdown(
-        """
-        <style>
-        html, body {
-            height:100% !important;
-            min-height:100% !important;
-            overflow:hidden !important;
-        }
-        .stApp,
-        [data-testid="stAppViewContainer"] {
-            height:100vh !important;
-            min-height:100vh !important;
-            max-height:100vh !important;
-            overflow:hidden !important;
-        }
-
-        /* Koyu Mod ile saat kutusu arasında gereksiz boşluk bırakma. */
-        .st-key-koyu_mod_toggle { margin-bottom:-14px !important; }
-        .st-key-sidebar_system_clock { margin-top:0 !important; }
-
-        /* Sidebar hiçbir zaman ana sayfayla birlikte hareket etmez. */
-        section[data-testid="stSidebar"] {
-            position:relative !important;
-            top:auto !important;
-            align-self:stretch !important;
-            height:100vh !important;
-            min-height:100vh !important;
-            max-height:100vh !important;
-            overflow:hidden !important;
-        }
-        section[data-testid="stSidebar"] > div,
-        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-            height:100vh !important;
-            min-height:100vh !important;
-            max-height:100vh !important;
-            overflow:hidden !important;
-        }
-
-        /* Sidebar ile ana içerik arasında farklı renkli/beyaz şerit bırakma. */
-        [data-testid="stAppViewContainer"],
-        [data-testid="stAppViewContainer"] > div,
-        [data-testid="stAppViewContainer"] > div > div {
-            background:#07111f !important;
-        }
-        [data-testid="stAppViewContainer"] > div {
-            gap:0 !important;
-            column-gap:0 !important;
-        }
-        section[data-testid="stSidebar"] {
-            margin-right:0 !important;
-            box-shadow:none !important;
-        }
-        [data-testid="stMain"] {
-            margin-left:0 !important;
-            background:#07111f !important;
-        }
-
-        /* Tek dikey scroll sahibi sağdaki ana içerik. */
-        [data-testid="stMain"] {
-            height:100vh !important;
-            min-height:0 !important;
-            max-height:100vh !important;
-            overflow-y:auto !important;
-            overflow-x:hidden !important;
-            overscroll-behavior-y:contain !important;
-            scrollbar-gutter:stable !important;
-        }
-        [data-testid="stMainBlockContainer"],
-        .main .block-container {
-            height:auto !important;
-            min-height:100% !important;
-            max-height:none !important;
-            overflow:visible !important;
-            padding-left:1rem !important;
-            padding-bottom:6rem !important;
-        }
-
-        /* Açılan son maç detayları ana içerik yüksekliğini doğal biçimde büyütsün. */
-        div[data-testid="stExpander"],
-        div[data-testid="stExpander"] details,
-        div[data-testid="stExpanderDetails"],
-        div[data-testid="stExpanderDetails"] > div {
-            max-height:none !important;
-            overflow:visible !important;
-            contain:none !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     with st.container(key="sidebar_system_clock"):
-        st.markdown(
-            """
-            <style>
-            .st-key-sidebar_system_clock {
-                background:#ffffff !important;
-                border:1px solid #cbd5e1 !important;
-                border-radius:12px !important;
-                padding:6px 8px !important;
-                margin:0 0 8px 0 !important;
-                box-shadow:0 4px 12px rgba(15,23,42,.08) !important;
-            }
-            .st-key-sidebar_system_clock [data-testid="stHorizontalBlock"] {
-                align-items:center !important;
-                gap:.45rem !important;
-            }
-            .st-key-sidebar_system_clock [data-testid="column"] {
-                display:flex !important;
-                align-items:center !important;
-                justify-content:center !important;
-            }
-            .st-key-sidebar_system_clock .system-clock-label,
-            .st-key-sidebar_system_clock .system-clock-label * {
-                color:#0f172a !important;
-                -webkit-text-fill-color:#0f172a !important;
-                opacity:1 !important;
-            }
-            .st-key-sidebar_system_clock .system-clock-label {
-                width:100%;
-                min-height:40px;
-                display:flex;
-                flex-direction:column;
-                justify-content:center;
-                align-items:center;
-                text-align:center;
-                font-size:.72rem;
-                line-height:1.18;
-                font-weight:700;
-                padding:0 !important;
-                margin:0 !important;
-            }
-            .st-key-sidebar_system_clock .system-clock-time {
-                display:block;
-                margin-top:1px;
-                color:#0f172a !important;
-                -webkit-text-fill-color:#0f172a !important;
-                font-size:.82rem;
-                font-weight:900;
-            }
-            .st-key-sidebar_system_clock button {
-                min-height:40px !important;
-                height:40px !important;
-                color:#ffffff !important;
-                -webkit-text-fill-color:#ffffff !important;
-                font-weight:800 !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        if bool(st.session_state.get("koyu_mod", False)):
-            st.markdown(
-                """
-                <style>
-                .st-key-sidebar_system_clock {
-                    background:#0b1628 !important;
-                    border-color:#284977 !important;
-                    box-shadow:0 4px 14px rgba(0,0,0,.28) !important;
-                }
-                .st-key-sidebar_system_clock .system-clock-label,
-                .st-key-sidebar_system_clock .system-clock-label *,
-                .st-key-sidebar_system_clock .system-clock-time {
-                    color:#f8fafc !important;
-                    -webkit-text-fill-color:#f8fafc !important;
-                }
-                .st-key-sidebar_system_clock .system-clock-label > span:last-child {
-                    color:#9db2d1 !important;
-                    -webkit-text-fill-color:#9db2d1 !important;
-                }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
         sistem_bilgi_col, sistem_yenile_col = st.columns([1.55, 1], gap="small")
         with sistem_bilgi_col:
             st.markdown(
@@ -8095,7 +7273,7 @@ def _spor_toto_eslestir(mac, bulten):
     # 1) Önce manuel programdaki günün kendisi.
     if "zaman" in tum.columns:
         try:
-            ayni_gun = tum[tum["zaman"].apply(lambda x: parse_mac_datetime(x).date() == mac["zaman"].date())]
+            ayni_gun = tum[tum["zaman"].apply(lambda x: (dt := parse_mac_datetime(x)) is not None and dt.date() == mac["zaman"].date())]
             if not ayni_gun.empty:
                 aramalar.append(ayni_gun)
         except Exception:
@@ -8104,7 +7282,7 @@ def _spor_toto_eslestir(mac, bulten):
         # 2) Program/API tarihleri bir gün kayabiliyor. Takım adları güçlü eşleşiyorsa ±1 gün kabul et.
         try:
             yakin_gun = tum[tum["zaman"].apply(
-                lambda x: abs((parse_mac_datetime(x).date() - mac["zaman"].date()).days) <= 1
+                lambda x: (dt := parse_mac_datetime(x)) is not None and abs((dt.date() - mac["zaman"].date()).days) <= 1
             )]
             if not yakin_gun.empty:
                 aramalar.append(yakin_gun)
@@ -8144,9 +7322,9 @@ def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_li
     """
     if gecmis_df is None or getattr(gecmis_df, "empty", True):
         return []
-    b0 = gecmis_df.copy()
-    if sadece_ayni_lig and "league_code" in b0.columns and mac_row.get("sport_key"):
-        b0 = b0[b0["league_code"].astype(str) == str(mac_row.get("sport_key"))].copy()
+    b0 = tarih_oncesi_gecmis(gecmis_df, mac_row.get("zaman")).copy()
+    if ayni_lig and "league_code" in b0.columns and mac_row.get("sport_key"):
+        b0 = b0[b0["league_code"].astype(str) == str(ODDS_TO_HISTORY.get(mac_row.get("sport_key"), mac_row.get("sport_key")))].copy()
     if b0.empty or "FTR" not in b0.columns:
         return []
 
@@ -8186,15 +7364,7 @@ def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_li
         mod = str(vc.idxmax()) if not vc.empty else "D"
         taraf = taraf_map.get(mod, "X")
         yuzde = float(vc.get(mod, 0.0)) * 100.0
-        # Kolon üretiminde X'i körlemesine eklemek yerine, her hassasiyetteki gerçek
-        # 1/X/2 dağılımını da sakla. Böylece beraberlik ana seçime yakınsa alternatif
-        # kolonlara girebilir; net favorilerde gereksiz X üretilmez.
-        taramalar.append({
-            "tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri),
-            "p1": float(vc.get("H", 0.0)) * 100.0,
-            "px": float(vc.get("D", 0.0)) * 100.0,
-            "p2": float(vc.get("A", 0.0)) * 100.0,
-        })
+        taramalar.append({"tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
     return taramalar
 
 
@@ -8206,7 +7376,7 @@ def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
     """
     if gecmis_df is None or getattr(gecmis_df, "empty", True) or "FTR" not in gecmis_df.columns:
         return None
-    b = gecmis_df.copy()
+    b = tarih_oncesi_gecmis(gecmis_df, mac_row.get("zaman")).copy()
     ref_h = "REF_H" if "REF_H" in b.columns else "B365H"
     ref_d = "REF_D" if "REF_D" in b.columns else "B365D"
     ref_a = "REF_A" if "REF_A" in b.columns else "B365A"
@@ -8249,9 +7419,6 @@ def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
         "gecerli": 1,
         "ornek": len(seri),
         "hass": [],
-        "p1": round(float(vc.get("H", 0.0)) * 100.0, 1),
-        "px": round(float(vc.get("D", 0.0)) * 100.0, 1),
-        "p2": round(float(vc.get("A", 0.0)) * 100.0, 1),
         "spor_toto_faz": "en yakın oran fallback",
         "spor_toto_min_ornek": len(seri),
     }
@@ -8294,11 +7461,6 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
 
     secim = max(aday_taraflar, key=_ort)
     secim_kayitlari = [x for x in taramalar if x["taraf"] == secim]
-    # Tüm geçerli hassasiyetlerdeki ortalama MS dağılımı. Kolon çeşitlendirmesi
-    # bu değerleri kullanır; yalnızca modal tahmine bakmaz.
-    p1 = sum(float(x.get("p1", 0.0)) for x in taramalar) / max(len(taramalar), 1)
-    px = sum(float(x.get("px", 0.0)) for x in taramalar) / max(len(taramalar), 1)
-    p2 = sum(float(x.get("p2", 0.0)) for x in taramalar) / max(len(taramalar), 1)
     return {
         "secim": secim,
         "guven": round(sum(x["yuzde"] for x in secim_kayitlari) / max(len(secim_kayitlari), 1), 1),
@@ -8306,9 +7468,6 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
         "gecerli": len(taramalar),
         "ornek": max(x["ornek"] for x in secim_kayitlari),
         "hass": [x["tol"] for x in secim_kayitlari],
-        "p1": round(p1, 1),
-        "px": round(px, 1),
-        "p2": round(p2, 1),
         "spor_toto_faz": kullanilan_faz,
         "spor_toto_min_ornek": kullanilan_min,
     }
@@ -8387,44 +7546,18 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 sec = str(r.get('secim'))
                 for k in kolonlar:
                     kolonlar[k][r['no']] = sec
-            # 2-4. kolonlarda alternatifleri gerçek 1/X/2 geçmiş dağılımına göre seç.
-            # Özellikle X, ana tahmine yeterince yakınsa kolona alınır; net favorilerde
-            # sırf çeşitlilik olsun diye beraberlik eklenmez.
+            # Alternatif üretmek için gerçek piyasa 1/X/2 oran sırasını yalnızca çeşitlendirme sinyali olarak kullan.
+            # Ana kolon model tahminini korur; 2-4 kolon düşük güvenlilerde farklılaşır.
             zayif = sorted(tamam, key=lambda r: (float(r.get('guven',0)), int(r.get('kararlilik',0))))
-            degisen_kolon = 2
-            degisim_sayisi = 0
-            for r in zayif:
-                ana = str(r.get('secim'))
-                probs = {
-                    '1': float(r.get('p1', 0) or 0),
-                    'X': float(r.get('px', 0) or 0),
-                    '2': float(r.get('p2', 0) or 0),
-                }
-                ana_p = probs.get(ana, float(r.get('guven', 0) or 0))
-                diger = sorted(
-                    [(t, p) for t, p in probs.items() if t != ana],
-                    key=lambda x: x[1], reverse=True
-                )
-                uygun = []
-                for taraf, p in diger:
-                    # Genel alternatif: ana tahminden en fazla 10 puan geride ve en az %25.
-                    # Beraberlik için ayrıca %28+ olması veya ana tahmine 8 puandan yakın olması yeterli.
-                    if taraf == 'X':
-                        if p >= 28.0 or (p >= 24.0 and (ana_p - p) <= 8.0):
-                            uygun.append((taraf, p))
-                    elif p >= 25.0 and (ana_p - p) <= 10.0:
-                        uygun.append((taraf, p))
-                if not uygun:
-                    continue
-                alt_taraf = uygun[0][0]
-                kolonlar[degisen_kolon][r['no']] = alt_taraf
-                degisim_sayisi += 1
-                degisen_kolon += 1
-                if degisen_kolon > 4:
-                    degisen_kolon = 2
-                # En fazla 9 kontrollü değişiklik; kolonlar tamamen rastgele dağılmasın.
-                if degisim_sayisi >= 9:
-                    break
+            alternatif_dongu = {'1':['X','2'], 'X':['1','2'], '2':['X','1']}
+            for idx, r in enumerate(zayif[:6]):
+                alt = alternatif_dongu.get(str(r.get('secim')), ['X','2'])
+                if idx % 3 == 0:
+                    kolonlar[2][r['no']] = alt[0]
+                elif idx % 3 == 1:
+                    kolonlar[3][r['no']] = alt[0]
+                else:
+                    kolonlar[4][r['no']] = alt[0]
             gor = []
             for r in _st_sonuclar:
                 if not str(r.get('durum', '')).startswith('Tamam'):
@@ -9528,7 +8661,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
 
 
 if st.session_state.get('sayfa_modu') == 'Canlı Takip':
-    simdi_canli = datetime.utcnow() + timedelta(hours=3)
+    simdi_canli = tr_simdi()
     son_yenileme = st.session_state.get("canli_son_yenileme")
     otomatik_zamani = (
         canli_otomatik
@@ -9687,7 +8820,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     else:
         df = pd.DataFrame(takip)
         df["zaman_dt"] = pd.to_datetime(df["zaman"], errors="coerce").dt.tz_localize(None)
-        baslangic = pd.Timestamp((datetime.utcnow() + timedelta(hours=3)).date())
+        baslangic = pd.Timestamp((tr_simdi()).date())
         # Varsayılan olarak bütün kayıtları göster. Böylece sayfa her açıldığında
         # yalnızca bugünün maçlarına daralmış gibi görünmez.
         donem = st.selectbox(
@@ -9823,6 +8956,11 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
     st.stop()
 
 
+if st.session_state.get("sayfa_modu") == "Backtest":
+    st.selectbox("Test modeli", ["Birleşik model", "Top 50 Market"], key="backtest_model",
+                 on_change=clear_backtest_on_change,
+                 help="Top 50 testi, listedeki market filtrelerini ve günlük 50 maç sınırını da uygular.")
+
 if backtest_btn:
     with st.spinner("🧪 11 hassasiyet test ediliyor (0.00–0.10)..."):
         bt_sezonlar = list(dict.fromkeys(list(yillar) + [backtest_sezonu]))
@@ -9842,6 +8980,8 @@ if backtest_btn:
             sadece_ayni_lig=sadece_ayni_lig,
             lig_kodlari=secili_history_codes or None,
             max_test=backtest_limit,
+            top50_model=st.session_state.get("backtest_model") == "Top 50 Market",
+            filtreler={key: st.session_state.get(key, True) for key in ("top10_filter_ms", "top10_filter_25", "top10_filter_kg", "top10_filter_iy05", "top10_filter_iy15", "top10_filter_combo")},
         )
         st.session_state.backtest_11_df = bt11
         st.session_state.backtest_uzlasi_df = bt_uzlasi
@@ -9913,6 +9053,8 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
         st.caption(f"📅 Backtest veri setindeki son tamamlanmış maç tarihi: {_bt_veri_tarihi}")
 
     bt = st.session_state.get("backtest_df")
+    if isinstance(bt, pd.DataFrame):
+        st.caption("Test edilen model: " + str(bt.attrs.get("model", "Birleşik")))
     if bt is None:
         st.info("Sol menüden sezon ve filtreleri seçip BACKTESTİ BAŞLAT butonuna bas.")
     elif bt.empty:
@@ -10136,6 +9278,8 @@ if analiz_btn:
             st.session_state["son_api_hatasi"] = st.session_state.get("odds_api_last_error")
             st.session_state["son_analiz_tarihi_secili"] = str(secili_tarih)
 
+            if not getattr(bulten, "empty", True) and bulten.attrs.get("stale"):
+                st.warning("Oranlar yenilenemedi; son başarılı bülten gösteriliyor. Oranları Yenile ile tekrar deneyebilirsin.")
             if getattr(bulten, "empty", True):
                 son_hata = st.session_state.get("odds_api_last_error")
                 if son_hata:
@@ -10151,7 +9295,7 @@ if analiz_btn:
         _sayac_guven = 0
         _sayac_gecen = 0
 
-        if not bulten.empty and not gecmis.empty:
+        if not bulten.empty and not gecmis.empty and st.session_state.get("sayfa_modu") != "Top 50 Market":
             for _, m in bulten.iterrows():
                 _sayac_toplam += 1
                 # Maç Analizi: üstte seçilen manuel hassasiyetle TEK kez çalışır.
@@ -10199,33 +9343,12 @@ if analiz_btn:
                 final.append({"m": m_dict, "t": t, "b": b_det})
                 _sayac_gecen += 1
 
-        final = sorted(
-            final,
-            key=lambda x: (
-                x["t"].get("score", 0),
-                x["t"].get("ana_p", 0),
-                x["t"].get("stability_count", 0),
-            ),
-            reverse=True,
-        )
-        final = sorted(
-            final,
-            key=lambda x: (
-                x["t"].get("playable_score", 0),
-                x["t"].get("ana_p", 0),
-                x["t"].get("score", 0),
-                x["t"].get("stability_count", 0),
-            ),
-            reverse=True,
-        )
-        final = sorted(
-            final,
-            key=lambda x: (
-                x.get("t", {}).get("playable_score", 0),
-                x.get("t", {}).get("ana_p", 0),
-            ),
-            reverse=True
-        )
+        if st.session_state.get("sayfa_modu") == "Top 50 Market":
+            final = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig)
+            final = [item for item in final if int(item["t"]["ana_p"]) >= int(oynanabilir_esik or 0)]
+            _sayac_toplam, _sayac_gecen = len(bulten), len(final)
+        final.sort(key=lambda item: (item["t"].get("score", 0), item["t"].get("ana_p", 0),
+                                     item["t"].get("stability_count", 0), mac_key(item["m"])), reverse=True)
         st.session_state.final_list = final
         st.session_state["son_final_mac_sayisi"] = len(final)
         st.session_state["analiz_filtre_sayaclari"] = {
@@ -10242,16 +9365,10 @@ if analiz_btn:
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
         # Bu hem manuel hassasiyet mantığını net tutar hem de analizi hızlandırır.
-        if st.session_state.get("sayfa_modu") == "Top 50 Market":
-            st.session_state.top50_list = gunun_en_iyi_10_uret(
-                gecmis, bulten, min_ornek=min_ornek, limit=50,
-                sadece_ayni_lig=sadece_ayni_lig,
-            )
-        else:
-            st.session_state.top50_list = []
+        st.session_state.top50_list = final if st.session_state.get("sayfa_modu") == "Top 50 Market" else []
         st.session_state.detay_idx = None
         st.session_state.detay_item = None
-        st.session_state.son_analiz = datetime.now().strftime("%d/%m/%Y %H:%M")
+        st.session_state.son_analiz = tr_simdi().strftime("%d/%m/%Y %H:%M")
         st.session_state.toplam_mac = len(final)
         st.rerun()
 
