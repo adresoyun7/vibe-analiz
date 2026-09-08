@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.08.1"
+MODEL_VERSION = "2026.09.08.2"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -550,7 +550,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 90
+APP_SCHEMA_VERSION = 91
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     korunan = {key: st.session_state[key] for key in ("user_api_key", "user_api_football_key", "koyu_mod") if key in st.session_state}
     st.session_state.clear()
@@ -7363,8 +7363,16 @@ def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_li
         taraf_map = {"H": "1", "D": "X", "A": "2"}
         mod = str(vc.idxmax()) if not vc.empty else "D"
         taraf = taraf_map.get(mod, "X")
-        yuzde = float(vc.get(mod, 0.0)) * 100.0
-        taramalar.append({"tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri)})
+        dagilim = {
+            "1": float(vc.get("H", 0.0)) * 100.0,
+            "X": float(vc.get("D", 0.0)) * 100.0,
+            "2": float(vc.get("A", 0.0)) * 100.0,
+        }
+        yuzde = float(dagilim.get(taraf, 0.0))
+        taramalar.append({
+            "tol": tol, "taraf": taraf, "yuzde": yuzde, "ornek": len(seri),
+            "p1": dagilim["1"], "px": dagilim["X"], "p2": dagilim["2"],
+        })
     return taramalar
 
 
@@ -7410,17 +7418,25 @@ def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
     if len(seri) < 3:
         return None
     vc = seri.value_counts(normalize=True)
-    mod = str(vc.idxmax()) if not vc.empty else "D"
-    taraf = {"H": "1", "D": "X", "A": "2"}.get(mod, "X")
+    dagilim = {
+        "1": float(vc.get("H", 0.0)) * 100.0,
+        "X": float(vc.get("D", 0.0)) * 100.0,
+        "2": float(vc.get("A", 0.0)) * 100.0,
+    }
+    taraf = max(("1", "X", "2"), key=lambda x: (dagilim[x], {"X": 0, "1": 1, "2": 1}[x]))
+    # Bu sonuç 11 hassasiyet uzlaşısı değildir; yalnızca en yakın gerçek oran profillerinin dağılımıdır.
     return {
         "secim": taraf,
-        "guven": round(float(vc.get(mod, 0.0)) * 100.0, 1),
-        "kararlilik": 1,
-        "gecerli": 1,
+        "guven": round(dagilim[taraf], 1),
+        "kararlilik": 0,
+        "gecerli": 0,
         "ornek": len(seri),
         "hass": [],
         "spor_toto_faz": "en yakın oran fallback",
         "spor_toto_min_ornek": len(seri),
+        "spor_toto_dagilim": {k: round(v, 1) for k, v in dagilim.items()},
+        "spor_toto_veri_kalitesi": "Çok düşük",
+        "spor_toto_fallback": True,
     }
 
 def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
@@ -7461,15 +7477,34 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
 
     secim = max(aday_taraflar, key=_ort)
     secim_kayitlari = [x for x in taramalar if x["taraf"] == secim]
+
+    # Kolon üretiminde mekanik 1->X/2 döngüsü yerine gerçek geçmiş 1/X/2
+    # dağılımını kullan. Her geçerli hassasiyet eşit oy taşır; böylece geniş
+    # toleransın yüksek örnek sayısı tek başına sonucu ezmez.
+    dagilim = {
+        "1": sum(float(x.get("p1", 0.0)) for x in taramalar) / len(taramalar),
+        "X": sum(float(x.get("px", 0.0)) for x in taramalar) / len(taramalar),
+        "2": sum(float(x.get("p2", 0.0)) for x in taramalar) / len(taramalar),
+    }
+    kalite = {
+        "standart": "Yüksek",
+        "fallback 0.15": "Orta",
+        "fallback 0.20": "Düşük",
+    }.get(kullanilan_faz, "Düşük")
     return {
         "secim": secim,
-        "guven": round(sum(x["yuzde"] for x in secim_kayitlari) / max(len(secim_kayitlari), 1), 1),
+        # Güven artık yalnız secimin kazandığı hassasiyetlerin değil, tüm geçerli
+        # hassasiyetlerdeki aynı taraf oranının ortalamasıdır.
+        "guven": round(float(dagilim.get(secim, 0.0)), 1),
         "kararlilik": len(secim_kayitlari),
         "gecerli": len(taramalar),
         "ornek": max(x["ornek"] for x in secim_kayitlari),
         "hass": [x["tol"] for x in secim_kayitlari],
         "spor_toto_faz": kullanilan_faz,
         "spor_toto_min_ornek": kullanilan_min,
+        "spor_toto_dagilim": {k: round(v, 1) for k, v in dagilim.items()},
+        "spor_toto_veri_kalitesi": kalite,
+        "spor_toto_fallback": kullanilan_faz != "standart",
     }
 
 
@@ -7510,7 +7545,7 @@ if spor_toto_btn:
 
 if st.session_state.get('sayfa_modu') == 'Spor Toto':
     st.markdown("### ⚽ Spor Toto · 15 Maç")
-    st.caption("Maç adları manuel; oranlar seçili liglerin cache'lenmiş The Odds API bülteninden eşleştirilir. Tahmin yalnızca MS 1/X/2 için 0.00–0.10 taramasıdır.")
+    st.caption("Maç adları manuel; oranlar seçili liglerin cache'lenmiş The Odds API bülteninden eşleştirilir. MS 1/X/2 için önce 0.00–0.10 taranır; örnek yoksa yalnız Spor Toto'da kontrollü 0.15/0.20 ve en yakın oran fallback uygulanır.")
     _st_sonuclar = st.session_state.get('spor_toto_sonuclar', [])
     if not _st_sonuclar:
         st.info("15 maçı kontrol ettikten sonra **⚽ SPOR TOTO ANALİZ ET** butonuna bas.")
@@ -7520,18 +7555,23 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
             if str(r.get('durum', '')).startswith('Tamam'):
                 tahmin = str(r.get('secim', '—'))
                 guven = f"%{float(r.get('guven', 0)):.1f}"
-                kar = f"{int(r.get('kararlilik',0))}/11"
-                oranlar = ''
+                _faz = str(r.get('spor_toto_faz', 'standart'))
+                kar = '—' if _faz == 'en yakın oran fallback' else f"{int(r.get('kararlilik',0))}/{max(int(r.get('gecerli',11)),1)}"
+                dag = r.get('spor_toto_dagilim') or {}
+                dag_txt = (f"1 %{float(dag.get('1',0)):.1f} · X %{float(dag.get('X',0)):.1f} · 2 %{float(dag.get('2',0)):.1f}" if dag else '—')
+                kalite = str(r.get('spor_toto_veri_kalitesi', '—'))
             else:
-                tahmin, guven, kar = '—', '—', '—'
+                tahmin, guven, kar, dag_txt, kalite = '—', '—', '—', '—', '—'
             tablo.append({
                 '#': r.get('no'),
                 'Tarih': r.get('zaman').strftime('%d.%m.%Y %H:%M') if r.get('zaman') else '',
                 'Maç': f"{r.get('ev')} - {r.get('dep')}",
                 'Tahmin': tahmin,
                 'Güven': guven,
+                '1 / X / 2': dag_txt,
                 'Kararlılık': kar,
                 'Örnek': r.get('ornek', '—'),
+                'Veri Kalitesi': kalite,
                 'Durum': r.get('durum', ''),
             })
         st.dataframe(pd.DataFrame(tablo), use_container_width=True, hide_index=True)
@@ -7539,31 +7579,73 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
         tamam = [r for r in _st_sonuclar if str(r.get('durum', '')).startswith('Tamam')]
         if tamam:
             st.markdown("#### Kolon önerileri")
-            # 1. kolon: modelin en güçlü tek tahmini.
-            # Diğer kolonlar: en düşük güvenli maçlardan başlayarak 2. ve 3. olası MS tarafına çeşitlilik verir.
+            st.caption("1. kolon ana model tahminidir. 2–4. kolonlarda alternatif yalnızca gerçek 1/X/2 dağılımında ana sonuca yeterince yakınsa kullanılır; X yapay olarak eklenmez.")
+
             kolonlar = {1: {}, 2: {}, 3: {}, 4: {}}
             for r in tamam:
-                sec = str(r.get('secim'))
+                sec = str(r.get('secim', ''))
                 for k in kolonlar:
                     kolonlar[k][r['no']] = sec
-            # Alternatif üretmek için gerçek piyasa 1/X/2 oran sırasını yalnızca çeşitlendirme sinyali olarak kullan.
-            # Ana kolon model tahminini korur; 2-4 kolon düşük güvenlilerde farklılaşır.
-            zayif = sorted(tamam, key=lambda r: (float(r.get('guven',0)), int(r.get('kararlilik',0))))
-            alternatif_dongu = {'1':['X','2'], 'X':['1','2'], '2':['X','1']}
-            for idx, r in enumerate(zayif[:6]):
-                alt = alternatif_dongu.get(str(r.get('secim')), ['X','2'])
-                if idx % 3 == 0:
-                    kolonlar[2][r['no']] = alt[0]
-                elif idx % 3 == 1:
-                    kolonlar[3][r['no']] = alt[0]
-                else:
-                    kolonlar[4][r['no']] = alt[0]
+
+            def _st_alternatifler(r):
+                dag = r.get('spor_toto_dagilim') or {}
+                if not dag:
+                    return []
+                ana = str(r.get('secim', ''))
+                ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
+                faz = str(r.get('spor_toto_faz', 'standart'))
+                adaylar = []
+                for taraf in ('1', 'X', '2'):
+                    if taraf == ana:
+                        continue
+                    p = float(dag.get(taraf, 0) or 0)
+                    fark = ana_p - p
+                    # Normal/fallback taramada %25+ ve en fazla 12 puan gerideyse
+                    # gerçek alternatif kabul et. En-yakın-oran fallback daha zayıf
+                    # veri olduğundan biraz daha sıkı eşik kullanır.
+                    if faz == 'en yakın oran fallback':
+                        uygun = p >= 28.0 and fark <= 10.0
+                    else:
+                        uygun = p >= 25.0 and fark <= 12.0
+                    if uygun:
+                        adaylar.append((taraf, p, fark))
+                return sorted(adaylar, key=lambda x: (x[1], -x[2]), reverse=True)
+
+            # Belirsizliği en yüksek maçlar önce çeşitlendirilir. Böylece dört kolon
+            # arasında değişiklik sayısı sınırlı kalır ve net favorilere dokunulmaz.
+            cesit_adaylari = []
+            for r in tamam:
+                dag = r.get('spor_toto_dagilim') or {}
+                alts = _st_alternatifler(r)
+                if not alts:
+                    continue
+                ana = str(r.get('secim', ''))
+                ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
+                top_alt = alts[0][1]
+                # Küçük fark = yüksek belirsizlik; fallback kalite cezası alır.
+                kalite_cezasi = 4.0 if str(r.get('spor_toto_faz')) == 'en yakın oran fallback' else 0.0
+                belirsizlik = 100.0 - (ana_p - top_alt) - kalite_cezasi
+                cesit_adaylari.append((belirsizlik, r, alts))
+            cesit_adaylari.sort(key=lambda x: x[0], reverse=True)
+
+            # En fazla 6 maçta alternatif kullan; her alternatif gerçek dağılımdan gelir.
+            for idx, (_, r, alts) in enumerate(cesit_adaylari[:6]):
+                ana_kolon = 2 + (idx % 3)
+                kolonlar[ana_kolon][r['no']] = alts[0][0]
+                # İkinci alternatif de ana sonuca çok yakınsa başka bir kolona yay.
+                if len(alts) > 1 and alts[1][1] >= 27.0 and alts[1][2] <= 8.0:
+                    ikinci_kolon = 2 + ((idx + 1) % 3)
+                    kolonlar[ikinci_kolon][r['no']] = alts[1][0]
+
             gor = []
             for r in _st_sonuclar:
                 if not str(r.get('durum', '')).startswith('Tamam'):
                     continue
+                dag = r.get('spor_toto_dagilim') or {}
+                dag_txt = (f"1 %{float(dag.get('1',0)):.1f} · X %{float(dag.get('X',0)):.1f} · 2 %{float(dag.get('2',0)):.1f}" if dag else '—')
                 gor.append({
                     '#': r['no'], 'Maç': f"{r['ev']} - {r['dep']}",
+                    'Dağılım': dag_txt,
                     '1. Kolon': kolonlar[1].get(r['no'],'—'),
                     '2. Kolon': kolonlar[2].get(r['no'],'—'),
                     '3. Kolon': kolonlar[3].get(r['no'],'—'),
