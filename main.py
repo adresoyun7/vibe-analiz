@@ -4859,8 +4859,6 @@ def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
             return
         if not filtreler.get("top10_filter_kg", True) and tip == "KG":
             return
-        if not filtreler.get("top10_filter_iy05", True) and label == "İY 0.5 Üst":
-            return
         if not filtreler.get("top10_filter_iy15", True) and label == "İY 1.5 Üst":
             return
         if not filtreler.get("top10_filter_combo", True) and tip in ["Kombo", "HT/FT"]:
@@ -7165,10 +7163,8 @@ with st.sidebar:
         with c_kg:
             st.checkbox("KG", value=True, key="top10_filter_kg", on_change=clear_detail_and_rebuild_top_markets)
 
-        # Alt satır: 3 filtre
-        c_iy05, c_iy15, c_combo = st.columns([1, 1, 1], gap="small")
-        with c_iy05:
-            st.checkbox("İY 0.5", value=True, key="top10_filter_iy05", on_change=clear_detail_and_rebuild_top_markets)
+        # Alt satır: 2 filtre
+        c_iy15, c_combo = st.columns([1, 1], gap="small")
         with c_iy15:
             st.checkbox("İY 1.5", value=True, key="top10_filter_iy15", on_change=clear_detail_and_rebuild_top_markets)
         with c_combo:
@@ -9211,7 +9207,7 @@ if backtest_btn:
             lig_kodlari=secili_history_codes or None,
             max_test=backtest_limit,
             top50_model=st.session_state.get("backtest_model") == "Top 50 Market",
-            filtreler={key: st.session_state.get(key, True) for key in ("top10_filter_ms", "top10_filter_25", "top10_filter_kg", "top10_filter_iy05", "top10_filter_iy15", "top10_filter_combo")},
+            filtreler={key: st.session_state.get(key, True) for key in ("top10_filter_ms", "top10_filter_25", "top10_filter_kg", "top10_filter_iy15", "top10_filter_combo")},
         )
         st.session_state.backtest_11_df = bt11
         st.session_state.backtest_uzlasi_df = bt_uzlasi
