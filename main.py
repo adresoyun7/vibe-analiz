@@ -4842,6 +4842,8 @@ def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
 
     def add(label, guven, tip=None, oran=None, bonus=0, min_guven=50):
         label = str(label or "").strip()
+        if label == "İY 0.5 Üst":
+            return
         guven = safe_int(guven)
         if not label or label in ["Belirsiz Maç", "Tahmin Zayıf", "None", "-"]:
             return
@@ -5075,6 +5077,7 @@ def _en_iyi_alternatif(ana_label, kayitlar):
                 guven = 0.0
             if (
                 not etiket
+                or etiket == "İY 0.5 Üst"
                 or etiket == str(ana_label)
                 or _tahmin_market_ailesi(etiket) == _tahmin_market_ailesi(ana_label)
                 or guven <= 60
@@ -5164,8 +5167,8 @@ def analiz_tahminlerini_kaydet(final):
         mevcut = {tahmin_kaydi_mac_anahtari(x): x for x in kayitlar}
         for item in final:
             m, t = item.get("m", {}), item.get("t", {})
-            label = str(t.get("ana_label", ""))
-            if not label or label in ["Belirsiz Maç", "Tahmin Zayıf"]:
+            label = str(t.get("ana_label", "")).strip()
+            if not label or label in ["Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"]:
                 continue
             if not mac_baslamadi_mi(m.get("zaman")):
                 continue
