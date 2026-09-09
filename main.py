@@ -26,10 +26,89 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.09.3"
+MODEL_VERSION = "2026.09.09.4"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
+
+# Bunlar doğrulanmış optimumlar değildir; canlı ve backtest aynı ayarları kullanır.
+MODEL_SETTINGS = {"league_weight": 1.25, "half_life_days": 730.0,
+                  "min_time_weight": 0.25, "prior_strength": 5.0,
+                  "base_prior_strength": 20.0}
+BOOKMAKER_HISTORY_PREFIX = {"bet365": "B365", "bet365_au": "B365",
+                            "williamhill": "WH", "pinnacle": "PS",
+                            "bwin": "BW", "betvictor": "VC"}
+ORAN_KAYIT_ALANLARI = ("match_id", "bookmaker_key", "odds_updated_at", "odds_phase",
+                      "totals_updated_at", "totals_phase", "totals_bookmaker_key",
+                      "o25_over", "o25_under", "odds_fetched_at")
+
+
+def hassasiyet_oku(value, default=0.08):
+    """0.00 geçerli bir seçimdir; yalnızca eksik/bozuk değer varsayılana düşer."""
+    try:
+        result = float(value) if value is not None else float(default)
+        return result if math.isfinite(result) and result >= 0 else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def oran_kayit_bilgisi(m):
+    return {key: m.get(key) for key in ORAN_KAYIT_ALANLARI if m.get(key) is not None}
+
+
+def zaman_agirliklari(df, m):
+    dates = tarih_serisi_oku(df["Date"])
+    target = parse_mac_datetime(m.get("zaman"))
+    if target is None:
+        return pd.Series(0.0, index=df.index)
+    age = (pd.Timestamp(target).normalize() - dates).dt.total_seconds().div(86400).clip(lower=0)
+    return (0.5 ** (age / MODEL_SETTINGS["half_life_days"])).clip(
+        lower=MODEL_SETTINGS["min_time_weight"]).fillna(0.0)
+
+
+def olasilik_yuzdeleri(values):
+    """Birbirini dışlayan sonuçları, yuvarlama dahil tam %100'e tamamlar."""
+    values = [max(0.0, float(value)) if math.isfinite(float(value)) else 0.0 for value in values]
+    total = sum(values)
+    if not total:
+        return [0] * len(values)
+    scaled = [value / total * 100.0 for value in values]
+    rounded = [math.floor(value) for value in scaled]
+    order = sorted(range(len(values)), key=lambda i: (scaled[i] - rounded[i], -i), reverse=True)
+    for i in order[:100 - sum(rounded)]:
+        rounded[i] += 1
+    return rounded
+
+
+def market_etkin_ornek(t, label):
+    if str(label).startswith(("İY ", "HT/FT")):
+        key = "effective_ht_samples"
+    elif any(part in str(label) for part in ("KG", "Üst", "Alt")):
+        key = "effective_goal_samples"
+    else:
+        key = "effective_ms_samples"
+    return float(t.get(key, t.get("ornek", 0)) or 0)
+
+
+def sabit_kalibrasyon_kayitlari():
+    """İsteğe bağlı, sürümü sabit eğitim çıktısı; son UI backtestine bağlı değildir.
+
+    yapaikupon_kalibrasyon.json: model_version, trained_through (ISO tarih), records.
+    Hedefi eğitim dönemi içinde kalan bir maç bu profil ile düzeltilemez.
+    Dosya bulunmazsa canlı ve backtest aynı nötr düzeltmeyi kullanır.
+    """
+    path = APP_DATA_DIR / "yapaikupon_kalibrasyon.json"
+    try:
+        profile = json.loads(path.read_text(encoding="utf-8"))
+        cutoff = parse_mac_datetime(profile.get("trained_through"))
+        records = profile.get("records", [])
+        if profile.get("model_version") != MODEL_VERSION or cutoff is None or not isinstance(records, list):
+            return []
+        return [dict(record, calibration_trained_through=cutoff.isoformat()) for record in records
+                if isinstance(record, dict) and parse_mac_datetime(record.get("Tarih")) is not None
+                and parse_mac_datetime(record["Tarih"]).date() <= cutoff.date()]
+    except (OSError, ValueError, TypeError):
+        return []
 
 
 def tr_simdi():
@@ -80,7 +159,10 @@ def tarih_oncesi_kayitlar(records, value):
     cutoff = kickoff.date()
     return [record for record in records or []
             if (dt := parse_mac_datetime(record.get("Tarih", record.get("zaman")))) is not None
-            and dt.date() < cutoff]
+            and dt.date() < cutoff
+            and (not record.get("calibration_trained_through")
+                 or ((trained := parse_mac_datetime(record["calibration_trained_through"])) is not None
+                     and trained.date() < cutoff))]
 
 
 class KayitDeposu:
@@ -159,9 +241,11 @@ def kayitlari_degistir(name, change, legacy_path):
 
 def oran_fazi(m, totals=False):
     """CSV has no quote clock: phase matching is approximate, never exact-time matching."""
-    explicit = m.get("odds_phase")
+    explicit = m.get("totals_phase" if totals else "odds_phase")
     if explicit in ("closing", "preclosing"):
         return explicit
+    if explicit == "legacy_unknown" and m.get("history_detail_only"):
+        return "legacy_unknown"
     key = "totals_updated_at" if totals else "odds_updated_at"
     quote = pd.to_datetime(m.get(key), utc=True, errors="coerce")
     kickoff = pd.to_datetime(m.get("zaman"), errors="coerce")
@@ -177,18 +261,59 @@ def oran_fazi(m, totals=False):
 
 
 def zaman_uyumlu_gecmis(df, m):
-    """Choose a complete same-phase trio; never mix closing and preclosing columns."""
+    """Aynı evre ve mümkünse aynı şirket. Farklı şirkette marjsız profil kullanılır."""
     if df is None:
         return pd.DataFrame()
     result = df.copy()
     phase = oran_fazi(m)
-    if phase not in ("closing", "preclosing"):
+    if phase not in ("closing", "preclosing", "legacy_unknown"):
         return result.iloc[0:0]
-    columns = ["B365CH", "B365CD", "B365CA"] if phase == "closing" else ["B365H", "B365D", "B365A"]
+    requested = BOOKMAKER_HISTORY_PREFIX.get(str(m.get("bookmaker_key", "")))
+    # Eski backtest hedefleri B365 sütunlarından oluşturuluyordu.
+    if requested is None and not m.get("bookmaker_key"):
+        requested = "B365"
+    prefixes = list(dict.fromkeys([requested, "B365", "WH", "PS", "BW", "VC"]))
+    chosen, valid = None, pd.Series(False, index=result.index)
+    phases = [phase] if phase != "legacy_unknown" else ["closing", "preclosing"]
+    for candidate_phase in phases:
+        for prefix in prefixes:
+            if prefix is None:
+                continue
+            columns = [f'{prefix}{"C" if candidate_phase == "closing" else ""}{side}' for side in "HDA"]
+            if not all(column in result for column in columns):
+                continue
+            values = result[columns].apply(pd.to_numeric, errors="coerce")
+            valid = (values.gt(1) & values.lt(float("inf"))).all(axis=1)
+            if valid.any():
+                chosen = (prefix, candidate_phase, columns)
+                break
+        if chosen:
+            break
+    if chosen is None:
+        return result.iloc[0:0]
+    prefix, selected_phase, columns = chosen
     for source, target in zip(columns, ["REF_H", "REF_D", "REF_A"]):
-        result[target] = pd.to_numeric(result[source], errors="coerce") if source in result else float("nan")
-    valid = result[["REF_H", "REF_D", "REF_A"]].apply(lambda x: x.gt(1) & x.lt(float("inf"))).all(axis=1)
+        result[target] = pd.to_numeric(result[source], errors="coerce")
+    cross = requested != prefix or (phase == "legacy_unknown" and not m.get("bookmaker_key"))
+    result.attrs.update(odds_history_prefix=prefix, odds_cross_bookmaker=cross,
+                        odds_phase_used=selected_phase, odds_time_unknown=phase == "legacy_unknown")
     return result.loc[valid].copy()
+
+
+def eslesme_oranlari(df, m):
+    values = df[["REF_H", "REF_D", "REF_A"]].apply(pd.to_numeric, errors="coerce")
+    target = pd.Series([float(m[key]) for key in ("h", "b", "a")], index=values.columns)
+    if df.attrs.get("odds_cross_bookmaker"):
+        # Her iki üçlü aynı şekilde marjdan arındırılır. Ham şirket oranları saklanır.
+        inv = 1.0 / values
+        values = inv.sum(axis=1).to_numpy()[:, None] * values
+        target = target * (1.0 / target).sum()
+    return values, target
+
+
+def oran_eslesme_maskesi(df, m, tolerans):
+    values, target = eslesme_oranlari(df, m)
+    return values.sub(target, axis=1).abs().le(float(tolerans) + 1e-9).all(axis=1)
 
 
 def etkin_ornek(weights):
@@ -202,21 +327,22 @@ def agirlikli_oran(values, weights):
 
 
 def analiz_agirliklari(b, m, tolerans):
-    distance = sum(((b[col] - float(m[key])) / max(float(tolerans), 0.01)) ** 2
-                   for col, key in [("REF_H", "h"), ("REF_D", "b"), ("REF_A", "a")]) / 3
+    values, target = eslesme_oranlari(b, m)
+    distance = (values.sub(target, axis=1) / max(float(tolerans), 0.01)).pow(2).mean(axis=1)
     ms = 1.0 / (1.0 + distance)
     # Modest league preference; two-year half-life with a floor preserves old evidence.
     code = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")))
     if code and "league_code" in b:
-        ms *= b["league_code"].eq(code).map({True: 1.25, False: 1.0})
-    dates = pd.to_datetime(b["Date"], utc=True, errors="coerce")
-    target_date = pd.to_datetime(m.get("zaman"), utc=True, errors="coerce")
-    age = (target_date - dates).dt.total_seconds().div(86400).clip(lower=0)
-    ms *= (0.5 ** (age / 730.0)).clip(lower=0.25).fillna(0.25)
+        ms *= b["league_code"].eq(code).map({True: MODEL_SETTINGS["league_weight"], False: 1.0})
+    ms *= zaman_agirliklari(b, m)
     goals = ms.copy()
     note = "Gol oranı desteği yok; MS benzerliği kullanıldı"
     phase = oran_fazi(m)
-    cols = ("B365C>2.5", "B365C<2.5") if phase == "closing" else ("B365>2.5", "B365<2.5")
+    prefix = BOOKMAKER_HISTORY_PREFIX.get(str(m.get("totals_bookmaker_key", "")), "B365")
+    prefix = "P" if prefix == "PS" else prefix
+    cols = tuple(f'{prefix}{"C" if phase == "closing" else ""}{side}2.5' for side in (">", "<"))
+    if any(column not in b for column in cols):
+        cols = ("B365C>2.5", "B365C<2.5") if phase == "closing" else ("B365>2.5", "B365<2.5")
     try:
         over, under = float(m.get("o25_over")), float(m.get("o25_under"))
         if not all(math.isfinite(x) and x > 1 for x in (over, under)):
@@ -234,31 +360,43 @@ def analiz_agirliklari(b, m, tolerans):
         goals = ms * factor.where(valid, 0.0)
         if etkin_ornek(goals) < 5:
             return ms, ms.copy(), note
-        note = "2.5 gol oranı benzerliği aktif (aynı oran evresi)"
+        note = "2.5 gol oranı benzerliği aktif (aynı evre, marjdan arındırılmış profil)"
     except (TypeError, ValueError):
         pass
     return ms, goals, note
 
 
 def gecmis_tabanlari(df, m):
-    """Prior uses only matches before target, before the narrow odds filter."""
-    result = {}
+    """Zaman ağırlıklı taban; tabanın kendi örnek azlığı da nötr dağılıma çekilir."""
+    neutral = {"MS 1": 1/3, "Beraberlik": 1/3, "MS 2": 1/3,
+               "2.5 Üst": .5, "2.5 Alt": .5, "KG Var": .5, "KG Yok": .5,
+               "1.5 Üst": .5, "3.5 Üst": .5}
     if df.empty:
-        return result
+        return neutral
+    frame = tarih_oncesi_gecmis(df, m.get("zaman")).copy()
+    for key in ("FTHG", "FTAG"):
+        frame[key] = pd.to_numeric(frame[key], errors="coerce")
+    frame = frame.dropna(subset=["FTHG", "FTAG"])
+    if frame.empty:
+        return neutral
+    weights = zaman_agirliklari(frame, m)
     code = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")))
-    league = df.loc[df["league_code"].eq(code)] if code and "league_code" in df else df.iloc[0:0]
-    for label in ("MS 1", "Beraberlik", "MS 2", "2.5 Üst", "2.5 Alt", "KG Var", "KG Yok", "1.5 Üst", "3.5 Üst"):
-        def rate(frame):
-            h, a = frame["FTHG"], frame["FTAG"]
-            valid = h.notna() & a.notna()
-            masks = {"MS 1": h > a, "Beraberlik": h == a, "MS 2": h < a,
-                     "2.5 Üst": h+a > 2, "2.5 Alt": h+a < 3,
-                     "KG Var": (h > 0) & (a > 0), "KG Yok": (h == 0) | (a == 0),
-                     "1.5 Üst": h+a > 1, "3.5 Üst": h+a > 3}
-            return float(masks[label][valid].mean()) if valid.any() else 0.5
-        global_rate = rate(df)
-        strength = len(league) / (len(league) + 100.0)
-        result[label] = global_rate * (1-strength) + rate(league) * strength
+    league = frame["league_code"].eq(code) if code and "league_code" in frame else pd.Series(False, index=frame.index)
+    h, a = frame["FTHG"], frame["FTAG"]
+    masks = {"MS 1": h > a, "Beraberlik": h == a, "MS 2": h < a,
+             "2.5 Üst": h+a > 2, "2.5 Alt": h+a < 3,
+             "KG Var": (h > 0) & (a > 0), "KG Yok": (h == 0) | (a == 0),
+             "1.5 Üst": h+a > 1, "3.5 Üst": h+a > 3}
+    strength = MODEL_SETTINGS["base_prior_strength"]
+    global_mass = float(weights.sum())
+    league_weights = weights.where(league, 0.0)
+    league_mass = float(league_weights.sum())
+    league_blend = league_mass / (league_mass + 100.0)
+    result = {}
+    for label, mask in masks.items():
+        global_rate = (float((mask * weights).sum()) + neutral[label] * strength) / (global_mass + strength)
+        league_rate = (float((mask * league_weights).sum()) + global_rate * strength) / (league_mass + strength)
+        result[label] = (1-league_blend) * global_rate + league_blend * league_rate
     return result
 
 
@@ -267,9 +405,9 @@ def tabana_yaklastir(raw, count, prior, strength=5.0):
 
 
 def birlesik_aday_puani(guven, kararlilik, medyan_ornek):
-    """Tüm birleşik sıralamalarda aynı kural; örnek sayısı bonus üretmez."""
-    ceza = 8.0 if medyan_ornek <= 1 else 0.0
-    return round(float(guven) * 0.8 + min(int(kararlilik), 11) / 11 * 20 - ceza, 1)
+    """Güven %80 + hassasiyet kararlılığı %20; az etkin örneğe kademeli ceza."""
+    ceza = 8.0 * max(0.0, min(1.0, (5.0 - float(medyan_ornek)) / 4.0))
+    return round(float(guven) * .8 + min(int(kararlilik), 11) / 11 * 20 - ceza, 1)
 
 
 @st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
@@ -286,11 +424,7 @@ def hassasiyet_taramasi(gecmis_df, hedef, sadece_ayni_lig=False, model_version=M
         return {}
     hedef = dict(hedef)
     hedef["analysis_priors"] = gecmis_tabanlari(havuz, hedef)
-    mask = pd.Series(True, index=havuz.index)
-    for reference, fallback, key in (("REF_H", "B365H", "h"), ("REF_D", "B365D", "b"), ("REF_A", "B365A", "a")):
-        col = reference if reference in havuz.columns else fallback
-        values = pd.to_numeric(havuz[col], errors="coerce")
-        mask &= values.between(float(hedef[key]) - 0.100000001, float(hedef[key]) + 0.100000001)
+    mask = oran_eslesme_maskesi(havuz, hedef, .10)
     havuz = havuz.loc[mask].copy()
     return {round(i / 100, 2): hesapla(havuz, hedef, round(i / 100, 2), form_aktif=False, kalibrasyon_aktif=False)
             for i in range(11)}
@@ -298,7 +432,8 @@ def hassasiyet_taramasi(gecmis_df, hedef, sadece_ayni_lig=False, model_version=M
 
 def tarama_hedefi(m):
     """Önbellekte API anahtarı veya geçici UI alanı tutulmaz."""
-    return {key: m.get(key) for key in ("h", "b", "a", "ev", "dep", "zaman", "sport_key", "o25_over", "o25_under", "odds_phase", "odds_updated_at", "totals_updated_at")}
+    keys = ("h", "b", "a", "ev", "dep", "zaman", "sport_key", "history_detail_only", *ORAN_KAYIT_ALANLARI)
+    return {key: m.get(key) for key in keys}
 
 
 def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
@@ -308,9 +443,7 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
     if taramalar is None:
         taramalar = hassasiyet_taramasi(b_df, tarama_hedefi(m), sadece_ayni_lig)
     if market_gecmis_kayitlari is None:
-        bt = st.session_state.get("backtest_df")
-        market_gecmis_kayitlari = (bt.to_dict("records") if isinstance(bt, pd.DataFrame)
-                                  and bt.attrs.get("model_version") == MODEL_VERSION else [])
+        market_gecmis_kayitlari = sabit_kalibrasyon_kayitlari()
     prior = tarih_oncesi_kayitlar(market_gecmis_kayitlari, m.get("zaman"))
     alanlar = {"MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
                "2.5 Üst": "ms25_p", "2.5 Alt": "ms25a_p", "KG Var": "kg_var_p", "KG Yok": "kg_yok_p"}
@@ -327,7 +460,13 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
         for candidate in candidates:
             confidence = int(candidate.get("guven", 0))
             label = candidate["label"]
-            groups.setdefault(label, []).append(dict(guven=confidence, ornek=n, tol=tol, t=t, b=b, mk=candidate))
+            effective = market_etkin_ornek(t, label)
+            if effective + 1e-6 < max(int(min_ornek), dinamik_min_mac(tol)):
+                continue
+            if t.get("ms_belirsiz") and _tahmin_market_ailesi(label) == "ms":
+                continue
+            groups.setdefault(label, []).append(dict(guven=confidence, ornek=n, etkin=effective,
+                                                     tol=tol, t=t, b=b, mk=candidate))
     result = []
     for label, records in groups.items():
         supported = [r for r in records if r["guven"] > 60]
@@ -340,13 +479,21 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
         if confidence <= 60:
             continue
         median = float(pd.Series([record["ornek"] for record in records]).median())
+        effective_median = float(pd.Series([record["etkin"] for record in records]).median())
+        sample_keys = [frozenset(pd.util.hash_pandas_object(
+            record["b"][[column for column in ("Date", "league_code", "HomeTeam", "AwayTeam")
+                         if column in record["b"]]], index=False).tolist()) for record in records]
+        unique_pools = len(set(sample_keys))
+        unique_samples = len(frozenset().union(*sample_keys))
         representative = max(records, key=lambda record: (record["guven"], -record["tol"]))
         result.append({
             "label": label, "guven": confidence, "ham_guven": round(raw, 1),
-            "puan": round(birlesik_aday_puani(confidence, len(supported), median) - min(6.0, spread * 0.3), 1),
+            "puan": round(birlesik_aday_puani(confidence, len(supported), effective_median) - min(6.0, spread * 0.3), 1),
             "ornek": int(round(median)), "kararlilik": len(supported), "guven_dalgalanmasi": round(spread, 2),
             "kararlilik_pct": len(supported) / 11 * 100,
-            "az_ornek_cezasi": 8.0 if median <= 1 else 0.0,
+            "az_ornek_cezasi": round(8.0 * max(0.0, min(1.0, (5.0-effective_median)/4.0)), 2),
+            "effective_median": effective_median, "unique_pools": unique_pools,
+            "unique_samples": unique_samples,
             "toleranslar": [f'{record["tol"]:.2f}' for record in supported], "temsilci": representative,
             "market_gecmis_basari": historical_rate, "market_gecmis_adet": count,
             "market_guven_delta": round(delta, 2),
@@ -362,6 +509,9 @@ def birlesik_tahmin_olustur(ana, havuz, m):
                 and _tahmin_market_ailesi(candidate["label"]) != _tahmin_market_ailesi(ana["label"])), None)
     t.update({
         "confidence_spread": ana.get("guven_dalgalanmasi", 0),
+        "effective_combined_samples": ana.get("effective_median", 0),
+        "stability_unique_pools": ana.get("unique_pools", 0),
+        "unique_history_samples": ana.get("unique_samples", 0),
         "ana_label": ana["label"], "ana_p": ana["guven"], "ana_ham_guven": ana["ham_guven"],
         "ana_odd": market_label_to_odd(m, ana["label"]),
         "score": ana["puan"], "playable_score": ana["puan"], "birlesik_puan": ana["puan"],
@@ -444,17 +594,30 @@ def backtest_hedefi(row):
     inverse = {code: sport for sport, code in ODDS_TO_HISTORY.items()}
     target = {"ev": row.get("HomeTeam", ""), "dep": row.get("AwayTeam", ""),
               "zaman": row["Date"], "sport_key": inverse.get(row.get("league_code"), ""), "lig": row.get("league_code", "")}
-    valid = lambda v: pd.notna(v) and math.isfinite(float(v)) and float(v) > 1
-    closing = all(valid(row.get(c)) for c in ("B365CH", "B365CD", "B365CA"))
-    target["odds_phase"] = "closing" if closing else "preclosing"
-    columns = ("B365CH", "B365CD", "B365CA") if closing else ("B365H", "B365D", "B365A")
-    for name, col in zip(("h", "b", "a"), columns):
-        if not valid(row.get(col)):
-            return None
-        target[name] = float(row[col])
-    goal_cols = ("B365C>2.5", "B365C<2.5") if closing else ("B365>2.5", "B365<2.5")
-    for key, col in zip(("o25_over", "o25_under"), goal_cols):
-        target[key] = float(row[col]) if valid(row.get(col)) else None
+    def valid(value):
+        try:
+            return pd.notna(value) and math.isfinite(float(value)) and float(value) > 1
+        except (TypeError, ValueError):
+            return False
+    chosen = None
+    for phase in ("closing", "preclosing"):
+        for key in ("williamhill", "pinnacle", "bwin", "betvictor", "bet365"):
+            prefix = BOOKMAKER_HISTORY_PREFIX[key]
+            columns = [f'{prefix}{"C" if phase == "closing" else ""}{side}' for side in "HDA"]
+            if all(valid(row.get(column)) for column in columns):
+                chosen = (key, prefix, phase, columns)
+                break
+        if chosen:
+            break
+    if not chosen:
+        return None
+    bookmaker, prefix, phase, columns = chosen
+    target.update(odds_phase=phase, totals_phase=phase, bookmaker_key=bookmaker, totals_bookmaker_key=bookmaker)
+    target.update({key: float(row[column]) for key, column in zip(("h", "b", "a"), columns)})
+    prefix = "P" if prefix == "PS" else prefix
+    goal_cols = [f'{prefix}{"C" if phase == "closing" else ""}{side}2.5' for side in (">", "<")]
+    for key, column in zip(("o25_over", "o25_under"), goal_cols):
+        target[key] = float(row[column]) if valid(row.get(column)) else None
     return target
 
 
@@ -1851,6 +2014,11 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
                     "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG", "FTR", "HTR",
                     "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA", "B365>2.5", "B365<2.5", "B365C>2.5", "B365C<2.5", "HC", "AC", "HY", "AY"
                 ]
+                # Şirket kimliğini koru; eski B365 dosyaları da desteklenir.
+                cols += [f'{prefix}{closing}{side}' for prefix in ("WH", "PS", "BW", "VC")
+                         for closing in ("", "C") for side in "HDA"]
+                cols += [f'{prefix}{closing}{side}2.5' for prefix in ("P", "WH", "BW", "VC")
+                         for closing in ("", "C") for side in (">", "<")]
                 df = df[df.columns.intersection(cols)].copy()
                 for c in ["B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"]:
                     if c not in df.columns:
@@ -1860,7 +2028,14 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
                 df["REF_D"] = df["B365CD"].combine_first(df["B365D"])
                 df["REF_A"] = df["B365CA"].combine_first(df["B365A"])
 
-                temp = df.dropna(subset=["REF_H", "REF_D", "REF_A"]).copy()
+                usable = pd.Series(False, index=df.index)
+                for prefix in ("B365", "WH", "PS", "BW", "VC"):
+                    for closing in ("", "C"):
+                        triple = [f"{prefix}{closing}{side}" for side in "HDA"]
+                        if all(column in df for column in triple):
+                            numbers = df[triple].apply(pd.to_numeric, errors="coerce")
+                            usable |= (numbers.gt(1) & numbers.lt(float("inf"))).all(axis=1)
+                temp = df.loc[usable].copy()
                 temp["Date"] = tarih_serisi_oku(temp["Date"])
                 temp = temp.dropna(subset=["Date"])
                 temp["league_code"] = k
@@ -2019,9 +2194,8 @@ def bulten_cek(key, kodlar, t):
                 # Bet365 varsa onu, yoksa anahtara göre ilk bookmaker'ı kullan.
                 def bk_priority(bk):
                     bk_key = str(bk.get("key", ""))
-                    if bk_key.lower() == "bet365":
-                        return (0, bk_key)
-                    return (1, bk_key)
+                    preferred = ("williamhill", "pinnacle", "bwin", "betvictor", "bet365")
+                    return (preferred.index(bk_key) if bk_key in preferred else len(preferred), bk_key)
 
                 market = None
                 totals_market = None
@@ -2037,6 +2211,15 @@ def bulten_cek(key, kodlar, t):
                     h2h_mk = markets_by_key.get("h2h")
                     if h2h_mk is None:
                         continue
+                    prices = {str(outcome.get("name", "")): outcome.get("price")
+                              for outcome in h2h_mk.get("outcomes", [])}
+                    draw = next((value for name, value in prices.items() if name.lower() in ("draw", "tie", "beraberlik")), None)
+                    try:
+                        if not all(math.isfinite(float(value)) and float(value) > 1
+                                   for value in (prices.get(home), draw, prices.get(away))):
+                            continue
+                    except (TypeError, ValueError):
+                        continue
                     market = h2h_mk
                     odds_updated_at = h2h_mk.get("last_update") or bk.get("last_update")
                     secilen_bk_key = str(bk.get("key", ""))
@@ -2047,20 +2230,20 @@ def bulten_cek(key, kodlar, t):
 
                 # 2.5 Alt/Üst bağımsız aranır. H2H aldığımız bookmaker totals
                 # sunmuyorsa diğer bookmaker'larda gerçek 2.5 çizgisini ara.
-                for bk in sirali_bk:
+                for bk in sorted(sirali_bk, key=lambda book: (book.get("key") != secilen_bk_key, bk_priority(book))):
                     markets_by_key = {str(mk.get("key", "")): mk for mk in bk.get("markets", [])}
                     tmkt = markets_by_key.get("totals")
                     if not tmkt:
                         continue
-                    has_25 = False
+                    sides_25 = set()
                     for ox in tmkt.get("outcomes", []) or []:
                         try:
-                            if abs(float(ox.get("point")) - 2.5) <= 1e-9:
-                                has_25 = True
-                                break
-                        except Exception:
+                            price = float(ox.get("price"))
+                            if abs(float(ox.get("point")) - 2.5) <= 1e-9 and math.isfinite(price) and price > 1:
+                                sides_25.add(str(ox.get("name", "")).lower())
+                        except (TypeError, ValueError):
                             continue
-                    if has_25:
+                    if {"over", "under"}.issubset(sides_25):
                         totals_market = tmkt
                         totals_updated_at = tmkt.get("last_update") or bk.get("last_update")
                         totals_bk_key = str(bk.get("key", ""))
@@ -2106,6 +2289,7 @@ def bulten_cek(key, kodlar, t):
                     "a": float(a),
                     "bookmaker_key": secilen_bk_key,
                     "odds_updated_at": odds_updated_at,
+                    "odds_fetched_at": kayit_zamani_iso(),
                     "totals_updated_at": totals_updated_at,
                     "totals_bookmaker_key": totals_bk_key,
                     "o25_over": o25_over,
@@ -2484,7 +2668,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             continue
         guven = int(t.get("ana_p", 0) or 0)
         ornek = int(t.get("ornek", 0) or 0)
-        tolerans = float(t.get("kullanilan_tolerans", 0.08) or 0.08)
+        tolerans = hassasiyet_oku(t.get("kullanilan_tolerans"))
         stabil = int(t.get("stability_count", 0) or 0)
         dar_stabil = len(t.get("stability_early_tols", []) or [])
         oran = t.get("ana_odd")
@@ -2605,14 +2789,14 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             "guven": int(aday["secim_guven"]),
             "oran": aday["oran"],
             "oran_tahmini": aday["oran_tahmini"],
-            "hassasiyet": float(t.get("kullanilan_tolerans", 0.08) or 0.08),
+            "hassasiyet": hassasiyet_oku(t.get("kullanilan_tolerans")),
             "hassasiyetler": list(aday.get("hassasiyetler") or t.get("top10_hassasiyetler") or t.get("stability_tols") or []),
             "hassasiyet_sayisi": int(aday.get("hassasiyet_sayisi") or len(aday.get("hassasiyetler") or []) or 0),
             "otomatik": True,
             "profil": profil,
             # Kupon geçmişinden maç detayını yeniden oluşturabilmek için
             # Son bültendeki temel maç/oran bilgilerini de sakla.
-            "sport_key": m.get("sport_key", ""),
+            **oran_kayit_bilgisi(m), "sport_key": m.get("sport_key", ""),
             "h": m.get("h"),
             "b": m.get("b"),
             "a": m.get("a"),
@@ -3219,7 +3403,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
 
         guven = min(100, int(t.get("ana_p", 0) or 0))
         ornek = int(t.get("ornek", 0) or 0)
-        tolerans = float(t.get("kullanilan_tolerans", 0.08) or 0.08)
+        tolerans = hassasiyet_oku(t.get("kullanilan_tolerans"))
         stabil = int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0)
         stabil_skor = float(t.get("top10_stabilite_skoru", item.get("top10_stabilite_skoru", 0)) or 0)
         min_ornek_gerekli = max(5, dinamik_min_mac(tolerans))
@@ -3345,7 +3529,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "guven": int(aday["guven"]),
             "oran": float(secim_oran) if secim_oran is not None else None,
             "oran_tahmini": bool(t.get("top10_market_oran_tahmini", False)),
-            "hassasiyet": float(t.get("kullanilan_tolerans", 0.08) or 0.08),
+            "hassasiyet": hassasiyet_oku(t.get("kullanilan_tolerans")),
             "hassasiyetler": list(t.get("top10_hassasiyetler", t.get("stability_tols", [])) or []),
             "hassasiyet_sayisi": int(aday["stabil"]),
             "gunun_puani": round(float(aday["gunun_puani"]), 1),
@@ -3354,7 +3538,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "kontrollu_gevsetme": bool(aday.get("kontrollu_gevsetme", False)),
             "otomatik": True,
             "profil": "Günün Kuponu",
-            "sport_key": m.get("sport_key", ""),
+            **oran_kayit_bilgisi(m), "sport_key": m.get("sport_key", ""),
             "h": m.get("h"),
             "b": m.get("b"),
             "a": m.get("a"),
@@ -3375,7 +3559,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
     # Kalite eşiğini geçen tek bir aday bile varsa Günün Kuponu'nu oluştur.
     # Böylece aday havuzu oluştuğu günlerde sırf ikinci seçim bulunamadığı için
     # kupon tamamen iptal edilmez.
-    return secimler
+    return kupon_secimlerini_tamamla(secimler, final_list)
 
 
 KUPON_GECMISI_PATH = APP_DATA_DIR / "vibe_kupon_gecmisi.json"
@@ -3393,7 +3577,37 @@ def kupon_gecmisini_yaz(kayitlar):
     return kayitlari_degistir("kuponlar", lambda _: kayitlar, KUPON_GECMISI_PATH)
 
 
+def kupon_secimlerini_tamamla(secimler, items=None):
+    if items is None:
+        items = list(st.session_state.get("final_list", []) or []) + list(st.session_state.get("top50_list", []) or [])
+    result = []
+    for original in secimler or []:
+        secim = dict(original)
+        kickoff = parse_mac_datetime(secim.get("zaman_iso", secim.get("zaman")))
+        for item in items:
+            m, t = item.get("m", {}), item.get("t", {})
+            candidate_time = parse_mac_datetime(m.get("zaman"))
+            if (kickoff is None or candidate_time is None or kickoff != candidate_time
+                or str(secim.get("ev")) != str(m.get("ev")) or str(secim.get("dep")) != str(m.get("dep"))):
+                continue
+            # Kaydedilen markete ait analiz varsa onu tercih et.
+            if str(secim.get("tahmin")) not in (str(t.get("ana_label")), str(t.get("combo_label")), str(t.get("alt_label"))):
+                continue
+            for key, value in oran_kayit_bilgisi(m).items():
+                if secim.get(key) is None:
+                    secim[key] = value
+            if not secim.get("detay_snapshot"):
+                secim["detay_snapshot"] = detay_snapshot_olustur(m, t, item.get("b"))
+            if secim.get("hassasiyet") is None:
+                secim["hassasiyet"] = hassasiyet_oku(t.get("kullanilan_tolerans"))
+            break
+        secim["model_version"] = secim.get("model_version") or MODEL_VERSION
+        result.append(secim)
+    return result
+
+
 def kupon_gecmisine_ekle(secimler, profil, hassasiyet):
+    secimler = kupon_secimlerini_tamamla(secimler)
     kayit = {
         "kupon_id": datetime.now(TR_TIMEZONE).strftime("%Y%m%d%H%M%S%f"),
         "profil": str(profil),
@@ -3421,7 +3635,7 @@ def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
         "oran_tahmini": bool(oran_tahmini),
         "profil": "Kendi Kuponum",
         "otomatik": False,
-        "sport_key": m.get("sport_key", ""),
+        **oran_kayit_bilgisi(m), "sport_key": m.get("sport_key", ""),
         "h": m.get("h"),
         "b": m.get("b"),
         "a": m.get("a"),
@@ -3433,6 +3647,10 @@ def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
     imza = (coupon_item["ev"], coupon_item["dep"], coupon_item["tahmin"])
     if imza in mevcutlar:
         return False
+    coupon_item.update(oran_kayit_bilgisi(m))
+    coupon_item["hassasiyet"] = hassasiyet_oku(t.get("kullanilan_tolerans"))
+    coupon_item["model_version"] = MODEL_VERSION
+    coupon_item = kupon_secimlerini_tamamla([coupon_item])[0]
     st.session_state.kupona.append(coupon_item)
     st.session_state.coupon_popup_open = True
     st.session_state.scroll_to_coupon = True
@@ -4169,11 +4387,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     ref_h = "REF_H" if "REF_H" in b_df.columns else "B365H"
     ref_d = "REF_D" if "REF_D" in b_df.columns else "B365D"
     ref_a = "REF_A" if "REF_A" in b_df.columns else "B365A"
-    b = b_df[
-        (b_df[ref_h].between(m_row["h"] - tolerans, m_row["h"] + tolerans)) &
-        (b_df[ref_d].between(m_row["b"] - tolerans, m_row["b"] + tolerans)) &
-        (b_df[ref_a].between(m_row["a"] - tolerans, m_row["a"] + tolerans))
-    ].copy()
+    b = b_df.loc[oran_eslesme_maskesi(b_df, m_row, tolerans)].copy()
 
     if b.empty:
         return None, b
@@ -4267,34 +4481,24 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     guven_carpani = sample_factor * oran_factor
     match_type = mac_tipi(oran_ev, oran_dep)
 
-    # maç tipine göre model davranışı
-    ms_bias = 1.0
-    goal_bias = 1.0
-    combo_bias = 1.0
-    if match_type == "Favori":
-        ms_bias = 1.06
-        goal_bias = 0.96
-        combo_bias = 0.97
-    elif match_type == "Dengeli":
-        ms_bias = 0.95
-        goal_bias = 1.05
-        combo_bias = 1.02
-    elif match_type == "Sürpriz Açık":
-        ms_bias = 0.92
-        goal_bias = 1.03
-        combo_bias = 1.08
+    # Maç tipi bilgi amaçlıdır. Ortak çarpanlar olasılıkların toplamını bozmamalı.
+    ms_bias = goal_bias = combo_bias = 1.0
 
-    # Karşıt marketler önce kendi aileleri içinde yarıştırılır. Böylece örneğin
-    # KG Yok %72 iken KG Var %63 resmî ana tahmin olarak kalamaz.
     def _adj(raw, bias, label, n=None):
-        count = (goal_n if any(x in label for x in ("Üst", "Alt", "KG")) else ms_n) if n is None else min(n, etkin_ornek(goal_weights.reindex(b_ht.index)) if any(x in label for x in ("Üst", "Alt")) else etkin_ornek(ms_weights.reindex(b_ht.index)))
+        goal_market = any(x in label for x in ("Üst", "Alt", "KG"))
+        count = goal_n if goal_market else ms_n
+        if n is not None:
+            ht_weights = goal_weights if goal_market else ms_weights
+            count = etkin_ornek(ht_weights.reindex(b_ht.index))
         if count <= 0:
             return 0.0
-        factor = sample_factor_hesapla(count, float(tolerans)) * oran_factor
         if label in priors:
-            raw = tabana_yaklastir(raw, count, priors[label])
-        raw_adjusted = min(float(raw) * factor * bias * form_market_carpani(label, form_profili), 0.99)
-        return raw_adjusted if label in priors else fake_confidence_duzelt(raw_adjusted, count, float(tolerans))[0]
+            return tabana_yaklastir(raw, count, priors[label], MODEL_SETTINGS["prior_strength"])
+        # Tamamlayıcı ilk yarı sonuçları aynı simetrik prior ile düzeltilir.
+        prior = 1/3 if label in ("İY 1", "İY X", "İY 2") else .5
+        if label == "HT/FT":
+            prior = 1/9
+        return tabana_yaklastir(raw, count, prior, MODEL_SETTINGS["prior_strength"])
 
     ms_taraflar = [
         {"label": "MS 1", "raw_prob": ms1_raw, "conf_prob": _adj(ms1_raw, ms_bias, "MS 1"), "market": "ms", "mod": "H"},
@@ -4338,7 +4542,9 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
     # belirsiz maç tespiti
     ms_sorted = sorted([ms1_raw, msx_raw, ms2_raw], reverse=True)
-    belirsiz = (max(ms1_raw, msx_raw, ms2_raw) < 0.42 and (ms_sorted[0] - ms_sorted[1]) < 0.06) or (abs(ms1_raw - ms2_raw) < 0.05 and abs(ms1_raw - msx_raw) < 0.05)
+    ms_belirsiz = (max(ms1_raw, msx_raw, ms2_raw) < 0.42 and (ms_sorted[0] - ms_sorted[1]) < 0.06) or (abs(ms1_raw - ms2_raw) < 0.05 and abs(ms1_raw - msx_raw) < 0.05)
+    ms_best["aile_belirsiz"] = ms_best["aile_belirsiz"] or ms_belirsiz
+    belirsiz = all(candidate.get("aile_belirsiz") for candidate in (ms_best, ou_best, kg_best))
 
     cands = [ms_best, ou_best, kg_best]
     net_cands = [c for c in cands if not c.get("aile_belirsiz")]
@@ -4641,6 +4847,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "canli_p": canli_p,
         "canli_strateji": canli_strateji,
         "belirsiz": belirsiz,
+        "ms_belirsiz": bool(ms_belirsiz),
         "ms_side": ms_side,
         "ms_p": int(round(_adj(ms_raw, ms_bias, ms_side) * 100)),
         "ms_mod": ms_mod,
@@ -4685,10 +4892,15 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "form_ev_puan_orani": round(float(form_profili.get("ev", {}).get("puan_orani", 0.5)) * 100, 1) if form_profili.get("ev") else None,
         "form_dep_puan_orani": round(float(form_profili.get("dep", {}).get("puan_orani", 0.5)) * 100, 1) if form_profili.get("dep") else None,
         "form_farki": round(float(form_profili.get("form_farki", 0.0)), 3),
-        "odds_basis": "Kapanış evresi (yaklaşık)" if oran_fazi(m_row) == "closing" else "Maç öncesi evre (kesin saat bilinmiyor)",
+        "odds_basis": ("Eski kayıt: oran zamanı bilinmiyor; yaklaşık geçmiş karşılaştırması" if b.attrs.get("odds_time_unknown") else
+                       "Kapanış evresi (yaklaşık)" if oran_fazi(m_row) == "closing" else "Maç öncesi evre (kesin saat bilinmiyor)"),
         "goal_matching": goal_note,
-        "effective_ms_samples": round(ms_n, 2),
-        "effective_goal_samples": round(goal_n, 2),
+        "effective_ms_samples": round(ms_n, 6),
+        "effective_goal_samples": round(goal_n, 6),
+        "effective_ht_samples": round(min(etkin_ornek(ms_weights.reindex(b_ht.index)),
+                                           etkin_ornek(goal_weights.reindex(b_ht.index))), 6),
+        "odds_source": b.attrs.get("odds_history_prefix", "B365"),
+        "odds_cross_bookmaker": bool(b.attrs.get("odds_cross_bookmaker")),
         "goal_profile": goal_profile,
         "match_type": match_type,
         "nedenler": nedenler,
@@ -4705,6 +4917,40 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "stability_early_text": "",
         "stability_late_text": "",
     }
+
+    families = [
+        (["ms1_p", "msx_p", "ms2_p"], [x["conf_prob"] for x in ms_taraflar]),
+        (["ms25_p", "ms25a_p"], [x["conf_prob"] for x in ou_taraflar]),
+        (["kg_var_p", "kg_yok_p"], [x["conf_prob"] for x in kg_taraflar]),
+        (["iy05_p", "iy05a_p"], [_adj(iy05_raw, 1, "İY 0.5 Üst", n=len(b_ht)),
+                                  _adj(1-iy05_raw, 1, "İY 0.5 Alt", n=len(b_ht))]),
+        (["iy1_p", "iyx_p", "iy2_p"], [_adj(float(iy_vc.get(side, 0)), 1, label, n=len(b_ht))
+                                           for side, label in (("H", "İY 1"), ("D", "İY X"), ("A", "İY 2"))]),
+    ]
+    for fields, probabilities in families:
+        sonuc.update(zip(fields, olasilik_yuzdeleri(probabilities)))
+    label_fields = {"MS 1": "ms1_p", "Beraberlik": "msx_p", "MS 2": "ms2_p",
+                    "2.5 Üst": "ms25_p", "2.5 Alt": "ms25a_p", "KG Var": "kg_var_p", "KG Yok": "kg_yok_p"}
+    if not belirsiz and sonuc["ana_label"] in label_fields:
+        sonuc["ana_p"] = sonuc[label_fields[sonuc["ana_label"]]]
+    if sonuc["alt_label"] in label_fields:
+        sonuc["alt_p"] = sonuc[label_fields[sonuc["alt_label"]]]
+    sonuc["ms_p"] = sonuc[label_fields[ms_side]]
+    sonuc["kg_p"] = sonuc[label_fields[kg_label]]
+    if sonuc["combo_var"]:
+        combo_parts = [{"MS1": "MS 1", "MSX": "Beraberlik", "MS2": "MS 2"}.get(part.strip(), part.strip())
+                       for part in sonuc["combo_label"].split("+")]
+        bounds = [sonuc[label_fields[part]] for part in combo_parts if part in label_fields]
+        if bounds:
+            sonuc["combo_p"] = min(sonuc["combo_p"], *bounds)
+    if sonuc["alt_p"] <= 60:
+        sonuc["alt_label"], sonuc["alt_p"] = "", 0
+    sonuc["oynanabilir"] = (sonuc["ana_p"] >= 58 and not belirsiz
+                             and market_etkin_ornek(sonuc, sonuc["ana_label"]) + 1e-6 >= onerilen_min_mac)
+    sonuc["oynanabilir_esik_ok"] = sonuc["ana_p"] >= 55
+    sonuc["score"] = sonuc["playable_score"] = round(sonuc["ana_p"] * .8, 1)
+    gc, cls, badge = guven_renk(sonuc["ana_p"])
+    sonuc.update(guven_renk=gc, guven_badge_cls=cls, guven_badge_lbl=badge)
 
     # Kullanıcıya gösterilen / aday sıralamasında kullanılan güven yüzdeleri
     # hiçbir koşulda %100'ü aşmasın. Puan/score alanları bundan bağımsız kalır.
@@ -4740,14 +4986,7 @@ def market_gecmis_guven_duzeltmesi(etiket, ham_guven, kayitlar=None):
         ham = 0.0
 
     if kayitlar is None:
-        bt = st.session_state.get("backtest_df")
-        if isinstance(bt, pd.DataFrame) and not bt.empty:
-            try:
-                kayitlar = bt[["Tahmin", "Tuttu"]].to_dict("records")
-            except Exception:
-                kayitlar = []
-        else:
-            kayitlar = []
+        kayitlar = sabit_kalibrasyon_kayitlari()
 
     ilgili = []
     for x in (kayitlar or []):
@@ -5110,12 +5349,14 @@ def tahmin_kayitlarini_tekillestir(kayitlar):
         tamamlanan = next((x for x in grup if x.get("durum") == "Tamamlandı" and x.get("ev_gol") is not None and x.get("dep_gol") is not None), None)
         if tamamlanan:
             ev_gol, dep_gol = int(tamamlanan["ev_gol"]), int(tamamlanan["dep_gol"])
-            tuttu = skor_tahmini_tuttu_mu(secilen.get("tahmin"), ev_gol, dep_gol)
+            iy_ev, iy_dep = tamamlanan.get("iy_ev_gol"), tamamlanan.get("iy_dep_gol")
+            tuttu = skor_tahmini_tuttu_mu(secilen.get("tahmin"), ev_gol, dep_gol, iy_ev, iy_dep)
             alternatif_tuttu = skor_tahmini_tuttu_mu(
-                secilen.get("alternatif_tahmin"), ev_gol, dep_gol
+                secilen.get("alternatif_tahmin"), ev_gol, dep_gol, iy_ev, iy_dep
             )
             secilen.update({
-                "durum": "Tamamlandı", "ev_gol": ev_gol, "dep_gol": dep_gol,
+                "durum": "Tamamlandı" if tuttu is not None else "Bekliyor", "ev_gol": ev_gol, "dep_gol": dep_gol,
+                "iy_ev_gol": iy_ev, "iy_dep_gol": iy_dep,
                 "tuttu": bool(tuttu) if tuttu is not None else None,
                 "alternatif_tuttu": bool(alternatif_tuttu) if alternatif_tuttu is not None else None,
                 "sonuc_guncelleme": tamamlanan.get("sonuc_guncelleme"),
@@ -5179,7 +5420,7 @@ def analiz_tahminlerini_kaydet(final):
             aday = {
                 "kayit_id": mac_anahtari,
                 "match_id": str(m.get("match_id", "")),
-                "sport_key": str(m.get("sport_key", "")),
+                **oran_kayit_bilgisi(m), "sport_key": str(m.get("sport_key", "")),
                 "lig": str(m.get("lig", "")),
                 "zaman": zaman_iso,
                 "ev": str(m.get("ev", "")),
@@ -5213,6 +5454,7 @@ def analiz_tahminlerini_kaydet(final):
                 "durum": eski.get("durum", "Bekliyor"),
                 "ev_gol": eski.get("ev_gol"),
                 "dep_gol": eski.get("dep_gol"),
+                "iy_ev_gol": eski.get("iy_ev_gol"), "iy_dep_gol": eski.get("iy_dep_gol"),
                 "tuttu": eski.get("tuttu"),
                 "alternatif_tuttu": eski.get("alternatif_tuttu"),
                 "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
@@ -5237,17 +5479,99 @@ def analiz_tahminlerini_kaydet(final):
     return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
 
-def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol):
-    return tahmin_tuttu_mu(label, {"FTHG": ev_gol, "FTAG": dep_gol})
+def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol, iy_ev_gol=None, iy_dep_gol=None):
+    def side(home, away):
+        if home is None or away is None or pd.isna(home) or pd.isna(away):
+            return None
+        return "H" if float(home) > float(away) else "A" if float(home) < float(away) else "D"
+    return tahmin_tuttu_mu(label, {"FTHG": ev_gol, "FTAG": dep_gol,
+                                  "HTHG": iy_ev_gol, "HTAG": iy_dep_gol,
+                                  "FTR": side(ev_gol, dep_gol), "HTR": side(iy_ev_gol, iy_dep_gol)})
 
 
 def takim_anahtari(ad):
     return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", str(ad)).encode("ascii", "ignore").decode().lower())
 
 
+def sonuc_skoru_dogrula(home, away, half_home=None, half_away=None):
+    def goal(value):
+        try:
+            number = float(value)
+            return int(number) if math.isfinite(number) and number >= 0 and number.is_integer() else None
+        except (TypeError, ValueError):
+            return None
+    h, a = goal(home), goal(away)
+    if h is None or a is None:
+        return None
+    hh, ha = goal(half_home), goal(half_away)
+    if hh is None or ha is None or hh > h or ha > a:
+        hh = ha = None
+    return {"ev_gol": h, "dep_gol": a, "iy_ev_gol": hh, "iy_dep_gol": ha}
+
+
+def gecmisten_sonuc_skoru(history, record):
+    kickoff = parse_mac_datetime(record.get("zaman"))
+    required = {"Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "league_code"}
+    code = ODDS_TO_HISTORY.get(str(record.get("sport_key", "")))
+    if kickoff is None or history is None or history.empty or not code or not required.issubset(history.columns):
+        return None
+    frame = history.loc[(tarih_serisi_oku(history["Date"]).dt.date == kickoff.date())
+                        & history["league_code"].eq(code)]
+    if frame.empty:
+        return None
+    # Sonuç yazarken yalnızca tam/alias eşleşme; benzer isim tahmini kullanılmaz.
+    frame = frame.loc[frame["HomeTeam"].map(takim_adi_norm).eq(takim_adi_norm(record.get("ev")))
+                      & frame["AwayTeam"].map(takim_adi_norm).eq(takim_adi_norm(record.get("dep")))]
+    if len(frame) != 1:
+        return None
+    row = frame.iloc[0]
+    return sonuc_skoru_dogrula(row.get("FTHG"), row.get("FTAG"), row.get("HTHG"), row.get("HTAG"))
+
+
+@st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
+def api_tarih_skorlari(api_key, day):
+    if not api_key:
+        return [], ""
+    try:
+        response = requests.get("https://v3.football.api-sports.io/fixtures",
+                                headers={"x-apisports-key": api_key},
+                                params={"date": str(day), "timezone": "Europe/Istanbul"}, timeout=15)
+        if response.status_code != 200:
+            return [], f"İlk yarı skor servisi HTTP {response.status_code}"
+        data = response.json()
+        if data.get("errors"):
+            return [], "İlk yarı skor servisi bu sorguyu tamamlayamadı."
+        return data.get("response", []) or [], ""
+    except (requests.RequestException, ValueError, TypeError):
+        return [], "İlk yarı skor servisine ulaşılamadı."
+
+
+def fixture_sonuc_skoru(fixtures, record):
+    kickoff = parse_mac_datetime(record.get("zaman"))
+    candidates = []
+    for fixture in fixtures:
+        meta, teams = fixture.get("fixture", {}), fixture.get("teams", {})
+        status = (meta.get("status") or {}).get("short")
+        date = parse_mac_datetime(meta.get("date"))
+        if (status not in ("FT", "AET", "PEN") or kickoff is None or date is None
+            or abs((kickoff-date).total_seconds()) > 900):
+            continue
+        if (takim_adi_norm((teams.get("home") or {}).get("name")) != takim_adi_norm(record.get("ev"))
+            or takim_adi_norm((teams.get("away") or {}).get("name")) != takim_adi_norm(record.get("dep"))):
+            continue
+        score = fixture.get("score") or {}
+        full = score.get("fulltime") or (fixture.get("goals", {}) if status == "FT" else {})
+        half = score.get("halftime") or {}
+        verified = sonuc_skoru_dogrula(full.get("home"), full.get("away"), half.get("home"), half.get("away"))
+        if verified:
+            candidates.append(verified)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def tahmin_sonuclarini_guncelle(api_key):
     records = tahmin_logunu_oku()
-    pending = [record for record in records if record.get("durum") != "Tamamlandı"]
+    pending = [record for record in records if record.get("durum") != "Tamamlandı"
+               or (record.get("alternatif_tahmin") and record.get("alternatif_tuttu") is None)]
     leagues = sorted({record.get("sport_key") for record in pending if record.get("sport_key")})
     scores, errors = [], []
     for league in leagues:
@@ -5265,48 +5589,79 @@ def tahmin_sonuclarini_guncelle(api_key):
         except (requests.RequestException, ValueError):
             errors.append(f"{league}: Skor servisine ulaşılamadı")
     id_map = {str(match["id"]): match for match in scores if match.get("id")}
-    results = {}
+    history = _gecmis_cache_yukle()
+    football_key = get_api_football_key()
+    by_day, results = {}, {}
+    missing_half = 0
     for record in pending:
+        kickoff = parse_mac_datetime(record.get("zaman"))
+        if kickoff is None or kickoff >= tr_simdi():
+            continue
         match = id_map.get(str(record.get("match_id", "")))
+        if match is not None and match.get("sport_key") != record.get("sport_key"):
+            match = None
         if match is None:
-            kickoff = parse_mac_datetime(record.get("zaman"))
             candidates = []
             for candidate in scores:
                 date = parse_mac_datetime(candidate.get("commence_time"))
-                if (kickoff is not None and date is not None and abs((kickoff - date).total_seconds()) <= 900
+                if (date is not None and abs((kickoff-date).total_seconds()) <= 900
                     and candidate.get("sport_key") == record.get("sport_key")
                     and takim_anahtari(candidate.get("home_team")) == takim_anahtari(record.get("ev"))
                     and takim_anahtari(candidate.get("away_team")) == takim_anahtari(record.get("dep"))):
                     candidates.append(candidate)
             match = candidates[0] if len(candidates) == 1 else None
-        if not match or not match.get("completed") or not match.get("scores"):
-            continue
-        values = {takim_anahtari(value.get("name")): value.get("score") for value in match["scores"]}
-        try:
-            home = int(values[takim_anahtari(record.get("ev"))])
-            away = int(values[takim_anahtari(record.get("dep"))])
-        except (KeyError, TypeError, ValueError):
-            continue
-        results[tahmin_kaydi_mac_anahtari(record)] = (home, away)
+        result = sonuc_skoru_dogrula(record.get("ev_gol"), record.get("dep_gol"),
+                                     record.get("iy_ev_gol"), record.get("iy_dep_gol"))
+        if match and match.get("completed") and match.get("scores"):
+            values = {takim_anahtari(value.get("name")): value.get("score") for value in match["scores"]}
+            result = sonuc_skoru_dogrula(values.get(takim_anahtari(record.get("ev"))),
+                                        values.get(takim_anahtari(record.get("dep")))) or result
+        labels = [record.get("tahmin", ""), record.get("alternatif_tahmin", "")]
+        needs_half = any(str(label).startswith(("İY ", "HT/FT")) for label in labels)
+        if result is None or (needs_half and result.get("iy_ev_gol") is None):
+            historical = gecmisten_sonuc_skoru(history, record)
+            if historical is not None:
+                # Kaynakların normal süre skorları uyuşmuyorsa ilk yarıyı birleştirme.
+                if result is None or (historical["ev_gol"], historical["dep_gol"]) == (result["ev_gol"], result["dep_gol"]):
+                    result = historical
+        if football_key and (result is None or (needs_half and result.get("iy_ev_gol") is None)):
+            day = kickoff.date().isoformat()
+            if day not in by_day:
+                by_day[day], error = api_tarih_skorlari(football_key, day)
+                if error:
+                    errors.append(error)
+            verified = fixture_sonuc_skoru(by_day[day], record)
+            if verified is not None:
+                result = verified
+        if result is not None:
+            results[tahmin_kaydi_mac_anahtari(record)] = result
+            if needs_half and result.get("iy_ev_gol") is None:
+                missing_half += 1
     updated = []
     def update(current):
         for record in current:
             key = tahmin_kaydi_mac_anahtari(record)
-            if key not in results or record.get("durum") == "Tamamlandı":
+            if key not in results:
                 continue
-            home, away = results[key]
-            hit = skor_tahmini_tuttu_mu(record.get("tahmin"), home, away)
-            if hit is None:
-                continue
-            alt_hit = skor_tahmini_tuttu_mu(record.get("alternatif_tahmin"), home, away)
-            record.update(durum="Tamamlandı", ev_gol=home, dep_gol=away, tuttu=bool(hit),
+            score = results[key]
+            args = (score["ev_gol"], score["dep_gol"], score["iy_ev_gol"], score["iy_dep_gol"])
+            hit = skor_tahmini_tuttu_mu(record.get("tahmin"), *args)
+            alt_hit = skor_tahmini_tuttu_mu(record.get("alternatif_tahmin"), *args)
+            previous = (record.get("tuttu"), record.get("alternatif_tuttu"), record.get("durum"))
+            record.update(score)
+            record.update(durum="Tamamlandı" if hit is not None else "Bekliyor",
+                          tuttu=bool(hit) if hit is not None else None,
                           alternatif_tuttu=bool(alt_hit) if alt_hit is not None else None,
+                          sonuc_eksik="İlk yarı skoru bekleniyor" if hit is None else "",
                           sonuc_guncelleme=kayit_zamani_iso())
-            updated.append(key)
+            if previous != (record["tuttu"], record["alternatif_tuttu"], record["durum"]):
+                updated.append(key)
         return current
     if results and not kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH):
         return 0, "Sonuçlar kaydedilemedi. Önceki kayıtlar korundu."
-    return len(updated), " · ".join(errors) or None
+    if missing_half:
+        errors.append(f"{missing_half} maçın ilk yarı skoru henüz bulunamadı; ilgili tahminler bekliyor. Geçmiş veriyi yenileyebilir veya API-Football anahtarı ekleyebilirsin.")
+    return len(updated), " · ".join(dict.fromkeys(errors)) or None
 
 
 def tahmini_mac_dakikasi(baslangic, simdi=None):
@@ -5485,6 +5840,16 @@ def tahmin_tuttu_mu(label, row):
     if "+" in label:
         results = [tahmin_tuttu_mu(part.strip(), row) for part in label.split("+")]
         return None if any(result is None for result in results) else all(results)
+    if label in ("1/2", "2/1"):
+        label = "HT/FT " + label
+    if label in ("İki yarıda da KG", "İki yarı 1.5 Üst", "İki Yarı 1.5 Üst Evet"):
+        keys = ("FTHG", "FTAG", "HTHG", "HTAG")
+        if any(row.get(key) is None or pd.isna(row.get(key)) for key in keys):
+            return None
+        h, a, hh, ha = (float(row[key]) for key in keys)
+        if label == "İki yarıda da KG":
+            return hh > 0 and ha > 0 and h-hh > 0 and a-ha > 0
+        return hh + ha >= 2 and h + a - hh - ha >= 2
     if label.startswith("HT/FT "):
         if pd.isna(row.get("HTR")) or pd.isna(row.get("FTR")):
             return None
@@ -5516,7 +5881,7 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
     sonuclar = []
     for _, day in test.groupby("Date", sort=True):
         # Kalibrasyon gün başında sabitlenir. Gün içindeki satır sırası sonucu etkilemez.
-        prior = list(sonuclar)
+        prior = sabit_kalibrasyon_kayitlari()
         candidates = []
         for _, row in day.iterrows():
             target = backtest_hedefi(row)
@@ -5540,7 +5905,7 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             else:
                 t, b = hesapla(veri, target, tolerans, sadece_ayni_lig=sadece_ayni_lig,
                                form_aktif=False, kalibrasyon_aktif=False)
-            if t is None or len(b) < int(min_ornek):
+            if t is None or min(len(b), market_etkin_ornek(t, t.get("ana_label"))) + 1e-6 < int(min_ornek):
                 continue
             record = backtest_kaydi(row, target, t)
             if record is not None:
@@ -5692,7 +6057,7 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
     records = {tolerance: [] for tolerance in tolerances}
     selected_records = []
     for _, day in test.groupby("Date", sort=True):
-        prior = list(selected_records)
+        prior = sabit_kalibrasyon_kayitlari()
         daily = []
         for _, row in day.iterrows():
             target = backtest_hedefi(row)
@@ -5702,7 +6067,7 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             scan = hassasiyet_taramasi(veri, tarama_hedefi(target), sadece_ayni_lig)
             for tolerance in tolerances:
                 t, examples = scan.get(tolerance, (None, pd.DataFrame()))
-                if t is None or len(examples) < int(min_ornek):
+                if t is None or min(len(examples), market_etkin_ornek(t, t.get("ana_label"))) + 1e-6 < int(min_ornek):
                     continue
                 record = backtest_kaydi(row, target, t)
                 if record is not None:
@@ -5745,17 +6110,13 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
     if kaynak.empty:
         return pd.DataFrame()
 
-    b = kaynak[
-        kaynak[("REF_H" if "REF_H" in kaynak.columns else "B365H")].between(float(m_row["h"]) - tolerans, float(m_row["h"]) + tolerans)
-        & kaynak[("REF_D" if "REF_D" in kaynak.columns else "B365D")].between(float(m_row["b"]) - tolerans, float(m_row["b"]) + tolerans)
-        & kaynak[("REF_A" if "REF_A" in kaynak.columns else "B365A")].between(float(m_row["a"]) - tolerans, float(m_row["a"]) + tolerans)
-    ].copy()
+    b = kaynak.loc[oran_eslesme_maskesi(kaynak, m_row, tolerans)].copy()
     gerekli = ["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG", "FTR", "HTR"]
     if b.empty or any(c not in b.columns for c in gerekli):
         return pd.DataFrame()
     for c in ["FTHG", "FTAG", "HTHG", "HTAG", "B365H", "B365D", "B365A"]:
         b[c] = pd.to_numeric(b[c], errors="coerce")
-    b = b.dropna(subset=gerekli + ["B365H", "B365D", "B365A"])
+    b = b.dropna(subset=gerekli + ["REF_H", "REF_D", "REF_A"])
 
     b["olay_12"] = (b["HTR"] == "H") & (b["FTR"] == "A")
     b["olay_21"] = (b["HTR"] == "A") & (b["FTR"] == "H")
@@ -7466,7 +7827,7 @@ def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_li
     """
     if gecmis_df is None or getattr(gecmis_df, "empty", True):
         return []
-    b0 = tarih_oncesi_gecmis(gecmis_df, mac_row.get("zaman")).copy()
+    b0 = zaman_uyumlu_gecmis(tarih_oncesi_gecmis(gecmis_df, mac_row.get("zaman")), mac_row)
     if ayni_lig and "league_code" in b0.columns and mac_row.get("sport_key"):
         b0 = b0[b0["league_code"].astype(str) == str(ODDS_TO_HISTORY.get(mac_row.get("sport_key"), mac_row.get("sport_key")))].copy()
     if b0.empty or "FTR" not in b0.columns:
@@ -7493,17 +7854,19 @@ def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_li
     gerekli = max(1, int(min_ornek_val or 1))
     for tol in toleranslar:
         tol = float(tol)
-        b = b0[
-            b0[ref_h].between(mh - tol, mh + tol)
-            & b0[ref_d].between(md - tol, md + tol)
-            & b0[ref_a].between(ma - tol, ma + tol)
-        ].copy()
+        b = b0.loc[oran_eslesme_maskesi(b0, mac_row, tol)].copy()
         if b.empty:
             continue
         seri = b["FTR"].dropna().astype(str)
         if len(seri) < gerekli:
             continue
-        vc = seri.value_counts(normalize=True)
+        weights, _, _ = analiz_agirliklari(b, mac_row, tol)
+        effective = etkin_ornek(weights)
+        if effective + 1e-6 < gerekli:
+            continue
+        vc = weights.groupby(b["FTR"]).sum() / weights.sum()
+        vc = pd.Series({side: tabana_yaklastir(float(vc.get(side, 0)), effective, 1/3)
+                        for side in ("H", "D", "A")})
         taraf_map = {"H": "1", "D": "X", "A": "2"}
         mod = str(vc.idxmax()) if not vc.empty else "D"
         taraf = taraf_map.get(mod, "X")
@@ -7528,7 +7891,7 @@ def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
     """
     if gecmis_df is None or getattr(gecmis_df, "empty", True) or "FTR" not in gecmis_df.columns:
         return None
-    b = tarih_oncesi_gecmis(gecmis_df, mac_row.get("zaman")).copy()
+    b = zaman_uyumlu_gecmis(tarih_oncesi_gecmis(gecmis_df, mac_row.get("zaman")), mac_row)
     ref_h = "REF_H" if "REF_H" in b.columns else "B365H"
     ref_d = "REF_D" if "REF_D" in b.columns else "B365D"
     ref_a = "REF_A" if "REF_A" in b.columns else "B365A"
@@ -7547,12 +7910,9 @@ def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
         return None
 
     import numpy as np
-    # Oranların mutlak farkı yerine oranlı/log mesafe; 1.10->1.20 ile 5.0->5.1 aynı sayılmaz.
-    b["_st_dist"] = (
-        (np.log(b[ref_h].clip(lower=1.001)) - np.log(mh)) ** 2
-        + (np.log(b[ref_d].clip(lower=1.001)) - np.log(md)) ** 2
-        + (np.log(b[ref_a].clip(lower=1.001)) - np.log(ma)) ** 2
-    ) ** 0.5
+    # Şirketler farklıysa hem hedef hem geçmiş marjdan arındırılır.
+    compare, current = eslesme_oranlari(b, mac_row)
+    b["_st_dist"] = np.log(compare).sub(np.log(current), axis=1).pow(2).sum(axis=1).pow(.5)
     b = b.sort_values("_st_dist")
     n = max(5, min(12, int(min_ornek_val or 5)))
     yakin = b.head(n).copy()
@@ -7561,7 +7921,12 @@ def _spor_toto_en_yakin_oran_fallback(gecmis_df, mac_row, min_ornek_val=5):
     seri = yakin["FTR"].dropna().astype(str)
     if len(seri) < 3:
         return None
-    vc = seri.value_counts(normalize=True)
+    weights = 1 / (1 + yakin["_st_dist"].pow(2))
+    weights *= zaman_agirliklari(yakin, mac_row)
+    effective = etkin_ornek(weights)
+    vc = weights.groupby(yakin["FTR"]).sum() / weights.sum()
+    vc = pd.Series({side: tabana_yaklastir(float(vc.get(side, 0)), effective, 1/3)
+                    for side in ("H", "D", "A")})
     dagilim = {
         "1": float(vc.get("H", 0.0)) * 100.0,
         "X": float(vc.get("D", 0.0)) * 100.0,
@@ -8282,7 +8647,9 @@ def _kombo_ikili_stats(taramalar):
         if not oylar:
             continue
         secilen = max(oylar, key=lambda k: (oylar[k], sum(oranlar[k]) / max(1, len(oranlar[k]))))
-        vals = oranlar.get(secilen, [])
+        parts = [part.strip() for part in secilen.split("+")]
+        vals = [float((_kombo_label_mask(b, parts[0]) & _kombo_label_mask(b, parts[1])).mean() * 100)
+                for _, b, _ in taramalar if not b.empty]
         ort = sum(vals) / len(vals) if vals else 0.0
         final.append({
             'label': secilen,
@@ -8357,11 +8724,16 @@ def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yari
             continue
         uzlasi = int(oylar[label])
         gecerli = sum(1 for _, _, stats in taramalar if any(x.get("grup") == grup for x in stats))
-        hit = int(round(ort / 100.0 * len(tablo_ornekleri)))
+        hits = [tahmin_tuttu_mu(label, row) for _, row in tablo_ornekleri.iterrows()]
+        hit = sum(value is not None and bool(value) for value in hits)
+        actual_pct = hit / len(tablo_ornekleri) * 100.0
+        if grup == "Yarılar" and actual_pct < 50:
+            continue
         ornek_guveni = min(len(tablo_ornekleri) / 30.0, 1.0)
         final_stats.append({
             "label": label, "grup": grup, "hit": hit, "toplam": len(tablo_ornekleri),
-            "oran": round(ort, 1), "puan": round(ort * (0.82 + 0.18 * ornek_guveni), 1),
+            "oran": round(actual_pct, 1), "tarama_ortalama": round(ort, 1),
+            "puan": round(actual_pct * (0.82 + 0.18 * ornek_guveni), 1),
             "uzlasi": uzlasi, "gecerli_hassasiyet": gecerli,
         })
 
@@ -8370,7 +8742,9 @@ def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yari
     if kombo:
         for c in _kombo_ikili_stats(taramalar):
             c['toplam'] = len(tablo_ornekleri)
-            c['hit'] = int(round(float(c.get('oran', 0) or 0) / 100.0 * len(tablo_ornekleri)))
+            c['tarama_ortalama'] = c.get('oran', 0)
+            c['hit'] = sum(bool(tahmin_tuttu_mu(c['label'], row)) for _, row in tablo_ornekleri.iterrows())
+            c['oran'] = round(c['hit'] / len(tablo_ornekleri) * 100, 1)
             c['puan'] = round(float(c.get('oran', 0) or 0) * (0.82 + 0.18 * min(len(tablo_ornekleri) / 30.0, 1.0)), 1)
             final_stats.append(c)
 
@@ -8421,12 +8795,14 @@ def _yuksek_11_uzlasi(gecmis_df, mac_row, ayni_lig, f12, f21, fkg, fy15, limit):
         if not vals:
             continue
         ort = sum(vals) / len(vals)
-        hit = int(round(ort / 100.0 * len(tum_max)))
+        hit = sum(bool(tahmin_tuttu_mu(label, row)) for _, row in tum_max.iterrows())
+        actual_pct = hit / len(tum_max) * 100.0
         duz = (hit + 1) / (len(tum_max) + 2)
         og = min(len(tum_max) / 30.0, 1.0)
         puan = duz * 100 * (0.65 + 0.35 * og)
         final_stats.append({
-            "label": label, "hit": hit, "toplam": len(tum_max), "oran": round(ort, 1),
+            "label": label, "hit": hit, "toplam": len(tum_max), "oran": round(actual_pct, 1),
+            "tarama_ortalama": round(ort, 1),
             "puan": round(puan, 1), "uzlasi": wins, "gecerli_hassasiyet": len(vals),
         })
     final_stats.sort(key=lambda x: (x.get("uzlasi", 0), x.get("puan", 0)), reverse=True)
@@ -8724,6 +9100,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                     detay_alt,
                                     delta_color="off",
                                 )
+                                st.caption(f"Gerçek sayım: {int(en_iyi_detay.get('hit', 0))}/{int(en_iyi_detay.get('toplam', 0))} · "
+                                           f"Hassasiyet ortalaması: %{float(en_iyi_detay.get('tarama_ortalama', detay_pct)):.1f}")
 
                     try:
                         ilk_yari_gol = ornekler["HTHG"] + ornekler["HTAG"]
@@ -8821,7 +9199,7 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                       <div style="font-size:.80rem;color:#cbd5e1;margin-top:4px;">
                         En uygun: <b>{escape(str(en_iyi.get('label', '—')))}</b> ·
                         Uzlaşı: <b>{int(en_iyi.get('uzlasi', 0))}/11 hass.</b> ·
-                        Ortalama oran: <b>%{float(en_iyi.get('oran', 0)):.1f}</b> · Toplam benzer maç: <b>{toplam_benzer}</b>
+                        Gerçekleşme oranı: <b>%{float(en_iyi.get('oran', 0)):.1f}</b> · Toplam benzer maç: <b>{toplam_benzer}</b>
                       </div>
                     </div>
                     """,
@@ -9557,7 +9935,7 @@ if analiz_btn:
                     gercek_ornek = len(b_det) if b_det is not None else 0
                 except Exception:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
-                if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
+                if (not _sonuc_reset_genis_tarama) and min(gercek_ornek, market_etkin_ornek(t, t.get("ana_label"))) + 1e-6 < max(1, int(min_ornek or 1)):
                     _sayac_ornek += 1
                     continue
 
@@ -9637,8 +10015,19 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
     hedef_zaman = parse_mac_datetime(zaman_iso)
 
     m = None
+    if hedef_zaman is not None:
+        try:
+            prices = [float(secim[key]) for key in ("h", "b", "a")]
+            if all(math.isfinite(value) and value > 1 for value in prices):
+                m = {"ev": ev, "dep": dep, "zaman": hedef_zaman, "lig": secim.get("lig", ""),
+                     "sport_key": secim.get("sport_key", ""), **dict(zip(("h", "b", "a"), prices)),
+                     **oran_kayit_bilgisi(secim)}
+                if oran_fazi(m) == "unknown":
+                    m.update(odds_phase="legacy_unknown", history_detail_only=True)
+        except (KeyError, TypeError, ValueError):
+            pass
     bulten = st.session_state.get("last_bulten_df")
-    if bulten is not None and not getattr(bulten, "empty", True):
+    if m is None and bulten is not None and not getattr(bulten, "empty", True):
         try:
             aday = bulten[
                 (bulten["ev"].astype(str) == ev) &
@@ -9726,9 +10115,11 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
             m = None
     if m is None:
         return None
+    if oran_fazi(m) == "unknown":
+        m.update(odds_phase="legacy_unknown", history_detail_only=True)
 
     try:
-        tolerans = float(secim.get("hassasiyet", 0.08) or 0.08)
+        tolerans = hassasiyet_oku(secim.get("hassasiyet"))
     except Exception:
         tolerans = 0.08
 
@@ -9752,6 +10143,8 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
                 t, b_det = hesapla(gecmis, m, tolerans, sadece_ayni_lig=False)
         if t is None:
             return None
+        if m.get("history_detail_only"):
+            t["nedenler"] = ["Eski kuponun oran saati bulunmuyor; bu detay yaklaşık geçmiş karşılaştırmasıdır.", *t.get("nedenler", [])]
         return {"m": m, "t": t, "b": b_det, "kupon_secim": secim}
     except Exception:
         return None
@@ -9984,6 +10377,12 @@ def detay_ana_icerik():
         st.caption("Gol oranı eşleştirmesi için geçmiş 2.5 oranları ve zaman uyumlu güncel oranlar gerekir. Eski veri dosyalarında geçmiş veriyi yenilemek gerekebilir.")
     st.caption(f"Etkin örnek: MS {t.get('effective_ms_samples', 0):.1f} / Gol {t.get('effective_goal_samples', 0):.1f} · "
                f"Güven dalgalanması: {t.get('confidence_spread', 0):.1f} puan")
+    st.caption(f"Geçmiş oran kaynağı: {t.get('odds_source', 'B365')} · "
+               + ("Farklı şirketler: marjdan arındırılmış yaklaşık profil" if t.get('odds_cross_bookmaker') else "Aynı şirket oranları"))
+    if t.get("birlesik_model"):
+        st.caption(f"{int(t.get('stability_count', 0))}/11 hassasiyet desteği · "
+                   f"{int(t.get('stability_unique_pools', 0))} farklı örnek havuzu · "
+                   f"{int(t.get('unique_history_samples', 0))} benzersiz maç. Hassasiyetler bağımsız deney değildir.")
     baglam_analizi_goster(item)
 
     if t["flip_p"] >= 0.12:
