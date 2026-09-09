@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.09.4"
+MODEL_VERSION = "2026.09.09.5"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -8624,42 +8624,65 @@ def _kombo_label_mask(df, label):
     return pd.Series(False, index=df.index)
 
 
+def _oran_istatistik_sirasi(stat):
+    """Başlık, kart ve tablo aynı gerçek yüzdeyle sıralanır; yuvarlama yalnızca gösterimdir."""
+    toplam = int(stat.get('toplam', 0) or 0)
+    gercek_oran = (float(stat.get('hit', 0) or 0) / toplam if toplam > 0
+                  else float(stat.get('oran', 0) or 0) / 100.0)
+    return (gercek_oran, int(stat.get('uzlasi', 0) or 0),
+            float(stat.get('tarama_ortalama', 0) or 0))
+
+
 def _kombo_ikili_stats(taramalar):
-    """Her hassasiyette MS/KG/2.5'in güçlü taraflarından üç ikili kesişimi hesaplar."""
+    """MS+KG (6), MS+2.5 (6), KG+2.5 (4): 16 gerçek ikili kesişimi karşılaştırır.
+
+    Her aday aynı en geniş geçerli örnek havuzunda sayılır. Hassasiyet ortalaması
+    ayrıca tutulur. Uzlaşı, kendi ikili grubunda en yüksek ortak sayıya ulaştığı
+    hassasiyet sayısıdır; eşit en yüksekler de oy alır.
+    """
+    gruplar = {
+        'MS': ('MS 1', 'MS X', 'MS 2'),
+        'KG': ('KG Var', 'KG Yok'),
+        '2.5': ('2.5 Üst', '2.5 Alt'),
+    }
     pair_defs = [('MS', 'KG'), ('MS', '2.5'), ('KG', '2.5')]
-    final = []
-    for g1, g2 in pair_defs:
-        oylar = {}
-        oranlar = {}
-        for _, b, stats in taramalar:
-            a1 = [x for x in stats if x.get('grup') == g1]
-            a2 = [x for x in stats if x.get('grup') == g2]
-            if not a1 or not a2:
-                continue
-            w1 = max(a1, key=lambda x: (float(x.get('oran', 0) or 0), int(x.get('hit', 0) or 0)))
-            w2 = max(a2, key=lambda x: (float(x.get('oran', 0) or 0), int(x.get('hit', 0) or 0)))
-            l1, l2 = str(w1.get('label', '—')), str(w2.get('label', '—'))
-            combo_label = f'{l1} + {l2}'
-            mask = _kombo_label_mask(b, l1) & _kombo_label_mask(b, l2)
-            pct = float(mask.mean() * 100.0) if len(b) else 0.0
-            oylar[combo_label] = oylar.get(combo_label, 0) + 1
-            oranlar.setdefault(combo_label, []).append(pct)
-        if not oylar:
+    tanimlar = [(f'{l1} + {l2}', f'{g1}+{g2}', l1, l2)
+                for g1, g2 in pair_defs for l1 in gruplar[g1] for l2 in gruplar[g2]]
+    oranlar = {label: [] for label, _, _, _ in tanimlar}
+    oylar = {label: 0 for label, _, _, _ in tanimlar}
+    tablo_tol, tablo_toplam, tablo_hits = None, 0, {}
+
+    for tol, b, _ in taramalar:
+        if b is None or b.empty:
             continue
-        secilen = max(oylar, key=lambda k: (oylar[k], sum(oranlar[k]) / max(1, len(oranlar[k]))))
-        parts = [part.strip() for part in secilen.split("+")]
-        vals = [float((_kombo_label_mask(b, parts[0]) & _kombo_label_mask(b, parts[1])).mean() * 100)
-                for _, b, _ in taramalar if not b.empty]
-        ort = sum(vals) / len(vals) if vals else 0.0
+        # Tekli marketin kazananından bağımsız olarak her tarafı bir kez hesapla.
+        masks = {label: _kombo_label_mask(b, label)
+                 for labels in gruplar.values() for label in labels}
+        hits = {label: int((masks[l1] & masks[l2]).sum())
+                for label, _, l1, l2 in tanimlar}
+        grup_max = {f'{g1}+{g2}': max(hits[label] for label, tip, _, _ in tanimlar
+                                     if tip == f'{g1}+{g2}')
+                    for g1, g2 in pair_defs}
+        for label, tip, _, _ in tanimlar:
+            oranlar[label].append(hits[label] / len(b) * 100.0)
+            if hits[label] == grup_max[tip]:
+                oylar[label] += 1
+        if tablo_tol is None or tol > tablo_tol:
+            tablo_tol, tablo_toplam, tablo_hits = tol, len(b), hits
+
+    if not tablo_toplam:
+        return []
+    final = []
+    for label, tip, _, _ in tanimlar:
+        vals = oranlar[label]
         final.append({
-            'label': secilen,
-            'grup': 'Kombo',
-            'kombo_tipi': f'{g1}+{g2}',
-            'oran': round(ort, 1),
-            'uzlasi': int(oylar.get(secilen, 0)),
-            'gecerli_hassasiyet': len(vals),
+            'label': label, 'grup': 'Kombo', 'kombo_tipi': tip,
+            'hit': tablo_hits[label], 'toplam': tablo_toplam,
+            'oran': round(tablo_hits[label] / tablo_toplam * 100.0, 1),
+            'tarama_ortalama': round(sum(vals) / len(vals), 1),
+            'uzlasi': oylar[label], 'gecerli_hassasiyet': len(vals),
         })
-    final.sort(key=lambda x: (float(x.get('oran', 0) or 0), int(x.get('uzlasi', 0) or 0)), reverse=True)
+    final.sort(key=_oran_istatistik_sirasi, reverse=True)
     return final
 
 
@@ -8669,16 +8692,8 @@ def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yari
         b = gecmis_ornekleri_bul(gecmis_df, mac_row, tol, sadece_ayni_lig=ayni_lig, limit=100000)
         if b is None or b.empty or len(b) < int(min_ornek):
             continue
-        # Kombo tek başına seçildiğinde de MS/KG/2.5 taraflarını içeride hesapla.
-        # Bu yardımcı istatistikler yalnızca komboyu üretmek için kullanılır;
-        # kullanıcı kapattığı normal marketleri ekranda görmez.
-        stats, _ = oran_filtresi_istatistikleri(
-            b,
-            (ms or kombo),
-            (kg or kombo),
-            (gol25 or kombo),
-            yarilar,
-        )
+        # Kombo, tekli market seçimlerinden bağımsız olarak aşağıda hesaplanır.
+        stats, _ = oran_filtresi_istatistikleri(b, ms, kg, gol25, yarilar)
         taramalar.append((tol, b, stats))
     if not taramalar:
         return None
@@ -8686,7 +8701,6 @@ def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yari
     # Tablo için en geniş geçerli hassasiyetin benzersiz örnekleri kullanılır.
     tol_max, tablo_ornekleri, _ = max(taramalar, key=lambda x: x[0])
     # Normal marketler yalnızca kullanıcı onları seçtiyse sonuç listesine eklenir.
-    # Kombo için gereken MS/KG/2.5 hesapları yukarıda gizli yardımcı veri olarak kalır.
     grup_sirasi = []
     if ms:
         grup_sirasi.append("MS")
@@ -8738,22 +8752,15 @@ def _oran_11_uzlasi(gecmis_df, mac_row, min_ornek, ayni_lig, ms, kg, gol25, yari
         })
 
     # Kombo yalnızca kullanıcı Oran Filtresi'nde Kombo kutusunu seçtiğinde hesaplanır.
-    # Üçlü birleşim yok: MS+KG, MS+2.5 ve KG+2.5 ayrı ayrı gerçek kesişim yüzdesidir.
+    # MS+KG, MS+2.5 ve KG+2.5 için 16 aday da aynı havuzda gerçek kesişimdir.
     if kombo:
         for c in _kombo_ikili_stats(taramalar):
-            c['toplam'] = len(tablo_ornekleri)
-            c['tarama_ortalama'] = c.get('oran', 0)
-            c['hit'] = sum(bool(tahmin_tuttu_mu(c['label'], row)) for _, row in tablo_ornekleri.iterrows())
-            c['oran'] = round(c['hit'] / len(tablo_ornekleri) * 100, 1)
             c['puan'] = round(float(c.get('oran', 0) or 0) * (0.82 + 0.18 * min(len(tablo_ornekleri) / 30.0, 1.0)), 1)
             final_stats.append(c)
 
     # Oran Filtresi içinde en güçlü marketi doğrudan başarı yüzdesine göre belirle.
     # Hassasiyet uzlaşısı artık yalnızca eşitlik bozucu olarak kullanılır.
-    final_stats.sort(
-        key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("uzlasi", 0) or 0), float(x.get("puan", 0) or 0)),
-        reverse=True,
-    )
+    final_stats.sort(key=_oran_istatistik_sirasi, reverse=True)
     if not final_stats:
         return None
     return {
@@ -8935,7 +8942,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                 adaylar = [x for x in istatistikler if x.get("grup") == grup]
                 if not adaylar:
                     continue
-                en_iyi_grup = max(adaylar, key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("hit", 0) or 0)))
+                en_iyi_grup = max(adaylar, key=_oran_istatistik_sirasi)
                 label = str(en_iyi_grup.get("label", "—"))
                 if grup == "Yarılar":
                     label = label.replace("Her İki Yarı 1.5 Üst ", "İki Yarı 1.5 Üst ")
@@ -9052,10 +9059,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                         adaylar = [x for x in istatistikler if x.get("grup") == grup]
                         if not adaylar:
                             continue
-                        en_iyi_detay = max(
-                            adaylar,
-                            key=lambda x: (float(x.get("oran", 0) or 0), int(x.get("hit", 0) or 0)),
-                        )
+                        en_iyi_detay = max(adaylar, key=_oran_istatistik_sirasi)
                         detay_label = str(en_iyi_detay.get("label", "—"))
                         if grup == "Yarılar":
                             detay_label = detay_label.replace("Her İki Yarı 1.5 Üst ", "")
@@ -9068,14 +9072,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                     if oran_filter_kombo:
                         kombo_stats = [x for x in istatistikler if x.get("grup") == "Kombo"]
                         if kombo_stats:
-                            en_yuksek_kombo = max(
-                                kombo_stats,
-                                key=lambda x: (
-                                    float(x.get("oran", 0) or 0),
-                                    int(x.get("uzlasi", 0) or 0),
-                                    int(x.get("hit", 0) or 0),
-                                ),
-                            )
+                            en_yuksek_kombo = max(kombo_stats, key=_oran_istatistik_sirasi)
                             kombo_tip = str(en_yuksek_kombo.get("kombo_tipi", "Kombo"))
                             kombo_label = str(en_yuksek_kombo.get("label", "—"))
                             detay_kartlari.append((f"Kombo · {kombo_tip}", "🔗", kombo_label, en_yuksek_kombo))
@@ -9139,14 +9136,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                     if oran_filter_kombo:
                         kombo_stats = [x for x in istatistikler if x.get('grup') == 'Kombo']
                         if kombo_stats:
-                            c = max(
-                                kombo_stats,
-                                key=lambda x: (
-                                    float(x.get('oran', 0) or 0),
-                                    int(x.get('uzlasi', 0) or 0),
-                                    int(x.get('hit', 0) or 0),
-                                ),
-                            )
+                            c = max(kombo_stats, key=_oran_istatistik_sirasi)
                             label = str(c.get('label', ''))
                             if ' + ' in label:
                                 l1, l2 = label.split(' + ', 1)
