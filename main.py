@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.2"
+MODEL_VERSION = "2026.09.10.3"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -261,58 +261,57 @@ def oran_fazi(m, totals=False):
 
 
 def zaman_uyumlu_gecmis(df, m):
-    """Aynı evre ve mümkünse aynı şirket. Farklı şirkette marjsız profil kullanılır."""
+    """Geçmiş 1-X-2 havuzunu B365 aynı-evre oranlarıyla kur.
+
+    10.2'de güncel bookmaker'a göre WH/PS/BW/VC seçilmesi bazı ekstrem
+    favori maçlarında geçmiş havuzunu gereksiz biçimde daraltıyordu.
+    Eşleşme yeniden eski ve tutarlı referansa döndürüldü: closing için
+    B365C, pre-closing için B365. Güncel bookmaker yalnızca veri kaynağıdır;
+    geçmiş örnek seçimini değiştirmez.
+    """
     if df is None:
         return pd.DataFrame()
     result = df.copy()
     phase = oran_fazi(m)
-    if phase not in ("closing", "preclosing", "legacy_unknown"):
+
+    if phase == "closing":
+        columns = ["B365CH", "B365CD", "B365CA"]
+    elif phase == "preclosing":
+        columns = ["B365H", "B365D", "B365A"]
+    elif phase == "legacy_unknown":
+        # Eski/kimliği belirsiz hedeflerde önce kapanış, yoksa açılış kullan.
+        closing = ["B365CH", "B365CD", "B365CA"]
+        opening = ["B365H", "B365D", "B365A"]
+        closing_ok = all(c in result.columns for c in closing)
+        if closing_ok:
+            cv = result[closing].apply(pd.to_numeric, errors="coerce")
+            if ((cv.gt(1) & cv.lt(float("inf"))).all(axis=1)).any():
+                columns = closing
+            else:
+                columns = opening
+        else:
+            columns = opening
+    else:
         return result.iloc[0:0]
-    requested = BOOKMAKER_HISTORY_PREFIX.get(str(m.get("bookmaker_key", "")))
-    # Eski backtest hedefleri B365 sütunlarından oluşturuluyordu.
-    if requested is None and not m.get("bookmaker_key"):
-        requested = "B365"
-    prefixes = list(dict.fromkeys([requested, "B365", "WH", "PS", "BW", "VC"]))
-    chosen, valid = None, pd.Series(False, index=result.index)
-    phases = [phase] if phase != "legacy_unknown" else ["closing", "preclosing"]
-    for candidate_phase in phases:
-        for prefix in prefixes:
-            if prefix is None:
-                continue
-            columns = [f'{prefix}{"C" if candidate_phase == "closing" else ""}{side}' for side in "HDA"]
-            if not all(column in result for column in columns):
-                continue
-            values = result[columns].apply(pd.to_numeric, errors="coerce")
-            valid = (values.gt(1) & values.lt(float("inf"))).all(axis=1)
-            if valid.any():
-                chosen = (prefix, candidate_phase, columns)
-                break
-        if chosen:
-            break
-    if chosen is None:
-        return result.iloc[0:0]
-    prefix, selected_phase, columns = chosen
+
     for source, target in zip(columns, ["REF_H", "REF_D", "REF_A"]):
-        result[target] = pd.to_numeric(result[source], errors="coerce")
-    cross = requested != prefix or (phase == "legacy_unknown" and not m.get("bookmaker_key"))
-    result.attrs.update(odds_history_prefix=prefix, odds_cross_bookmaker=cross,
-                        odds_phase_used=selected_phase, odds_time_unknown=phase == "legacy_unknown")
+        result[target] = pd.to_numeric(result[source], errors="coerce") if source in result else float("nan")
+
+    valid = (result[["REF_H", "REF_D", "REF_A"]].gt(1) &
+             result[["REF_H", "REF_D", "REF_A"]].lt(float("inf"))).all(axis=1)
+    result.attrs.update(
+        odds_history_prefix="B365",
+        odds_cross_bookmaker=False,
+        odds_phase_used="closing" if columns[0].startswith("B365C") else "preclosing",
+        odds_time_unknown=phase == "legacy_unknown",
+    )
     return result.loc[valid].copy()
 
 
 def eslesme_oranlari(df, m):
-    """Geçmiş ve güncel 1-X-2 oranlarını aynı referans uzayında döndürür.
-
-    Hassasiyet doğrudan oran farkıdır. Farklı bookmaker kullanılıyorsa mevcut
-    marj-normalizasyonu korunur; aynı bookmaker'da ham oranlar karşılaştırılır.
-    """
+    """Ham 1-X-2 oranlarını doğrudan karşılaştır; hassasiyet mutlak oran farkıdır."""
     values = df[["REF_H", "REF_D", "REF_A"]].apply(pd.to_numeric, errors="coerce")
     target = pd.Series([float(m[key]) for key in ("h", "b", "a")], index=values.columns)
-    if df.attrs.get("odds_cross_bookmaker"):
-        # Farklı şirketlerde marj farkının eşleşmeyi bozmasını azalt.
-        inv = 1.0 / values
-        values = inv.sum(axis=1).to_numpy()[:, None] * values
-        target = target * (1.0 / target).sum()
     return values, target
 
 
