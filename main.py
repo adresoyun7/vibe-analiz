@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.09.8"
+MODEL_VERSION = "2026.09.09.9"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -8181,6 +8181,25 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 if ana_p < 55.0 and kolon_sayisi >= 6:
                     ekstra_kolon = 2 + ((idx + 2) % varyasyon_kolonlari)
                     kolonlar[ekstra_kolon][r['no']] = alts[0][0]
+
+            # Aynı 15'li kombinasyonu taşıyan kolonları tekilleştir.
+            # Böylece örneğin 1., 8., 9. ve 10. kolon aynıysa yalnızca biri gösterilir.
+            mac_nolari = [r['no'] for r in tamam]
+            benzersiz_kolonlar = {}
+            gorulen_kombinasyonlar = set()
+            for eski_no in sorted(kolonlar):
+                imza = tuple(kolonlar[eski_no].get(no, '—') for no in mac_nolari)
+                if imza in gorulen_kombinasyonlar:
+                    continue
+                gorulen_kombinasyonlar.add(imza)
+                benzersiz_kolonlar[len(benzersiz_kolonlar) + 1] = kolonlar[eski_no]
+            kolonlar = benzersiz_kolonlar
+            kolon_sayisi = len(kolonlar)
+
+            st.caption(
+                f"Tekilleştirme sonrası {kolon_sayisi} benzersiz kolon gösteriliyor; "
+                "15 maç seçimi birebir aynı olan kolonlar otomatik kaldırıldı."
+            )
 
             gor = []
             for r in _st_sonuclar:
