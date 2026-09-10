@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.09.6"
+MODEL_VERSION = "2026.09.09.7"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -301,43 +301,25 @@ def zaman_uyumlu_gecmis(df, m):
 
 
 def eslesme_oranlari(df, m):
-    """1-X-2 oranlarını marjdan arındırılmış implied-probability profiline çevirir.
+    """Geçmiş ve güncel 1-X-2 oranlarını aynı referans uzayında döndürür.
 
-    Böylece hassasiyet ham oran seviyesine bağlı kalmaz. Örneğin 1.11/9.00/21.00
-    gibi ağır favori profillerinde 21.00 oranına sabit ±0.30 uygulamak yerine,
-    üç sonucun piyasa olasılık dağılımı karşılaştırılır.
+    Hassasiyet doğrudan oran farkıdır. Farklı bookmaker kullanılıyorsa mevcut
+    marj-normalizasyonu korunur; aynı bookmaker'da ham oranlar karşılaştırılır.
     """
     values = df[["REF_H", "REF_D", "REF_A"]].apply(pd.to_numeric, errors="coerce")
-    target_odds = pd.Series([float(m[key]) for key in ("h", "b", "a")], index=values.columns)
-
-    # Geçersiz oranlar eşleşmeye girmesin.
-    valid = values.gt(1.0).all(axis=1)
-    values = values.where(valid)
-
-    # No-vig / marjdan arındırılmış implied probabilities.
-    inv = 1.0 / values
-    values_profile = inv.div(inv.sum(axis=1), axis=0)
-
-    target_inv = 1.0 / target_odds
-    target_profile = target_inv / target_inv.sum()
-
-    return values_profile, target_profile
+    target = pd.Series([float(m[key]) for key in ("h", "b", "a")], index=values.columns)
+    if df.attrs.get("odds_cross_bookmaker"):
+        # Farklı şirketlerde marj farkının eşleşmeyi bozmasını azalt.
+        inv = 1.0 / values
+        values = inv.sum(axis=1).to_numpy()[:, None] * values
+        target = target * (1.0 / target).sum()
+    return values, target
 
 
 def oran_eslesme_maskesi(df, m, tolerans):
-    """Hassasiyet, üçlü no-vig olasılık profilindeki azami mutlak farktır.
-
-    0.00 = neredeyse birebir profil
-    0.01 = her sonuçta en fazla 1 yüzde puanı fark
-    ...
-    0.30 = geniş profil araması
-
-    Üç sonucun da seçilen sınırın içinde kalması gerekir.
-    """
+    """Üç 1-X-2 oranının da seçilen mutlak hassasiyet içinde olmasını ister."""
     values, target = eslesme_oranlari(df, m)
-    diff = values.sub(target, axis=1).abs()
-    return diff.le(float(tolerans) + 1e-9).all(axis=1)
-
+    return values.sub(target, axis=1).abs().le(float(tolerans) + 1e-9).all(axis=1)
 
 def etkin_ornek(weights):
     weights = pd.to_numeric(weights, errors="coerce").fillna(0).clip(lower=0)
@@ -350,7 +332,7 @@ def agirlikli_oran(values, weights):
 
 
 def analiz_agirliklari(b, m, tolerans):
-    # Mesafe de filtreyle aynı no-vig olasılık uzayında hesaplanır.
+    # Mesafe de filtreyle aynı oran uzayında hesaplanır.
     values, target = eslesme_oranlari(b, m)
     distance = (values.sub(target, axis=1) / max(float(tolerans), 0.01)).pow(2).mean(axis=1)
     ms = 1.0 / (1.0 + distance)
@@ -7271,7 +7253,7 @@ with st.container(key="sticky_analysis_controls"):
                 step=0.01,
                 key="top_tol",
                 on_change=clear_detail_on_filter_change,
-                help="Düşük değerler marjdan arındırılmış 1-X-2 olasılık profili daha yakın maçları; yüksek değerler daha geniş benzerlik havuzunu kapsar.",
+                help="Seçilen değer, 1-X-2 oranlarının her biri için izin verilen yaklaşık mutlak oran farkıdır. Üç oran da sınır içinde olmalıdır.",
             )
     with ayar_ornek_col:
         min_ornek = st.number_input(
