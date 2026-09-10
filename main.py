@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.09.9"
+MODEL_VERSION = "2026.09.10.1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -8095,32 +8095,45 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
         if tamam:
             st.markdown("#### Kolon önerileri")
 
-            def _st_alternatifler(r):
+            def _st_alternatifler(r, gevseklik=0):
+                """Gerçek 1/X/2 dağılımından kademeli alternatif üret.
+
+                gevseklik=0: çekirdek alternatifler
+                gevseklik=1: orta güvenli alternatifler
+                gevseklik=2: geniş kapsama (yalnız çok kolonlu kuponlarda)
+
+                X'e yapay ayrıcalık verilmez; 1/X/2 aynı olasılık ve fark
+                kurallarıyla değerlendirilir.
+                """
                 dag = r.get('spor_toto_dagilim') or {}
                 if not dag:
                     return []
                 ana = str(r.get('secim', ''))
                 ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
                 faz = str(r.get('spor_toto_faz', 'standart'))
+
+                if faz == 'en yakın oran fallback':
+                    esikler = [(28.0, 10.0), (26.0, 13.0), (24.0, 16.0)]
+                else:
+                    esikler = [(25.0, 12.0), (23.0, 15.0), (21.0, 18.0)]
+
+                min_p, max_fark = esikler[max(0, min(int(gevseklik), 2))]
                 adaylar = []
                 for taraf in ('1', 'X', '2'):
                     if taraf == ana:
                         continue
                     p = float(dag.get(taraf, 0) or 0)
                     fark = ana_p - p
-                    # Gerçek dağılımda ana seçime yeterince yakın alternatifler.
-                    if faz == 'en yakın oran fallback':
-                        uygun = p >= 28.0 and fark <= 10.0
-                    else:
-                        uygun = p >= 25.0 and fark <= 12.0
-                    if uygun:
-                        adaylar.append((taraf, p, fark))
-                return sorted(adaylar, key=lambda x: (x[1], -x[2]), reverse=True)
+                    if p >= min_p and fark <= max_fark:
+                        # Yakınlık skoru: yüksek olasılık + ana sonuca yakınlık.
+                        yakinlik = p - max(0.0, fark) * 0.35
+                        adaylar.append((taraf, p, fark, yakinlik))
+                return sorted(adaylar, key=lambda x: (x[3], x[1], -x[2]), reverse=True)
 
             # Önce kuponun ne kadar belirsiz olduğunu ölç.
             guvenler = [float(r.get('guven', 0) or 0) for r in tamam]
             ort_guven = sum(guvenler) / len(guvenler) if guvenler else 0.0
-            alternatifli_mac = sum(1 for r in tamam if _st_alternatifler(r))
+            alternatifli_mac = sum(1 for r in tamam if _st_alternatifler(r, 0))
             fallback_mac = sum(
                 1 for r in tamam
                 if str(r.get('spor_toto_faz', 'standart')) != 'standart'
@@ -8140,7 +8153,8 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"Model güvenine göre otomatik {kolon_sayisi} kolon üretildi. "
                 f"Ortalama güven %{ort_guven:.1f} · alternatifli maç {alternatifli_mac} · "
                 f"fallback maç {fallback_mac}. 1. kolon ana model tahminidir; diğer kolonlar "
-                "yalnızca gerçek 1/X/2 dağılımından türetilir."
+                "yalnızca gerçek 1/X/2 dağılımından türetilir. Kolon sayısı arttıkça "
+                "alternatif eşiği kontrollü biçimde gevşer; X yapay olarak eklenmez."
             )
 
             kolonlar = {k: {} for k in range(1, kolon_sayisi + 1)}
@@ -8150,10 +8164,16 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     kolonlar[k][r['no']] = sec
 
             # Belirsizliği en yüksek maçlar önce çeşitlendirilir.
+            # Kolon sayısı yükseldikçe alternatif eşiğini kademeli gevşet.
+            # 4 kolon: yalnız çekirdek alternatifler
+            # 6 kolon: orta güvenli alternatifler de dahil
+            # 8-10 kolon: daha geniş ama hâlâ gerçek dağılımla desteklenen alternatifler
+            alt_gevseklik = 0 if kolon_sayisi <= 4 else (1 if kolon_sayisi <= 6 else 2)
+
             cesit_adaylari = []
             for r in tamam:
                 dag = r.get('spor_toto_dagilim') or {}
-                alts = _st_alternatifler(r)
+                alts = _st_alternatifler(r, alt_gevseklik)
                 if not alts:
                     continue
                 ana = str(r.get('secim', ''))
