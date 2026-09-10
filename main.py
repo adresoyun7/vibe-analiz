@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.3"
+MODEL_VERSION = "2026.09.10.4"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -466,11 +466,19 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
             confidence = int(candidate.get("guven", 0))
             label = candidate["label"]
             effective = market_etkin_ornek(t, label)
-            if effective + 1e-6 < max(int(min_ornek), dinamik_min_mac(tol)):
-                continue
+
+            # 10.4: Effective sample artık hard-filter değildir. Gerçek örnek sayısı
+            # yeterliyse adayı koruruz; düşük etkin örnek birlesik_aday_puani() içinde
+            # kademeli az-örnek cezası olarak hesaba katılır.
+            ms_soft_penalty = 0
             if t.get("ms_belirsiz") and _tahmin_market_ailesi(label) == "ms":
-                continue
+                # MS ailesi belirsiz diye tahmini tamamen silmek yerine güveni yumuşat.
+                # Böylece 09.3'teki görünürlük korunurken 10.x'in belirsizlik bilgisi kaybolmaz.
+                ms_soft_penalty = 6
+                confidence = max(0, confidence - ms_soft_penalty)
+
             groups.setdefault(label, []).append(dict(guven=confidence, ornek=n, etkin=effective,
+                                                     ms_belirsiz_ceza=ms_soft_penalty,
                                                      tol=tol, t=t, b=b, mk=candidate))
     result = []
     for label, records in groups.items():
@@ -485,6 +493,7 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
             continue
         median = float(pd.Series([record["ornek"] for record in records]).median())
         effective_median = float(pd.Series([record["etkin"] for record in records]).median())
+        ms_belirsiz_cezasi = float(pd.Series([record.get("ms_belirsiz_ceza", 0) for record in records]).median())
         sample_keys = [frozenset(pd.util.hash_pandas_object(
             record["b"][[column for column in ("Date", "league_code", "HomeTeam", "AwayTeam")
                          if column in record["b"]]], index=False).tolist()) for record in records]
@@ -497,6 +506,7 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
             "ornek": int(round(median)), "kararlilik": len(supported), "guven_dalgalanmasi": round(spread, 2),
             "kararlilik_pct": len(supported) / 11 * 100,
             "az_ornek_cezasi": round(8.0 * max(0.0, min(1.0, (5.0-effective_median)/4.0)), 2),
+            "ms_belirsiz_cezasi": round(ms_belirsiz_cezasi, 2),
             "effective_median": effective_median, "unique_pools": unique_pools,
             "unique_samples": unique_samples,
             "toleranslar": [f'{record["tol"]:.2f}' for record in supported], "temsilci": representative,
