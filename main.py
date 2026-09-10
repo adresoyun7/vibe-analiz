@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.1"
+MODEL_VERSION = "2026.09.10.2"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -8157,68 +8157,122 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 "alternatif eşiği kontrollü biçimde gevşer; X yapay olarak eklenmez."
             )
 
-            kolonlar = {k: {} for k in range(1, kolon_sayisi + 1)}
-            for r in tamam:
-                sec = str(r.get('secim', ''))
-                for k in kolonlar:
-                    kolonlar[k][r['no']] = sec
+            hedef_kolon_sayisi = kolon_sayisi
 
-            # Belirsizliği en yüksek maçlar önce çeşitlendirilir.
-            # Kolon sayısı yükseldikçe alternatif eşiğini kademeli gevşet.
-            # 4 kolon: yalnız çekirdek alternatifler
-            # 6 kolon: orta güvenli alternatifler de dahil
-            # 8-10 kolon: daha geniş ama hâlâ gerçek dağılımla desteklenen alternatifler
-            alt_gevseklik = 0 if kolon_sayisi <= 4 else (1 if kolon_sayisi <= 6 else 2)
+            # Kolon sayısı yükseldikçe alternatif eşiğini kontrollü gevşet.
+            alt_gevseklik = 0 if hedef_kolon_sayisi <= 4 else (1 if hedef_kolon_sayisi <= 6 else 2)
 
-            cesit_adaylari = []
+            # Her maç için yalnızca modelin gerçek dağılımla desteklediği seçenekleri hazırla.
+            # Ana seçim her zaman seçenek havuzunda kalır.
+            mac_nolari = [r['no'] for r in tamam]
+            secenek_havuzu = []
+            ana_imza = []
             for r in tamam:
                 dag = r.get('spor_toto_dagilim') or {}
-                alts = _st_alternatifler(r, alt_gevseklik)
-                if not alts:
-                    continue
                 ana = str(r.get('secim', ''))
                 ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
-                top_alt = alts[0][1]
-                kalite_cezasi = 4.0 if str(r.get('spor_toto_faz')) == 'en yakın oran fallback' else 0.0
-                belirsizlik = 100.0 - (ana_p - top_alt) - kalite_cezasi
-                cesit_adaylari.append((belirsizlik, r, alts))
-            cesit_adaylari.sort(key=lambda x: x[0], reverse=True)
+                ana_imza.append(ana)
 
-            # Kolon sayısı arttıkça daha fazla belirsiz maçı gerçek alternatiflerle yay.
-            varyasyon_kolonlari = max(1, kolon_sayisi - 1)
-            max_cesit_mac = min(len(cesit_adaylari), max(6, varyasyon_kolonlari * 2))
-            for idx, (_, r, alts) in enumerate(cesit_adaylari[:max_cesit_mac]):
-                ana_kolon = 2 + (idx % varyasyon_kolonlari)
-                kolonlar[ana_kolon][r['no']] = alts[0][0]
+                secenekler = [(ana, max(ana_p, 0.1))]
+                for taraf, p, fark, yakinlik in _st_alternatifler(r, alt_gevseklik):
+                    if taraf != ana:
+                        secenekler.append((taraf, max(float(p), 0.1)))
 
-                # Çok yakın ikinci alternatif varsa farklı bir kolona da dağıt.
-                if len(alts) > 1 and alts[1][1] >= 27.0 and alts[1][2] <= 8.0:
-                    ikinci_kolon = 2 + ((idx + 1) % varyasyon_kolonlari)
-                    kolonlar[ikinci_kolon][r['no']] = alts[1][0]
+                # Aynı taraf yanlışlıkla iki kez gelirse en yüksek olasılığı koru.
+                tekil = {}
+                for taraf, p in secenekler:
+                    tekil[taraf] = max(float(p), float(tekil.get(taraf, 0.0)))
+                secenek_havuzu.append((r['no'], list(tekil.items())))
 
-                # Güven düşükse aynı gerçek alternatifi ikinci bir kolonda da kapsa.
-                ana_p = float((r.get('spor_toto_dagilim') or {}).get(str(r.get('secim', '')), r.get('guven', 0)) or 0)
-                if ana_p < 55.0 and kolon_sayisi >= 6:
-                    ekstra_kolon = 2 + ((idx + 2) % varyasyon_kolonlari)
-                    kolonlar[ekstra_kolon][r['no']] = alts[0][0]
+            ana_imza = tuple(ana_imza)
 
-            # Aynı 15'li kombinasyonu taşıyan kolonları tekilleştir.
-            # Böylece örneğin 1., 8., 9. ve 10. kolon aynıysa yalnızca biri gösterilir.
-            mac_nolari = [r['no'] for r in tamam]
-            benzersiz_kolonlar = {}
-            gorulen_kombinasyonlar = set()
-            for eski_no in sorted(kolonlar):
-                imza = tuple(kolonlar[eski_no].get(no, '—') for no in mac_nolari)
-                if imza in gorulen_kombinasyonlar:
+            # Beam-search: geçerli alternatiflerden olasılığı yüksek kombinasyonları üret.
+            # Böylece kolonlar modulo ile rastgele dağılmak yerine birlikte anlamlı senaryolar olur.
+            # Skor log-olasılık; alternatif sayısı 4 ile sınırlandırılarak aşırı "uç" kolonlar engellenir.
+            beam = [(0.0, tuple(), 0)]
+            BEAM_LIMIT = 500
+            MAX_DEGISIKLIK = 4
+
+            for idx, (mac_no, secenekler) in enumerate(secenek_havuzu):
+                ana = ana_imza[idx]
+                yeni_beam = []
+                for skor, imza, degisim in beam:
+                    for taraf, p in secenekler:
+                        yeni_degisim = degisim + (1 if taraf != ana else 0)
+                        if yeni_degisim > MAX_DEGISIKLIK:
+                            continue
+                        yeni_skor = skor + __import__('math').log(max(float(p), 0.1) / 100.0)
+                        yeni_beam.append((yeni_skor, imza + (taraf,), yeni_degisim))
+
+                # Aynı kısmi imzayı tekilleştir ve en yüksek skorlu adayları koru.
+                tekil_beam = {}
+                for skor, imza, degisim in yeni_beam:
+                    onceki = tekil_beam.get(imza)
+                    if onceki is None or skor > onceki[0]:
+                        tekil_beam[imza] = (skor, imza, degisim)
+                beam = sorted(
+                    tekil_beam.values(),
+                    key=lambda x: (x[0], -x[2]),
+                    reverse=True
+                )[:BEAM_LIMIT]
+
+            # Ana kolon her zaman 1. kolon.
+            adaylar = []
+            for skor, imza, degisim in beam:
+                if imza == ana_imza:
                     continue
-                gorulen_kombinasyonlar.add(imza)
-                benzersiz_kolonlar[len(benzersiz_kolonlar) + 1] = kolonlar[eski_no]
-            kolonlar = benzersiz_kolonlar
+                # İlk tercih: ana kolondan en az 2 maç farklı olsun.
+                # Böylece yalnız tek maçı değişen düşük-verimli kolonlar sona kalır.
+                adaylar.append({
+                    'skor': float(skor),
+                    'imza': imza,
+                    'degisim': int(degisim),
+                })
+
+            secilen_imzalar = [ana_imza]
+
+            def _hamming(a, b):
+                return sum(1 for x, y in zip(a, b) if x != y)
+
+            def _aday_degeri(aday):
+                # Olasılık ana ölçüt; çeşitlilik ikinci ölçüt.
+                min_mesafe = min(_hamming(aday['imza'], s) for s in secilen_imzalar)
+                # Her ek anlamlı fark küçük bonus alır; çok düşük olasılıklı kolon sırf
+                # farklı diye öne geçmesin diye bonus sınırlıdır.
+                return aday['skor'] + 0.18 * min(min_mesafe, 3) + 0.08 * min(aday['degisim'], 3)
+
+            # Önce ana kolondan >=2 maç farklı, sonra gerekirse tek fark içeren kolonlarla doldur.
+            for min_ana_fark in (2, 1):
+                while len(secilen_imzalar) < hedef_kolon_sayisi:
+                    uygun = [
+                        a for a in adaylar
+                        if a['imza'] not in secilen_imzalar
+                        and _hamming(a['imza'], ana_imza) >= min_ana_fark
+                    ]
+                    if not uygun:
+                        break
+                    en_iyi = max(uygun, key=_aday_degeri)
+                    secilen_imzalar.append(en_iyi['imza'])
+
+                if len(secilen_imzalar) >= hedef_kolon_sayisi:
+                    break
+
+            # Gerçekten üretilebilen benzersiz kolon sayısını kullan.
+            kolonlar = {}
+            for k, imza in enumerate(secilen_imzalar[:hedef_kolon_sayisi], start=1):
+                kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
             kolon_sayisi = len(kolonlar)
 
+            iki_farkli_sayisi = sum(
+                1 for imza in secilen_imzalar[1:kolon_sayisi]
+                if _hamming(imza, ana_imza) >= 2
+            )
             st.caption(
-                f"Tekilleştirme sonrası {kolon_sayisi} benzersiz kolon gösteriliyor; "
-                "15 maç seçimi birebir aynı olan kolonlar otomatik kaldırıldı."
+                f"{hedef_kolon_sayisi} hedef kolondan {kolon_sayisi} benzersiz kolon üretildi. "
+                f"1. kolon ana modeldir; diğer {max(0, kolon_sayisi-1)} kolonun "
+                f"{iki_farkli_sayisi} tanesi ana kolondan en az 2 maç farklıdır. "
+                "Kolonlar gerçek 1/X/2 dağılımı, olasılık ve birbirinden farklı senaryo "
+                "kapsaması birlikte değerlendirilerek seçilir."
             )
 
             gor = []
