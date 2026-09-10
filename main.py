@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.4"
+MODEL_VERSION = "2026.09.10.5"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -4960,8 +4960,9 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
             sonuc["combo_p"] = min(sonuc["combo_p"], *bounds)
     if sonuc["alt_p"] <= 60:
         sonuc["alt_label"], sonuc["alt_p"] = "", 0
+    # Etkin örnek güven hesabında kullanılır; yeterlilik gerçek maç sayısına bağlıdır.
     sonuc["oynanabilir"] = (sonuc["ana_p"] >= 58 and not belirsiz
-                             and market_etkin_ornek(sonuc, sonuc["ana_label"]) + 1e-6 >= onerilen_min_mac)
+                             and sample >= onerilen_min_mac)
     sonuc["oynanabilir_esik_ok"] = sonuc["ana_p"] >= 55
     sonuc["score"] = sonuc["playable_score"] = round(sonuc["ana_p"] * .8, 1)
     gc, cls, badge = guven_renk(sonuc["ana_p"])
@@ -5920,7 +5921,7 @@ def backtest_calistir(gecmis_df, test_sezonu, tolerans, min_ornek,
             else:
                 t, b = hesapla(veri, target, tolerans, sadece_ayni_lig=sadece_ayni_lig,
                                form_aktif=False, kalibrasyon_aktif=False)
-            if t is None or min(len(b), market_etkin_ornek(t, t.get("ana_label"))) + 1e-6 < int(min_ornek):
+            if t is None or len(b) < int(min_ornek):
                 continue
             record = backtest_kaydi(row, target, t)
             if record is not None:
@@ -6082,7 +6083,7 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
             scan = hassasiyet_taramasi(veri, tarama_hedefi(target), sadece_ayni_lig)
             for tolerance in tolerances:
                 t, examples = scan.get(tolerance, (None, pd.DataFrame()))
-                if t is None or min(len(examples), market_etkin_ornek(t, t.get("ana_label"))) + 1e-6 < int(min_ornek):
+                if t is None or len(examples) < int(min_ornek):
                     continue
                 record = backtest_kaydi(row, target, t)
                 if record is not None:
@@ -7877,8 +7878,7 @@ def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_li
             continue
         weights, _, _ = analiz_agirliklari(b, mac_row, tol)
         effective = etkin_ornek(weights)
-        if effective + 1e-6 < gerekli:
-            continue
+        # Gerçek maç sayısı yukarıda denetlendi; etkin sayı yalnızca güveni dengeler.
         vc = weights.groupby(b["FTR"]).sum() / weights.sum()
         vc = pd.Series({side: tabana_yaklastir(float(vc.get(side, 0)), effective, 1/3)
                         for side in ("H", "D", "A")})
@@ -10055,14 +10055,14 @@ if analiz_btn:
                     _sayac_t_none += 1
                     continue
 
-                # Minimum Örnek Sayısı ana maç analizinde de kesin olarak uygulanır.
+                # Minimum Örnek Sayısı gerçek benzer maç sayısına uygulanır.
                 # Manuel hassasiyet hesapla() içinde aday havuzu oluşsa bile, seçilen
                 # minimumun altında kalan maçlar sonuç listesine/kuponlara giremez.
                 try:
                     gercek_ornek = len(b_det) if b_det is not None else 0
                 except Exception:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
-                if (not _sonuc_reset_genis_tarama) and min(gercek_ornek, market_etkin_ornek(t, t.get("ana_label"))) + 1e-6 < max(1, int(min_ornek or 1)):
+                if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
                     _sayac_ornek += 1
                     continue
 
