@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.8"
+MODEL_VERSION = "2026.09.10.9"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -8298,6 +8298,26 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
+            # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
+            # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
+            gosterim_secenekleri = [n for n in (8, 16, 32, 64) if n <= kolon_sayisi]
+            if kolon_sayisi not in gosterim_secenekleri:
+                gosterim_secenekleri.append(kolon_sayisi)
+            gosterim_secenekleri = sorted(set(gosterim_secenekleri))
+            varsayilan_gosterim = 32 if 32 in gosterim_secenekleri else gosterim_secenekleri[-1]
+            gosterilecek_kolon = st.selectbox(
+                "Gösterilecek en iyi kolon",
+                options=gosterim_secenekleri,
+                index=gosterim_secenekleri.index(varsayilan_gosterim),
+                format_func=lambda n: f"En iyi {n} kolon",
+                key="spor_toto_gosterilecek_kolon",
+                help="Model kolonları kalite sırasına dizer. Örneğin 8 seçersen üretilen havuzdaki en iyi ilk 8 kolon gösterilir.",
+            )
+            st.caption(
+                f"Model toplam {kolon_sayisi} kolon üretti · Şu anda kalite sırasındaki "
+                f"en iyi {gosterilecek_kolon} kolon gösteriliyor."
+            )
+
             gor = []
             for r in _st_sonuclar:
                 if not str(r.get('durum', '')).startswith('Tamam'):
@@ -8308,7 +8328,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     '#': r['no'], 'Maç': f"{r['ev']} - {r['dep']}",
                     'Dağılım': dag_txt,
                 }
-                for k in range(1, kolon_sayisi + 1):
+                for k in range(1, int(gosterilecek_kolon) + 1):
                     satir[f'{k}. Kolon'] = kolonlar[k].get(r['no'], '—')
                 gor.append(satir)
             st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
