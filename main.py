@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.09.7"
+MODEL_VERSION = "2026.09.09.8"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -8094,13 +8094,6 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
         tamam = [r for r in _st_sonuclar if str(r.get('durum', '')).startswith('Tamam')]
         if tamam:
             st.markdown("#### Kolon önerileri")
-            st.caption("1. kolon ana model tahminidir. 2–4. kolonlarda alternatif yalnızca gerçek 1/X/2 dağılımında ana sonuca yeterince yakınsa kullanılır; X yapay olarak eklenmez.")
-
-            kolonlar = {1: {}, 2: {}, 3: {}, 4: {}}
-            for r in tamam:
-                sec = str(r.get('secim', ''))
-                for k in kolonlar:
-                    kolonlar[k][r['no']] = sec
 
             def _st_alternatifler(r):
                 dag = r.get('spor_toto_dagilim') or {}
@@ -8115,9 +8108,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                         continue
                     p = float(dag.get(taraf, 0) or 0)
                     fark = ana_p - p
-                    # Normal/fallback taramada %25+ ve en fazla 12 puan gerideyse
-                    # gerçek alternatif kabul et. En-yakın-oran fallback daha zayıf
-                    # veri olduğundan biraz daha sıkı eşik kullanır.
+                    # Gerçek dağılımda ana seçime yeterince yakın alternatifler.
                     if faz == 'en yakın oran fallback':
                         uygun = p >= 28.0 and fark <= 10.0
                     else:
@@ -8126,8 +8117,39 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                         adaylar.append((taraf, p, fark))
                 return sorted(adaylar, key=lambda x: (x[1], -x[2]), reverse=True)
 
-            # Belirsizliği en yüksek maçlar önce çeşitlendirilir. Böylece dört kolon
-            # arasında değişiklik sayısı sınırlı kalır ve net favorilere dokunulmaz.
+            # Önce kuponun ne kadar belirsiz olduğunu ölç.
+            guvenler = [float(r.get('guven', 0) or 0) for r in tamam]
+            ort_guven = sum(guvenler) / len(guvenler) if guvenler else 0.0
+            alternatifli_mac = sum(1 for r in tamam if _st_alternatifler(r))
+            fallback_mac = sum(
+                1 for r in tamam
+                if str(r.get('spor_toto_faz', 'standart')) != 'standart'
+            )
+            dusuk_guvenli_mac = sum(1 for g in guvenler if g < 55.0)
+
+            # Model kendine daha az güveniyorsa daha fazla kolon üret.
+            kolon_sayisi = 4
+            if ort_guven < 62.0 or alternatifli_mac >= 3 or fallback_mac >= 1:
+                kolon_sayisi = 6
+            if ort_guven < 56.0 or alternatifli_mac >= 5 or fallback_mac >= 2 or dusuk_guvenli_mac >= 4:
+                kolon_sayisi = 8
+            if ort_guven < 51.0 or alternatifli_mac >= 7 or fallback_mac >= 4 or dusuk_guvenli_mac >= 7:
+                kolon_sayisi = 10
+
+            st.caption(
+                f"Model güvenine göre otomatik {kolon_sayisi} kolon üretildi. "
+                f"Ortalama güven %{ort_guven:.1f} · alternatifli maç {alternatifli_mac} · "
+                f"fallback maç {fallback_mac}. 1. kolon ana model tahminidir; diğer kolonlar "
+                "yalnızca gerçek 1/X/2 dağılımından türetilir."
+            )
+
+            kolonlar = {k: {} for k in range(1, kolon_sayisi + 1)}
+            for r in tamam:
+                sec = str(r.get('secim', ''))
+                for k in kolonlar:
+                    kolonlar[k][r['no']] = sec
+
+            # Belirsizliği en yüksek maçlar önce çeşitlendirilir.
             cesit_adaylari = []
             for r in tamam:
                 dag = r.get('spor_toto_dagilim') or {}
@@ -8137,20 +8159,28 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 ana = str(r.get('secim', ''))
                 ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
                 top_alt = alts[0][1]
-                # Küçük fark = yüksek belirsizlik; fallback kalite cezası alır.
                 kalite_cezasi = 4.0 if str(r.get('spor_toto_faz')) == 'en yakın oran fallback' else 0.0
                 belirsizlik = 100.0 - (ana_p - top_alt) - kalite_cezasi
                 cesit_adaylari.append((belirsizlik, r, alts))
             cesit_adaylari.sort(key=lambda x: x[0], reverse=True)
 
-            # En fazla 6 maçta alternatif kullan; her alternatif gerçek dağılımdan gelir.
-            for idx, (_, r, alts) in enumerate(cesit_adaylari[:6]):
-                ana_kolon = 2 + (idx % 3)
+            # Kolon sayısı arttıkça daha fazla belirsiz maçı gerçek alternatiflerle yay.
+            varyasyon_kolonlari = max(1, kolon_sayisi - 1)
+            max_cesit_mac = min(len(cesit_adaylari), max(6, varyasyon_kolonlari * 2))
+            for idx, (_, r, alts) in enumerate(cesit_adaylari[:max_cesit_mac]):
+                ana_kolon = 2 + (idx % varyasyon_kolonlari)
                 kolonlar[ana_kolon][r['no']] = alts[0][0]
-                # İkinci alternatif de ana sonuca çok yakınsa başka bir kolona yay.
+
+                # Çok yakın ikinci alternatif varsa farklı bir kolona da dağıt.
                 if len(alts) > 1 and alts[1][1] >= 27.0 and alts[1][2] <= 8.0:
-                    ikinci_kolon = 2 + ((idx + 1) % 3)
+                    ikinci_kolon = 2 + ((idx + 1) % varyasyon_kolonlari)
                     kolonlar[ikinci_kolon][r['no']] = alts[1][0]
+
+                # Güven düşükse aynı gerçek alternatifi ikinci bir kolonda da kapsa.
+                ana_p = float((r.get('spor_toto_dagilim') or {}).get(str(r.get('secim', '')), r.get('guven', 0)) or 0)
+                if ana_p < 55.0 and kolon_sayisi >= 6:
+                    ekstra_kolon = 2 + ((idx + 2) % varyasyon_kolonlari)
+                    kolonlar[ekstra_kolon][r['no']] = alts[0][0]
 
             gor = []
             for r in _st_sonuclar:
@@ -8158,14 +8188,13 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     continue
                 dag = r.get('spor_toto_dagilim') or {}
                 dag_txt = (f"1 %{float(dag.get('1',0)):.1f} · X %{float(dag.get('X',0)):.1f} · 2 %{float(dag.get('2',0)):.1f}" if dag else '—')
-                gor.append({
+                satir = {
                     '#': r['no'], 'Maç': f"{r['ev']} - {r['dep']}",
                     'Dağılım': dag_txt,
-                    '1. Kolon': kolonlar[1].get(r['no'],'—'),
-                    '2. Kolon': kolonlar[2].get(r['no'],'—'),
-                    '3. Kolon': kolonlar[3].get(r['no'],'—'),
-                    '4. Kolon': kolonlar[4].get(r['no'],'—'),
-                })
+                }
+                for k in range(1, kolon_sayisi + 1):
+                    satir[f'{k}. Kolon'] = kolonlar[k].get(r['no'], '—')
+                gor.append(satir)
             st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
