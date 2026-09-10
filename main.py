@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.11"
+MODEL_VERSION = "2026.09.10.9"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -3666,8 +3666,6 @@ def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
     coupon_item["hassasiyet"] = hassasiyet_oku(t.get("kullanilan_tolerans"))
     coupon_item["model_version"] = MODEL_VERSION
     coupon_item = kupon_secimlerini_tamamla([coupon_item])[0]
-    # Seçim anındaki tahmin/oran/güven snapshot'ını Sonuç Takibi için bir kez kilitle.
-    kilitli_tahmini_kaydet(m, t, tahmin, guven, oran=oran, oran_tahmini=oran_tahmini)
     st.session_state.kupona.append(coupon_item)
     st.session_state.coupon_popup_open = True
     st.session_state.scroll_to_coupon = True
@@ -5418,97 +5416,83 @@ def tahmin_loguna_baglam_yaz(m, label, baglam):
 
 
 def analiz_tahminlerini_kaydet(final):
-    """Her maç için İlk Tahmin'i bir kez saklar, Kapanış Tahmini'ni son maç önü analizle günceller.
-
-    İlk Tahmin: maç uygulamada ilk kez başarılı analiz edildiğinde sabitlenir.
-    Kapanış Tahmini: maç başlamadan önce yapılan en son başarılı analizin snapshot'ıdır.
-    Uygulama maç öncesi tekrar çalıştırıldıkça kapanış alanı güncellenir; kickoff sonrası değişmez.
-    """
+    """Maç öncesi tahmini atomik kaydeder; başlangıçtan sonra bütün tahmin alanları kilitlidir."""
     def update(kayitlar):
         kayitlar = tahmin_kayitlarini_tekillestir(kayitlar)
-        mevcut = {tahmin_kaydi_mac_anahtari(x): dict(x) for x in kayitlar}
-        simdi_iso = kayit_zamani_iso()
+        mevcut = {tahmin_kaydi_mac_anahtari(x): x for x in kayitlar}
         for item in final:
             m, t = item.get("m", {}), item.get("t", {})
             label = str(t.get("ana_label", "")).strip()
-            if not label or label in {"Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"}:
+            if not label or label in ["Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"]:
                 continue
             if not mac_baslamadi_mi(m.get("zaman")):
                 continue
             zaman = m.get("zaman")
             zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman)
             mac_anahtari = str(m.get("match_id") or mac_key(m))
-            eski = mevcut.get(mac_anahtari)
-            if eski and eski.get("durum") == "Tamamlandı":
+            eski = mevcut.get(mac_anahtari, {})
+            if eski.get("durum") == "Tamamlandı":
                 continue
-            try:
-                ana_oran = float(t.get("ana_odd")) if t.get("ana_odd") is not None else None
-            except Exception:
-                ana_oran = None
-            ortak = {
+            aday = {
                 "kayit_id": mac_anahtari,
                 "match_id": str(m.get("match_id", "")),
-                **oran_kayit_bilgisi(m),
-                "sport_key": str(m.get("sport_key", "")), "lig": str(m.get("lig", "")),
-                "zaman": zaman_iso, "ev": str(m.get("ev", "")), "dep": str(m.get("dep", "")),
+                **oran_kayit_bilgisi(m), "sport_key": str(m.get("sport_key", "")),
+                "lig": str(m.get("lig", "")),
+                "zaman": zaman_iso,
+                "ev": str(m.get("ev", "")),
+                "dep": str(m.get("dep", "")),
                 "h": float(m.get("h")) if m.get("h") is not None else None,
                 "b": float(m.get("b")) if m.get("b") is not None else None,
                 "a": float(m.get("a")) if m.get("a") is not None else None,
+                "tahmin": label,
+                "guven": int(t.get("ana_p", 0)),
+                "alternatif_tahmin": str(t.get("alt_label", "") or ""),
+                "alternatif_guven": int(t.get("alt_p", 0) or 0),
+                "alternatif_ornek": int(t.get("alt_ornek", 0) or 0),
+                "alternatif_puan": float(t.get("alt_puan", 0) or 0),
+                "alternatif_kararlilik": int(t.get("alt_kararlilik", 0) or 0),
+                "alternatif_hassasiyetler": list(t.get("alt_hassasiyetler", []) or []),
+                "ornek": int(t.get("ornek", 0) or 0),
+                "ana_ornek_medyan": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
+                "ana_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
+                "ana_kararlilik": int(t.get("stability_count", 0) or 0),
+                "ana_hassasiyetler": list(t.get("stability_tols", []) or []),
+                "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
+                "oran": float(t.get("ana_odd")) if t.get("ana_odd") is not None else None,
+                "alternatif_oran": (
+                    float(market_label_to_odd(m, t.get("alt_label")))
+                    if t.get("alt_label") and market_label_to_odd(m, t.get("alt_label")) is not None
+                    else None
+                ),
+                "kaydedildi": kayit_zamani_iso(),
+                "ilk_kayit_zamani": eski.get("ilk_kayit_zamani", eski.get("kaydedildi", kayit_zamani_iso())),
                 "model_version": MODEL_VERSION,
+                "durum": eski.get("durum", "Bekliyor"),
+                "ev_gol": eski.get("ev_gol"),
+                "dep_gol": eski.get("dep_gol"),
+                "iy_ev_gol": eski.get("iy_ev_gol"), "iy_dep_gol": eski.get("iy_dep_gol"),
+                "tuttu": eski.get("tuttu"),
+                "alternatif_tuttu": eski.get("alternatif_tuttu"),
+                "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
+                "detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
             }
-            if not eski:
-                # İlk başarılı analiz hem İlk hem de o an için Kapanış snapshot'ıdır.
-                kayit = {
-                    **ortak,
-                    "tahmin": label, "guven": int(t.get("ana_p", 0) or 0), "oran": ana_oran,
-                    "ilk_kayit_zamani": simdi_iso, "kaydedildi": simdi_iso,
-                    "alternatif_tahmin": label, "alternatif_guven": int(t.get("ana_p", 0) or 0),
-                    "alternatif_oran": ana_oran, "kapanis_kayit_zamani": simdi_iso,
-                    "ornek": int(t.get("ornek", 0) or 0),
-                    "ana_ornek_medyan": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
-                    "ana_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
-                    "ana_kararlilik": int(t.get("stability_count", 0) or 0),
-                    "ana_hassasiyetler": list(t.get("stability_tols", []) or []),
-                    "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
-                    "alternatif_ornek": int(t.get("ornek", 0) or 0),
-                    "alternatif_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
-                    "alternatif_kararlilik": int(t.get("stability_count", 0) or 0),
-                    "alternatif_hassasiyetler": list(t.get("stability_tols", []) or []),
-                    "durum": "Bekliyor", "ev_gol": None, "dep_gol": None,
-                    "iy_ev_gol": None, "iy_dep_gol": None, "tuttu": None,
-                    "alternatif_tuttu": None, "sonuc_guncelleme": None,
-                    "detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
-                    "kapanis_detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
-                    "takip_tipi": "ilk_kapanis",
-                }
+            if not eski or _tahmin_kaydi_sirasi(aday) > _tahmin_kaydi_sirasi(eski):
+                aday["degisiklikler"] = list(eski.get("degisiklikler", []))
+                if eski:
+                    aday["degisiklikler"].append({"tahmin": eski.get("tahmin"), "guven": eski.get("guven"), "kaydedildi": eski.get("kaydedildi")})
+                    aday["degisiklikler"] = aday["degisiklikler"][-20:]
+                secilen = aday
             else:
-                # İlk tahmin alanlarına dokunma; yalnızca son maç önü (kapanış) snapshot'ını yenile.
-                kayit = dict(eski)
-                kayit.update(ortak)
-                kayit.update({
-                    "alternatif_tahmin": label,
-                    "alternatif_guven": int(t.get("ana_p", 0) or 0),
-                    "alternatif_oran": ana_oran,
-                    "alternatif_ornek": int(t.get("ornek", 0) or 0),
-                    "alternatif_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
-                    "alternatif_kararlilik": int(t.get("stability_count", 0) or 0),
-                    "alternatif_hassasiyetler": list(t.get("stability_tols", []) or []),
-                    "kapanis_kayit_zamani": simdi_iso,
-                    "kapanis_detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
-                    "kaydedildi": simdi_iso,
-                    "takip_tipi": "ilk_kapanis",
-                })
-                # Sonuç henüz yokken önceki hesaplanmış durumları temiz tut.
-                if kayit.get("durum") != "Tamamlandı":
-                    kayit["alternatif_tuttu"] = None
-            mevcut[mac_anahtari] = kayit
-        return list(mevcut.values())
+                secilen = dict(eski)
+            alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
+                secilen.get("tahmin"), [eski, aday]
+            )
+            secilen["alternatif_tahmin"] = alt_etiket
+            secilen["alternatif_guven"] = alt_guven
+            secilen["alternatif_oran"] = alt_oran
+            mevcut[mac_anahtari] = secilen
+        return tahmin_kayitlarini_tekillestir(list(mevcut.values()))
     return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
-
-
-def kilitli_tahmini_kaydet(m, t, label, guven, oran=None, oran_tahmini=False):
-    """+Kupon yalnız kupon işlemini yapar; İlk/Kapanış Sonuç Takibi kayıtlarına dokunmaz."""
-    return True
 
 
 def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol, iy_ev_gol=None, iy_dep_gol=None):
@@ -9543,12 +9527,12 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         </style>
         <div class="result-track-header" style="background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px">
           <div style="font-size:1.55rem;font-weight:900">📋 Sonuç Takibi</div>
-          <div style="font-size:.90rem;margin-top:7px">İlk Tahmin ile maç öncesindeki en son (Kapanış) Tahmini yan yana karşılaştırır.</div>
+          <div style="font-size:.90rem;margin-top:7px">Maç analizinde kaydedilen ana tahminleri ve gerçekleşen sonuçları gösterir.</div>
         </div>
         """, unsafe_allow_html=True,
     )
     yenile = sonuc_yenile_btn
-    st.caption("İlk Tahmin ilk başarılı analizde sabitlenir. Kapanış Tahmini maç başlamadan önce yaptığın son başarılı analizle güncellenir ve kickoff sonrası kilitlenir. Skor servisi son üç günü getirir.")
+    st.caption("Skor servisi son üç günü getirir; sonuçları en az üç günde bir üstteki SONUÇLARI YENİLE düğmesiyle kontrol et.")
 
     reset_sol, reset_sag = st.columns([3, 1])
     with reset_sag:
@@ -9556,7 +9540,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             "🗑️ SONUÇ TAKİBİNİ SIFIRLA",
             use_container_width=True,
             key="sonuc_takibini_sifirla_btn",
-            help="İlk/Kapanış Sonuç Takibi kayıtlarını temizler. Sonraki başarılı analizler yeni kayıtları yeniden oluşturur.",
+            help="Eski Sonuç Takibi kayıtlarını temizler ve mevcut ayarlarla analizi yeni kod üzerinden yeniden çalıştırır.",
         ):
             if sonuc_takibini_sifirla():
                 # Eski analiz çıktıları yeni Sonuç Takibi'ne tekrar yazılmasın.
@@ -9568,9 +9552,18 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 ):
                     st.session_state.pop(_key, None)
 
-                # API key, analiz ayarları ve kupon geçmişi korunur.
-                # Sonuç Takibi yalnızca bundan sonra + Kupon ile seçilen tahminlerle dolar.
-                st.success("Sonuç Takibi sıfırlandı. Sonraki başarılı analizde İlk/Kapanış kayıtları yeniden oluşturulacak.")
+                # API key, lig/tarih/sezon seçimleri ve kupon geçmişi korunur.
+                # Bir sonraki rerun'da Maç Analizi'ne geçip ANALİZİ BAŞLAT akışını
+                # otomatik tetikle.
+                st.session_state["sonuc_reset_hedef_mac_analizi"] = True
+                st.session_state["sonuc_reset_otomatik_analiz"] = True
+                # Reset sonrası Sonuç Takibi tek manuel hassasiyetle değil,
+                # 0.00–0.10 birleşik hassasiyet taramasıyla yeniden üretilir.
+                st.session_state["sonuc_reset_genis_tarama"] = True
+                st.session_state["sonuc_reset_bilgi"] = (
+                    "Sonuç Takibi sıfırlandı. 0.00–0.10 birleşik hassasiyet taramasıyla "
+                    "tahminler yeni kod üzerinden yeniden oluşturuluyor."
+                )
                 st.rerun()
             else:
                 st.error("Sonuç Takibi sıfırlanamadı. JSON dosyasına yazma iznini kontrol et.")
@@ -9588,7 +9581,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
 
     takip = tahmin_logunu_oku()
     if not takip:
-        st.info("Henüz İlk/Kapanış kaydı yok. Maç Analizi çalıştırdığında kayıtlar otomatik oluşur.")
+        st.info("Henüz kayıt yok. Maç Analizi çalıştırıldığında ana tahminler otomatik kaydedilir.")
     else:
         df = pd.DataFrame(takip)
         df["zaman_dt"] = pd.to_datetime(df["zaman"], errors="coerce").dt.tz_localize(None)
@@ -9701,7 +9694,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 lambda x: "⏳ Bekliyor" if pd.isna(x.get("tuttu")) else "✅ Tuttu" if bool(x.get("tuttu")) else "❌ Tutmadı",
                 axis=1,
             )
-            liste["Kapanış Durumu"] = liste.apply(
+            liste["Alternatif Durumu"] = liste.apply(
                 lambda x: "—" if pd.isna(x.get("alternatif_tahmin")) or not str(x.get("alternatif_tahmin", "")).strip()
                 else "⏳ Bekliyor" if pd.isna(x.get("alternatif_tuttu"))
                 else "✅ Tuttu" if bool(x.get("alternatif_tuttu")) else "❌ Tutmadı",
@@ -9714,15 +9707,12 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             liste["Bağlam"] = pd.to_numeric(liste["baglam_ayari"], errors="coerce").map(
                 lambda x: f"{x:+.1f}" if pd.notna(x) else "—"
             )
-            liste["Kararlılık"] = liste.apply(
-                lambda x: "🟢 Kararlı" if str(x.get("tahmin", "")) == str(x.get("alternatif_tahmin", "")) else "🟡 Değişti", axis=1
-            )
             goster = liste[[
-                "Tarih", "lig", "Maç", "tahmin", "guven", "alternatif_tahmin", "alternatif_guven", "Kararlılık", "Sonuç", "Durum",
-                "Kapanış Durumu",
+                "Tarih", "lig", "Maç", "tahmin", "guven", "Bağlam", "Sonuç", "Durum",
+                "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
             ]].rename(columns={
-                "lig":"Lig", "tahmin":"İlk Tahmin", "guven":"İlk Güven %",
-                "alternatif_tahmin":"Kapanış Tahmini", "alternatif_guven":"Kapanış Güven %", "Durum":"İlk Durum",
+                "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %",
+                "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
             })
             st.markdown("#### Kaydedilen tahminler")
             st.dataframe(goster, use_container_width=True, hide_index=True)
@@ -10136,8 +10126,6 @@ if analiz_btn:
             "oynanabilir_esik": int(oynanabilir_esik or 0),
             "tolerans": float(TOLERANS or 0.0),
         }
-        # Sonuç Takibi: İlk Tahmin bir kez sabitlenir; Kapanış Tahmini her maç önü analizde yenilenir.
-        # Kickoff sonrasında analiz_tahminlerini_kaydet kayıtları değiştirmez.
         analiz_tahminlerini_kaydet(final)
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
