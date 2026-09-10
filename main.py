@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.6"
+MODEL_VERSION = "2026.09.10.5"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -8139,156 +8139,151 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                         adaylar.append((taraf, p, fark, yakinlik))
                 return sorted(adaylar, key=lambda x: (x[3], x[1], -x[2]), reverse=True)
 
-            # 10.7 Spor Toto akıllı sistem mantığı:
-            # Sabit 4/6/8/10 kolon hedefi yok. Bunun yerine model önce tüm gerçek
-            # 1/X/2 alternatiflerini aday olarak çıkarır, sonra kolon maliyetini de
-            # hesaba katarak en verimli kapsamaları seçer. Kullanıcı isterse bütçeyi
-            # büyütebilir; böylece 5832 gibi gereksiz pahalı tam sistemler oluşmaz.
+            # Önce kuponun ne kadar belirsiz olduğunu ölç.
             guvenler = [float(r.get('guven', 0) or 0) for r in tamam]
             ort_guven = sum(guvenler) / len(guvenler) if guvenler else 0.0
+            alternatifli_mac = sum(1 for r in tamam if _st_alternatifler(r, 0))
             fallback_mac = sum(
                 1 for r in tamam
                 if str(r.get('spor_toto_faz', 'standart')) != 'standart'
             )
+            dusuk_guvenli_mac = sum(1 for g in guvenler if g < 55.0)
 
-            # Otomatik bütçe model belirsizliğine göre büyür; sabit kolon sayısı değildir.
-            # Kullanıcı dilerse daha geniş veya daha dar kapsamayı seçebilir.
-            if ort_guven >= 62:
-                otomatik_butce = 16
-            elif ort_guven >= 56:
-                otomatik_butce = 32
-            elif ort_guven >= 50:
-                otomatik_butce = 64
-            else:
-                otomatik_butce = 128
-            if fallback_mac >= 3:
-                otomatik_butce = min(256, otomatik_butce * 2)
+            # Model kendine daha az güveniyorsa daha fazla kolon üret.
+            kolon_sayisi = 4
+            if ort_guven < 62.0 or alternatifli_mac >= 3 or fallback_mac >= 1:
+                kolon_sayisi = 6
+            if ort_guven < 56.0 or alternatifli_mac >= 5 or fallback_mac >= 2 or dusuk_guvenli_mac >= 4:
+                kolon_sayisi = 8
+            if ort_guven < 51.0 or alternatifli_mac >= 7 or fallback_mac >= 4 or dusuk_guvenli_mac >= 7:
+                kolon_sayisi = 10
 
-            butce_secenekleri = ['Otomatik', 8, 16, 32, 64, 128, 256, 512]
-            butce_secimi = st.selectbox(
-                'Sistem kolon bütçesi',
-                butce_secenekleri,
-                index=0,
-                key='spor_toto_sistem_butcesi',
-                help=('Otomatik: model güvenine göre maliyet/kapsama dengesi kurar. '
-                      'Sayı seçersen sistem bu kolon adedini geçmeden en değerli çifte/üçlü kapsamaları seçer.'),
+            st.caption(
+                f"Model güvenine göre otomatik {kolon_sayisi} kolon üretildi. "
+                f"Ortalama güven %{ort_guven:.1f} · alternatifli maç {alternatifli_mac} · "
+                f"fallback maç {fallback_mac}. 1. kolon ana model tahminidir; diğer kolonlar "
+                "yalnızca gerçek 1/X/2 dağılımından türetilir. Kolon sayısı arttıkça "
+                "alternatif eşiği kontrollü biçimde gevşer; X yapay olarak eklenmez."
             )
-            kolon_butcesi = otomatik_butce if butce_secimi == 'Otomatik' else int(butce_secimi)
 
+            hedef_kolon_sayisi = kolon_sayisi
+
+            # Kolon sayısı yükseldikçe alternatif eşiğini kontrollü gevşet.
+            alt_gevseklik = 0 if hedef_kolon_sayisi <= 4 else (1 if hedef_kolon_sayisi <= 6 else 2)
+
+            # Her maç için yalnızca modelin gerçek dağılımla desteklediği seçenekleri hazırla.
+            # Ana seçim her zaman seçenek havuzunda kalır.
             mac_nolari = [r['no'] for r in tamam]
-            aday_havuz = []
-            secili_taraflar = {}
-
+            secenek_havuzu = []
+            ana_imza = []
             for r in tamam:
                 dag = r.get('spor_toto_dagilim') or {}
                 ana = str(r.get('secim', ''))
                 ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
+                ana_imza.append(ana)
 
-                # Tüm makul alternatifleri aday olarak tut; fakat hemen 1X2 yapma.
-                # Maliyet/kapsama optimizasyonu aşağıda hangi alternatiflerin gerçekten
-                # sisteme alınacağına karar verir.
                 secenekler = [(ana, max(ana_p, 0.1))]
-                for taraf, p, fark, yakinlik in _st_alternatifler(r, 2):
+                for taraf, p, fark, yakinlik in _st_alternatifler(r, alt_gevseklik):
                     if taraf != ana:
                         secenekler.append((taraf, max(float(p), 0.1)))
 
+                # Aynı taraf yanlışlıkla iki kez gelirse en yüksek olasılığı koru.
                 tekil = {}
                 for taraf, p in secenekler:
                     tekil[taraf] = max(float(p), float(tekil.get(taraf, 0.0)))
-                secenekler = sorted(tekil.items(), key=lambda x: x[1], reverse=True)
-                aday_havuz.append((r, secenekler))
-                secili_taraflar[r['no']] = [secenekler[0]]
+                secenek_havuzu.append((r['no'], list(tekil.items())))
 
-            def _kolon_adedi():
-                toplam = 1
-                for r, _ in aday_havuz:
-                    toplam *= max(1, len(secili_taraflar[r['no']]))
-                return int(toplam)
+            ana_imza = tuple(ana_imza)
 
-            # Her adımda, sisteme eklenecek sıradaki seçeneğin sağladığı olasılık
-            # kazancını oluşturduğu ek kolon maliyetine böleriz. Bu sayede önce
-            # gerçekten değerli çifte şanslar gelir; 1X2 ancak üçüncü sonuç da güçlü
-            # ve kalan bütçeye değiyorsa oluşur.
-            while True:
-                mevcut_kolon = _kolon_adedi()
-                en_iyi = None
-                for r, secenekler in aday_havuz:
-                    no = r['no']
-                    secili = secili_taraflar[no]
-                    k = len(secili)
-                    if k >= len(secenekler):
-                        continue
+            # Beam-search: geçerli alternatiflerden olasılığı yüksek kombinasyonları üret.
+            # Böylece kolonlar modulo ile rastgele dağılmak yerine birlikte anlamlı senaryolar olur.
+            # Skor log-olasılık; alternatif sayısı 4 ile sınırlandırılarak aşırı "uç" kolonlar engellenir.
+            beam = [(0.0, tuple(), 0)]
+            BEAM_LIMIT = 500
+            MAX_DEGISIKLIK = 4
 
-                    taraf, p = secenekler[k]
-                    yeni_kolon = int(mevcut_kolon * (k + 1) / k)
-                    if yeni_kolon > kolon_butcesi:
-                        continue
+            for idx, (mac_no, secenekler) in enumerate(secenek_havuzu):
+                ana = ana_imza[idx]
+                yeni_beam = []
+                for skor, imza, degisim in beam:
+                    for taraf, p in secenekler:
+                        yeni_degisim = degisim + (1 if taraf != ana else 0)
+                        if yeni_degisim > MAX_DEGISIKLIK:
+                            continue
+                        yeni_skor = skor + __import__('math').log(max(float(p), 0.1) / 100.0)
+                        yeni_beam.append((yeni_skor, imza + (taraf,), yeni_degisim))
 
-                    ana_p = float(secenekler[0][1])
-                    fark = max(0.0, ana_p - float(p))
-                    # Yakın sonuçlar daha değerli; fallback veride biraz daha ihtiyatlı ol.
-                    yakinlik = max(0.15, 1.0 - fark / 30.0)
-                    kalite = 0.88 if str(r.get('spor_toto_faz', 'standart')) != 'standart' else 1.0
-                    ek_kolon = max(1, yeni_kolon - mevcut_kolon)
-                    marjinal_deger = float(p) * yakinlik * kalite / ek_kolon
+                # Aynı kısmi imzayı tekilleştir ve en yüksek skorlu adayları koru.
+                tekil_beam = {}
+                for skor, imza, degisim in yeni_beam:
+                    onceki = tekil_beam.get(imza)
+                    if onceki is None or skor > onceki[0]:
+                        tekil_beam[imza] = (skor, imza, degisim)
+                beam = sorted(
+                    tekil_beam.values(),
+                    key=lambda x: (x[0], -x[2]),
+                    reverse=True
+                )[:BEAM_LIMIT]
 
-                    aday = (marjinal_deger, float(p), -fark, no, taraf, yeni_kolon)
-                    if en_iyi is None or aday > en_iyi:
-                        en_iyi = aday
-
-                if en_iyi is None:
-                    break
-                _, p, _, no, taraf, _ = en_iyi
-                secili_taraflar[no].append((taraf, p))
-
-            def _sistem_etiketi(secenekler):
-                taraflar = {str(x[0]) for x in secenekler}
-                if taraflar == {'1', 'X'}:
-                    return '1X'
-                if taraflar == {'X', '2'}:
-                    return 'X2'
-                if taraflar == {'1', '2'}:
-                    return '12'
-                if taraflar == {'1', 'X', '2'}:
-                    return '1X2'
-                return next(iter(taraflar), '—')
-
-            secenek_havuzu = []
-            sistem_ozeti = []
-            for r, tum_secenekler in aday_havuz:
-                secenekler = secili_taraflar[r['no']]
-                secenek_havuzu.append((r['no'], secenekler))
-                disarida = [x for x in tum_secenekler if x[0] not in {y[0] for y in secenekler}]
-                sistem_ozeti.append({
-                    '#': r['no'],
-                    'Maç': f"{r['ev']} - {r['dep']}",
-                    'Sistem': _sistem_etiketi(secenekler),
-                    'Seçenekler': ' / '.join(f"{taraf} %{p:.1f}" for taraf, p in secenekler),
-                    'Dışarıda': ' / '.join(f"{taraf} %{p:.1f}" for taraf, p in disarida) if disarida else '—',
-                    'Seçenek adedi': len(secenekler),
+            # Ana kolon her zaman 1. kolon.
+            adaylar = []
+            for skor, imza, degisim in beam:
+                if imza == ana_imza:
+                    continue
+                # İlk tercih: ana kolondan en az 2 maç farklı olsun.
+                # Böylece yalnız tek maçı değişen düşük-verimli kolonlar sona kalır.
+                adaylar.append({
+                    'skor': float(skor),
+                    'imza': imza,
+                    'degisim': int(degisim),
                 })
 
-            kolon_sayisi = _kolon_adedi()
-            cift_sans_mac = sum(1 for _, s in secenek_havuzu if len(s) == 2)
-            tam_kapsama_mac = sum(1 for _, s in secenek_havuzu if len(s) == 3)
+            secilen_imzalar = [ana_imza]
+
+            def _hamming(a, b):
+                return sum(1 for x, y in zip(a, b) if x != y)
+
+            def _aday_degeri(aday):
+                # Olasılık ana ölçüt; çeşitlilik ikinci ölçüt.
+                min_mesafe = min(_hamming(aday['imza'], s) for s in secilen_imzalar)
+                # Her ek anlamlı fark küçük bonus alır; çok düşük olasılıklı kolon sırf
+                # farklı diye öne geçmesin diye bonus sınırlıdır.
+                return aday['skor'] + 0.18 * min(min_mesafe, 3) + 0.08 * min(aday['degisim'], 3)
+
+            # Önce ana kolondan >=2 maç farklı, sonra gerekirse tek fark içeren kolonlarla doldur.
+            for min_ana_fark in (2, 1):
+                while len(secilen_imzalar) < hedef_kolon_sayisi:
+                    uygun = [
+                        a for a in adaylar
+                        if a['imza'] not in secilen_imzalar
+                        and _hamming(a['imza'], ana_imza) >= min_ana_fark
+                    ]
+                    if not uygun:
+                        break
+                    en_iyi = max(uygun, key=_aday_degeri)
+                    secilen_imzalar.append(en_iyi['imza'])
+
+                if len(secilen_imzalar) >= hedef_kolon_sayisi:
+                    break
+
+            # Gerçekten üretilebilen benzersiz kolon sayısını kullan.
+            kolonlar = {}
+            for k, imza in enumerate(secilen_imzalar[:hedef_kolon_sayisi], start=1):
+                kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
+            kolon_sayisi = len(kolonlar)
+
+            iki_farkli_sayisi = sum(
+                1 for imza in secilen_imzalar[1:kolon_sayisi]
+                if _hamming(imza, ana_imza) >= 2
+            )
             st.caption(
-                f"Akıllı sistem: {kolon_sayisi} kolon · bütçe {kolon_butcesi} · "
-                f"ortalama güven %{ort_guven:.1f} · çifte şans {cift_sans_mac} maç · "
-                f"1X2 {tam_kapsama_mac} maç · fallback {fallback_mac} maç. "
-                "Alternatifler yalnız olasılık kazancı oluşturduğu ek kolon maliyetine değdiğinde sisteme eklenir."
+                f"{hedef_kolon_sayisi} hedef kolondan {kolon_sayisi} benzersiz kolon üretildi. "
+                f"1. kolon ana modeldir; diğer {max(0, kolon_sayisi-1)} kolonun "
+                f"{iki_farkli_sayisi} tanesi ana kolondan en az 2 maç farklıdır. "
+                "Kolonlar gerçek 1/X/2 dağılımı, olasılık ve birbirinden farklı senaryo "
+                "kapsaması birlikte değerlendirilerek seçilir."
             )
 
-            st.markdown("##### Sistem kuponu")
-            st.dataframe(pd.DataFrame(sistem_ozeti), use_container_width=True, hide_index=True)
-
-            # Artık seçilen sistem zaten maliyet bütçesi içinde kaldığı için kolonları
-            # doğrudan açabiliriz. 512 üstü kullanıcı tarafından seçilemediğinden UI güvenli.
-            kolonlar = {}
-            tum_secimler = [[taraf for taraf, _ in secenekler] for _, secenekler in secenek_havuzu]
-            for k, imza in enumerate(__import__('itertools').product(*tum_secimler), start=1):
-                kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
-
-            st.markdown(f"##### Açılmış kolonlar · {kolon_sayisi}")
             gor = []
             for r in _st_sonuclar:
                 if not str(r.get('durum', '')).startswith('Tamam'):
