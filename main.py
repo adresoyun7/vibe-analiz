@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.9"
+MODEL_VERSION = "2026.09.10.10"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -3666,6 +3666,8 @@ def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
     coupon_item["hassasiyet"] = hassasiyet_oku(t.get("kullanilan_tolerans"))
     coupon_item["model_version"] = MODEL_VERSION
     coupon_item = kupon_secimlerini_tamamla([coupon_item])[0]
+    # Seçim anındaki tahmin/oran/güven snapshot'ını Sonuç Takibi için bir kez kilitle.
+    kilitli_tahmini_kaydet(m, t, tahmin, guven, oran=oran, oran_tahmini=oran_tahmini)
     st.session_state.kupona.append(coupon_item)
     st.session_state.coupon_popup_open = True
     st.session_state.scroll_to_coupon = True
@@ -5494,6 +5496,90 @@ def analiz_tahminlerini_kaydet(final):
         return tahmin_kayitlarini_tekillestir(list(mevcut.values()))
     return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
+
+
+def kilitli_tahmini_kaydet(m, t, label, guven, oran=None, oran_tahmini=False):
+    """+ Kupon ile seçilen tahmini maç başlayana kadar bir kez snapshot olarak kilitler.
+
+    Aynı maç için daha sonra oran/model/tahmin değişse bile bu kayıt üzerine yazılmaz.
+    Sonuç Takibi yalnızca bu kilitli snapshot'ı skorla karşılaştırır.
+    """
+    label = str(label or "").strip()
+    if not label or label in {"Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"}:
+        return False
+    if not mac_baslamadi_mi(m.get("zaman")):
+        return False
+
+    zaman = m.get("zaman")
+    zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman)
+    mac_anahtari = str(m.get("match_id") or mac_key(m))
+    simdi_iso = kayit_zamani_iso()
+
+    def update(kayitlar):
+        kayitlar = tahmin_kayitlarini_tekillestir(kayitlar)
+        mevcut = {tahmin_kaydi_mac_anahtari(x): dict(x) for x in kayitlar}
+        eski = mevcut.get(mac_anahtari)
+
+        # İlk +Kupon seçimi resmî snapshot'tır; daha sonraki analizler/seçimler değiştirmez.
+        if eski and bool(eski.get("kilitli")):
+            return list(mevcut.values())
+        if eski and eski.get("durum") == "Tamamlandı":
+            return list(mevcut.values())
+
+        try:
+            oran_degeri = float(oran) if oran is not None else None
+        except Exception:
+            oran_degeri = None
+
+        kayit = {
+            "kayit_id": mac_anahtari,
+            "match_id": str(m.get("match_id", "")),
+            **oran_kayit_bilgisi(m),
+            "sport_key": str(m.get("sport_key", "")),
+            "lig": str(m.get("lig", "")),
+            "zaman": zaman_iso,
+            "ev": str(m.get("ev", "")),
+            "dep": str(m.get("dep", "")),
+            "h": float(m.get("h")) if m.get("h") is not None else None,
+            "b": float(m.get("b")) if m.get("b") is not None else None,
+            "a": float(m.get("a")) if m.get("a") is not None else None,
+            "tahmin": label,
+            "guven": int(guven or 0),
+            # Sonuç Takibi oynanan/seçilen tahmini ölçer; sonradan alternatif üretmez.
+            "alternatif_tahmin": "",
+            "alternatif_guven": 0,
+            "alternatif_ornek": 0,
+            "alternatif_puan": 0.0,
+            "alternatif_kararlilik": 0,
+            "alternatif_hassasiyetler": [],
+            "ornek": int(t.get("ornek", 0) or 0),
+            "ana_ornek_medyan": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0)) or 0),
+            "ana_puan": float(t.get("birlesik_puan", t.get("score", 0)) or 0),
+            "ana_kararlilik": int(t.get("stability_count", 0) or 0),
+            "ana_hassasiyetler": list(t.get("stability_tols", []) or []),
+            "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
+            "oran": oran_degeri,
+            "oran_tahmini": bool(oran_tahmini),
+            "kaydedildi": simdi_iso,
+            "ilk_kayit_zamani": simdi_iso,
+            "kilitli": True,
+            "kilit_nedeni": "+ Kupon",
+            "kilit_zamani": simdi_iso,
+            "model_version": MODEL_VERSION,
+            "durum": "Bekliyor",
+            "ev_gol": None,
+            "dep_gol": None,
+            "iy_ev_gol": None,
+            "iy_dep_gol": None,
+            "tuttu": None,
+            "alternatif_tuttu": None,
+            "sonuc_guncelleme": None,
+            "detay_snapshot": detay_snapshot_olustur(m, t, pd.DataFrame()),
+        }
+        mevcut[mac_anahtari] = kayit
+        return list(mevcut.values())
+
+    return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
 def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol, iy_ev_gol=None, iy_dep_gol=None):
     def side(home, away):
@@ -9527,12 +9613,12 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         </style>
         <div class="result-track-header" style="background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:15px 18px;margin-bottom:14px">
           <div style="font-size:1.55rem;font-weight:900">📋 Sonuç Takibi</div>
-          <div style="font-size:.90rem;margin-top:7px">Maç analizinde kaydedilen ana tahminleri ve gerçekleşen sonuçları gösterir.</div>
+          <div style="font-size:.90rem;margin-top:7px">+ Kupon ile seçildiği anda kilitlenen tahminleri ve gerçekleşen sonuçları gösterir.</div>
         </div>
         """, unsafe_allow_html=True,
     )
     yenile = sonuc_yenile_btn
-    st.caption("Skor servisi son üç günü getirir; sonuçları en az üç günde bir üstteki SONUÇLARI YENİLE düğmesiyle kontrol et.")
+    st.caption("Tahminler + Kupon anında kilitlenir; oran veya güncel analiz değişse bile geçmiş kayıt değişmez. Skor servisi son üç günü getirir.")
 
     reset_sol, reset_sag = st.columns([3, 1])
     with reset_sag:
@@ -9540,7 +9626,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             "🗑️ SONUÇ TAKİBİNİ SIFIRLA",
             use_container_width=True,
             key="sonuc_takibini_sifirla_btn",
-            help="Eski Sonuç Takibi kayıtlarını temizler ve mevcut ayarlarla analizi yeni kod üzerinden yeniden çalıştırır.",
+            help="Kilitli Sonuç Takibi kayıtlarını temizler. Maç analizi kayıtları otomatik olarak yeniden oluşturmaz.",
         ):
             if sonuc_takibini_sifirla():
                 # Eski analiz çıktıları yeni Sonuç Takibi'ne tekrar yazılmasın.
@@ -9552,18 +9638,9 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 ):
                     st.session_state.pop(_key, None)
 
-                # API key, lig/tarih/sezon seçimleri ve kupon geçmişi korunur.
-                # Bir sonraki rerun'da Maç Analizi'ne geçip ANALİZİ BAŞLAT akışını
-                # otomatik tetikle.
-                st.session_state["sonuc_reset_hedef_mac_analizi"] = True
-                st.session_state["sonuc_reset_otomatik_analiz"] = True
-                # Reset sonrası Sonuç Takibi tek manuel hassasiyetle değil,
-                # 0.00–0.10 birleşik hassasiyet taramasıyla yeniden üretilir.
-                st.session_state["sonuc_reset_genis_tarama"] = True
-                st.session_state["sonuc_reset_bilgi"] = (
-                    "Sonuç Takibi sıfırlandı. 0.00–0.10 birleşik hassasiyet taramasıyla "
-                    "tahminler yeni kod üzerinden yeniden oluşturuluyor."
-                )
+                # API key, analiz ayarları ve kupon geçmişi korunur.
+                # Sonuç Takibi yalnızca bundan sonra + Kupon ile seçilen tahminlerle dolar.
+                st.success("Sonuç Takibi sıfırlandı. Yeni kayıtlar + Kupon ile seçildiği anda kilitlenecek.")
                 st.rerun()
             else:
                 st.error("Sonuç Takibi sıfırlanamadı. JSON dosyasına yazma iznini kontrol et.")
@@ -9581,7 +9658,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
 
     takip = tahmin_logunu_oku()
     if not takip:
-        st.info("Henüz kayıt yok. Maç Analizi çalıştırıldığında ana tahminler otomatik kaydedilir.")
+        st.info("Henüz kilitli kayıt yok. Bir tahmini + Kupon ile seçtiğinde Sonuç Takibi’ne sabitlenir.")
     else:
         df = pd.DataFrame(takip)
         df["zaman_dt"] = pd.to_datetime(df["zaman"], errors="coerce").dt.tz_localize(None)
@@ -10126,7 +10203,8 @@ if analiz_btn:
             "oynanabilir_esik": int(oynanabilir_esik or 0),
             "tolerans": float(TOLERANS or 0.0),
         }
-        analiz_tahminlerini_kaydet(final)
+        # Sonuç Takibi artık analiz çalıştıkça değişmez.
+        # Tahmin yalnızca kullanıcı + Kupon ile seçtiğinde kilitlenir.
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
         # Bu hem manuel hassasiyet mantığını net tutar hem de analizi hızlandırır.
