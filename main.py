@@ -8139,11 +8139,11 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                         adaylar.append((taraf, p, fark, yakinlik))
                 return sorted(adaylar, key=lambda x: (x[3], x[1], -x[2]), reverse=True)
 
-            # 10.6 Spor Toto sistem mantığı:
-            # Sabit 4/6/8/10 kolon hedefi kaldırıldı. Her maç için modelin gerçek
-            # 1/X/2 dağılımıyla desteklediği seçenekler korunur; iki seçenek varsa
-            # çifte şans, üç seçenek varsa tam kapsama olarak gösterilir. Toplam
-            # gerçek kolon sayısı seçenek adetlerinin çarpımıdır.
+            # 10.7 Spor Toto akıllı sistem mantığı:
+            # Sabit 4/6/8/10 kolon hedefi yok. Bunun yerine model önce tüm gerçek
+            # 1/X/2 alternatiflerini aday olarak çıkarır, sonra kolon maliyetini de
+            # hesaba katarak en verimli kapsamaları seçer. Kullanıcı isterse bütçeyi
+            # büyütebilir; böylece 5832 gibi gereksiz pahalı tam sistemler oluşmaz.
             guvenler = [float(r.get('guven', 0) or 0) for r in tamam]
             ort_guven = sum(guvenler) / len(guvenler) if guvenler else 0.0
             fallback_mac = sum(
@@ -8151,9 +8151,95 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 if str(r.get('spor_toto_faz', 'standart')) != 'standart'
             )
 
+            # Otomatik bütçe model belirsizliğine göre büyür; sabit kolon sayısı değildir.
+            # Kullanıcı dilerse daha geniş veya daha dar kapsamayı seçebilir.
+            if ort_guven >= 62:
+                otomatik_butce = 16
+            elif ort_guven >= 56:
+                otomatik_butce = 32
+            elif ort_guven >= 50:
+                otomatik_butce = 64
+            else:
+                otomatik_butce = 128
+            if fallback_mac >= 3:
+                otomatik_butce = min(256, otomatik_butce * 2)
+
+            butce_secenekleri = ['Otomatik', 8, 16, 32, 64, 128, 256, 512]
+            butce_secimi = st.selectbox(
+                'Sistem kolon bütçesi',
+                butce_secenekleri,
+                index=0,
+                key='spor_toto_sistem_butcesi',
+                help=('Otomatik: model güvenine göre maliyet/kapsama dengesi kurar. '
+                      'Sayı seçersen sistem bu kolon adedini geçmeden en değerli çifte/üçlü kapsamaları seçer.'),
+            )
+            kolon_butcesi = otomatik_butce if butce_secimi == 'Otomatik' else int(butce_secimi)
+
             mac_nolari = [r['no'] for r in tamam]
-            secenek_havuzu = []
-            sistem_ozeti = []
+            aday_havuz = []
+            secili_taraflar = {}
+
+            for r in tamam:
+                dag = r.get('spor_toto_dagilim') or {}
+                ana = str(r.get('secim', ''))
+                ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
+
+                # Tüm makul alternatifleri aday olarak tut; fakat hemen 1X2 yapma.
+                # Maliyet/kapsama optimizasyonu aşağıda hangi alternatiflerin gerçekten
+                # sisteme alınacağına karar verir.
+                secenekler = [(ana, max(ana_p, 0.1))]
+                for taraf, p, fark, yakinlik in _st_alternatifler(r, 2):
+                    if taraf != ana:
+                        secenekler.append((taraf, max(float(p), 0.1)))
+
+                tekil = {}
+                for taraf, p in secenekler:
+                    tekil[taraf] = max(float(p), float(tekil.get(taraf, 0.0)))
+                secenekler = sorted(tekil.items(), key=lambda x: x[1], reverse=True)
+                aday_havuz.append((r, secenekler))
+                secili_taraflar[r['no']] = [secenekler[0]]
+
+            def _kolon_adedi():
+                toplam = 1
+                for r, _ in aday_havuz:
+                    toplam *= max(1, len(secili_taraflar[r['no']]))
+                return int(toplam)
+
+            # Her adımda, sisteme eklenecek sıradaki seçeneğin sağladığı olasılık
+            # kazancını oluşturduğu ek kolon maliyetine böleriz. Bu sayede önce
+            # gerçekten değerli çifte şanslar gelir; 1X2 ancak üçüncü sonuç da güçlü
+            # ve kalan bütçeye değiyorsa oluşur.
+            while True:
+                mevcut_kolon = _kolon_adedi()
+                en_iyi = None
+                for r, secenekler in aday_havuz:
+                    no = r['no']
+                    secili = secili_taraflar[no]
+                    k = len(secili)
+                    if k >= len(secenekler):
+                        continue
+
+                    taraf, p = secenekler[k]
+                    yeni_kolon = int(mevcut_kolon * (k + 1) / k)
+                    if yeni_kolon > kolon_butcesi:
+                        continue
+
+                    ana_p = float(secenekler[0][1])
+                    fark = max(0.0, ana_p - float(p))
+                    # Yakın sonuçlar daha değerli; fallback veride biraz daha ihtiyatlı ol.
+                    yakinlik = max(0.15, 1.0 - fark / 30.0)
+                    kalite = 0.88 if str(r.get('spor_toto_faz', 'standart')) != 'standart' else 1.0
+                    ek_kolon = max(1, yeni_kolon - mevcut_kolon)
+                    marjinal_deger = float(p) * yakinlik * kalite / ek_kolon
+
+                    aday = (marjinal_deger, float(p), -fark, no, taraf, yeni_kolon)
+                    if en_iyi is None or aday > en_iyi:
+                        en_iyi = aday
+
+                if en_iyi is None:
+                    break
+                _, p, _, no, taraf, _ = en_iyi
+                secili_taraflar[no].append((taraf, p))
 
             def _sistem_etiketi(secenekler):
                 taraflar = {str(x[0]) for x in secenekler}
@@ -8167,82 +8253,56 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     return '1X2'
                 return next(iter(taraflar), '—')
 
-            for r in tamam:
-                dag = r.get('spor_toto_dagilim') or {}
-                ana = str(r.get('secim', ''))
-                ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
-
-                # Artık kolon hedefinden türeyen gevşeklik yok. Modelin geniş fakat
-                # hâlâ olasılık/fark şartlarına bağlı gerçek alternatif havuzu kullanılır.
-                secenekler = [(ana, max(ana_p, 0.1))]
-                for taraf, p, fark, yakinlik in _st_alternatifler(r, 2):
-                    if taraf != ana:
-                        secenekler.append((taraf, max(float(p), 0.1)))
-
-                # Aynı tarafı tekilleştir, olasılığa göre sırala.
-                tekil = {}
-                for taraf, p in secenekler:
-                    tekil[taraf] = max(float(p), float(tekil.get(taraf, 0.0)))
-                secenekler = sorted(tekil.items(), key=lambda x: x[1], reverse=True)
+            secenek_havuzu = []
+            sistem_ozeti = []
+            for r, tum_secenekler in aday_havuz:
+                secenekler = secili_taraflar[r['no']]
                 secenek_havuzu.append((r['no'], secenekler))
+                disarida = [x for x in tum_secenekler if x[0] not in {y[0] for y in secenekler}]
                 sistem_ozeti.append({
                     '#': r['no'],
                     'Maç': f"{r['ev']} - {r['dep']}",
                     'Sistem': _sistem_etiketi(secenekler),
                     'Seçenekler': ' / '.join(f"{taraf} %{p:.1f}" for taraf, p in secenekler),
+                    'Dışarıda': ' / '.join(f"{taraf} %{p:.1f}" for taraf, p in disarida) if disarida else '—',
                     'Seçenek adedi': len(secenekler),
                 })
 
-            # Sabit kolon üst sınırı YOK. Gerçek sistem kolon sayısı doğrudan
-            # maç başına desteklenen seçenek sayılarının çarpımından gelir.
-            kolon_sayisi = 1
-            for _, secenekler in secenek_havuzu:
-                kolon_sayisi *= max(1, len(secenekler))
-
+            kolon_sayisi = _kolon_adedi()
             cift_sans_mac = sum(1 for _, s in secenek_havuzu if len(s) == 2)
             tam_kapsama_mac = sum(1 for _, s in secenek_havuzu if len(s) == 3)
             st.caption(
-                f"Sabit kolon sınırı kaldırıldı. Modelin desteklediği sistem {kolon_sayisi} gerçek kolon kapsıyor. "
-                f"Ortalama güven %{ort_guven:.1f} · çifte şans {cift_sans_mac} maç · "
-                f"tam kapsama {tam_kapsama_mac} maç · fallback {fallback_mac} maç. "
-                "1X / X2 / 12 yalnızca iki sonuç gerçek dağılım ve alternatif kurallarını geçtiğinde oluşur; "
-                "X'e yapay ayrıcalık verilmez."
+                f"Akıllı sistem: {kolon_sayisi} kolon · bütçe {kolon_butcesi} · "
+                f"ortalama güven %{ort_guven:.1f} · çifte şans {cift_sans_mac} maç · "
+                f"1X2 {tam_kapsama_mac} maç · fallback {fallback_mac} maç. "
+                "Alternatifler yalnız olasılık kazancı oluşturduğu ek kolon maliyetine değdiğinde sisteme eklenir."
             )
 
             st.markdown("##### Sistem kuponu")
             st.dataframe(pd.DataFrame(sistem_ozeti), use_container_width=True, hide_index=True)
 
-            # Küçük/orta sistemlerde bütün gerçek kolonları aç. Çok büyük sistemlerde
-            # uygulamayı binlerce Streamlit sütunuyla kilitlemek yerine kompakt sistem
-            # gösterimi tüm kombinasyonları kayıpsız temsil eder; kolon sayısı yine sınırlanmaz.
-            GORSEL_ACILIM_ESIGI = 512
+            # Artık seçilen sistem zaten maliyet bütçesi içinde kaldığı için kolonları
+            # doğrudan açabiliriz. 512 üstü kullanıcı tarafından seçilemediğinden UI güvenli.
             kolonlar = {}
-            if kolon_sayisi <= GORSEL_ACILIM_ESIGI:
-                tum_secimler = [[taraf for taraf, _ in secenekler] for _, secenekler in secenek_havuzu]
-                for k, imza in enumerate(__import__('itertools').product(*tum_secimler), start=1):
-                    kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
+            tum_secimler = [[taraf for taraf, _ in secenekler] for _, secenekler in secenek_havuzu]
+            for k, imza in enumerate(__import__('itertools').product(*tum_secimler), start=1):
+                kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
 
-                st.markdown(f"##### Açılmış kolonlar · {kolon_sayisi}")
-                gor = []
-                for r in _st_sonuclar:
-                    if not str(r.get('durum', '')).startswith('Tamam'):
-                        continue
-                    dag = r.get('spor_toto_dagilim') or {}
-                    dag_txt = (f"1 %{float(dag.get('1',0)):.1f} · X %{float(dag.get('X',0)):.1f} · 2 %{float(dag.get('2',0)):.1f}" if dag else '—')
-                    satir = {
-                        '#': r['no'], 'Maç': f"{r['ev']} - {r['dep']}",
-                        'Dağılım': dag_txt,
-                    }
-                    for k in range(1, kolon_sayisi + 1):
-                        satir[f'{k}. Kolon'] = kolonlar[k].get(r['no'], '—')
-                    gor.append(satir)
-                st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
-            else:
-                st.info(
-                    f"Bu sistem {kolon_sayisi} gerçek kolona açılır. Performansı korumak için "
-                    f"{GORSEL_ACILIM_ESIGI} üzerindeki sistemler tek tek sütunlara açılmıyor; "
-                    "yukarıdaki Sistem kuponu aynı kombinasyonların tamamını kayıpsız temsil eder."
-                )
+            st.markdown(f"##### Açılmış kolonlar · {kolon_sayisi}")
+            gor = []
+            for r in _st_sonuclar:
+                if not str(r.get('durum', '')).startswith('Tamam'):
+                    continue
+                dag = r.get('spor_toto_dagilim') or {}
+                dag_txt = (f"1 %{float(dag.get('1',0)):.1f} · X %{float(dag.get('X',0)):.1f} · 2 %{float(dag.get('2',0)):.1f}" if dag else '—')
+                satir = {
+                    '#': r['no'], 'Maç': f"{r['ev']} - {r['dep']}",
+                    'Dağılım': dag_txt,
+                }
+                for k in range(1, kolon_sayisi + 1):
+                    satir[f'{k}. Kolon'] = kolonlar[k].get(r['no'], '—')
+                gor.append(satir)
+            st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
