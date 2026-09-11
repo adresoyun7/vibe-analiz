@@ -11191,13 +11191,18 @@ else:
     # Tahminlerin kendisini değiştirmez; yalnızca ekrandaki kart sırasını değiştirir.
     siralama_secimi = st.selectbox(
         "Sırala",
-        ["Güven oranı", "2.5 Alt / Üst", "KG"],
+        ["Güven", "Oran", "2.5 Alt / Üst", "KG"],
         index=0,
         key="mac_analizi_siralama",
     )
 
     def _mac_analizi_siralama_anahtari(pair):
         t = pair[1]["t"]
+        if siralama_secimi == "Oran":
+            return (
+                float(t.get("ana_odd", 0) or 0),
+                float(t.get("ana_p", 0) or 0),
+            )
         if siralama_secimi == "2.5 Alt / Üst":
             return (
                 max(float(t.get("ms25_p", 0) or 0), float(t.get("ms25a_p", 0) or 0)),
