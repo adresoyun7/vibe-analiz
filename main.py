@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.11.1"
+MODEL_VERSION = "2026.09.11.2"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -6169,6 +6169,67 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
     selected.attrs.update(model_version=MODEL_VERSION, model="Top 50 Market" if top50_model else "Birleşik")
     return pd.DataFrame(summary), selected, consensus, individual, cross
 
+def gecmis_ornek_teshisi(gecmis_df, m_row, tolerans, sadece_ayni_lig=False):
+    """Geçmiş örnek filtresinin hangi aşamada sıfıra düştüğünü gösterir.
+
+    Yalnızca tanılama amaçlıdır; modelin eşleşme, hassasiyet veya tahmin
+    mantığını değiştirmez.
+    """
+    sonuc = {
+        "toplam": 0, "lig_sonrasi": 0, "evre_sonrasi": 0,
+        "tarih_sonrasi": 0, "eslesen": 0, "history_code": None,
+        "odds_phase": None, "phase_used": None, "target": None,
+        "nearest": None, "min_tolerance": None,
+    }
+    if gecmis_df is None:
+        return sonuc
+
+    try:
+        sonuc["toplam"] = int(len(gecmis_df))
+        sport_key = str(m_row.get("sport_key", "")) if hasattr(m_row, "get") else ""
+        sonuc["history_code"] = ODDS_TO_HISTORY.get(sport_key)
+        sonuc["odds_phase"] = oran_fazi(m_row)
+        sonuc["target"] = tuple(float(m_row.get(k)) for k in ("h", "b", "a"))
+
+        lig_df = ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig)
+        sonuc["lig_sonrasi"] = int(len(lig_df))
+
+        evre_df = zaman_uyumlu_gecmis(lig_df, m_row)
+        sonuc["evre_sonrasi"] = int(len(evre_df))
+        sonuc["phase_used"] = evre_df.attrs.get("odds_phase_used") if hasattr(evre_df, "attrs") else None
+
+        tarih_df = tarih_oncesi_gecmis(evre_df, m_row.get("zaman"))
+        sonuc["tarih_sonrasi"] = int(len(tarih_df))
+        if tarih_df.empty:
+            return sonuc
+
+        mask = oran_eslesme_maskesi(tarih_df, m_row, tolerans)
+        sonuc["eslesen"] = int(mask.sum())
+
+        values, target = eslesme_oranlari(tarih_df, m_row)
+        farklar = values.sub(target, axis=1).abs()
+        max_fark = farklar.max(axis=1)
+        max_fark = pd.to_numeric(max_fark, errors="coerce").dropna()
+        if max_fark.empty:
+            return sonuc
+
+        idx = max_fark.idxmin()
+        row = tarih_df.loc[idx]
+        nearest_values = values.loc[idx]
+        nearest_diffs = farklar.loc[idx]
+        sonuc["min_tolerance"] = float(max_fark.loc[idx])
+        sonuc["nearest"] = {
+            "date": row.get("Date"),
+            "home": row.get("HomeTeam", ""),
+            "away": row.get("AwayTeam", ""),
+            "odds": tuple(float(nearest_values[c]) for c in ("REF_H", "REF_D", "REF_A")),
+            "diffs": tuple(float(nearest_diffs[c]) for c in ("REF_H", "REF_D", "REF_A")),
+        }
+    except (KeyError, TypeError, ValueError, IndexError):
+        pass
+    return sonuc
+
+
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
                          filtre_cift_yari_15=False, limit=25):
@@ -8781,6 +8842,47 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 ):
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
+
+                        # Tanılama: tahmin mantığına dokunmadan hangi filtrenin
+                        # örnek havuzunu sıfırladığını ve en yakın geçmiş oranı göster.
+                        try:
+                            teshis_gecmis = futbol_veri_motoru(tuple(yillar))
+                            teshis = gecmis_ornek_teshisi(
+                                teshis_gecmis, pd.Series(dict(m)), TOLERANS,
+                                sadece_ayni_lig=bool(gecmis_ayni_lig),
+                            )
+                            hedef = teshis.get("target")
+                            if hedef:
+                                st.caption(
+                                    f"🔎 Tanı · Hedef oran: {hedef[0]:.2f} / {hedef[1]:.2f} / {hedef[2]:.2f} "
+                                    f"· Seçili hassasiyet: {float(TOLERANS):.2f}"
+                                )
+                            st.caption(
+                                "Filtre akışı: "
+                                f"tüm geçmiş {teshis.get('toplam', 0):,} → "
+                                f"lig {teshis.get('lig_sonrasi', 0):,} → "
+                                f"oran evresi {teshis.get('evre_sonrasi', 0):,} → "
+                                f"tarih öncesi {teshis.get('tarih_sonrasi', 0):,} → "
+                                f"eşleşen {teshis.get('eslesen', 0):,}"
+                            )
+                            st.caption(
+                                f"Lig kodu: {teshis.get('history_code') or 'yok'} · "
+                                f"Güncel oran evresi: {teshis.get('odds_phase') or 'bilinmiyor'} · "
+                                f"Geçmişte kullanılan evre: {teshis.get('phase_used') or 'yok'}"
+                            )
+                            en_yakin = teshis.get("nearest")
+                            if en_yakin:
+                                no = en_yakin["odds"]
+                                nd = en_yakin["diffs"]
+                                min_tol = float(teshis.get("min_tolerance") or 0.0)
+                                st.caption(
+                                    f"En yakın geçmiş: {en_yakin.get('home', '')} - {en_yakin.get('away', '')} "
+                                    f"· {no[0]:.2f} / {no[1]:.2f} / {no[2]:.2f} "
+                                    f"· fark {nd[0]:.2f} / {nd[1]:.2f} / {nd[2]:.2f} "
+                                    f"· üçünün birden eşleşmesi için gereken en düşük hassasiyet ≈ {min_tol:.2f}"
+                                )
+                        except Exception as teshis_hatasi:
+                            LOGGER.warning("Geçmiş örnek tanısı gösterilemedi: %s", type(teshis_hatasi).__name__)
                         continue
                     tablo_veri = {
                         "Tarih": pd.to_datetime(ornekler["Date"]).dt.strftime("%d.%m.%Y"),
