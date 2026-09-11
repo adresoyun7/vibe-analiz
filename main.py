@@ -11191,7 +11191,7 @@ else:
     # Tahminlerin kendisini değiştirmez; yalnızca ekrandaki kart sırasını değiştirir.
     siralama_secimi = st.selectbox(
         "Sırala",
-        ["Güven", "Oran", "2.5 Alt / Üst", "KG"],
+        ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo"],
         index=0,
         key="mac_analizi_siralama",
     )
@@ -11211,6 +11211,11 @@ else:
         if siralama_secimi == "KG":
             return (
                 max(float(t.get("kg_var_p", 0) or 0), float(t.get("kg_yok_p", 0) or 0), float(t.get("kg_p", 0) or 0)),
+                float(t.get("ana_p", 0) or 0),
+            )
+        if siralama_secimi == "Kombo":
+            return (
+                float(t.get("combo_p", 0) or 0),
                 float(t.get("ana_p", 0) or 0),
             )
         return (
