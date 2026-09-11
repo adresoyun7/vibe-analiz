@@ -10237,6 +10237,39 @@ if analiz_btn:
                         form_aktif=False,
                         kalibrasyon_aktif=False,
                     )
+                    # Ana tahmini değiştirmeden 0.00–0.10 taramasında aynı ana marketin
+                    # hangi hassasiyetlerde çıktığını kartta göstermek için sakla.
+                    if t is not None:
+                        try:
+                            _ana_label = str(t.get("ana_label", "") or "").strip()
+                            _taramalar = hassasiyet_taramasi(
+                                gecmis, tarama_hedefi(m), sadece_ayni_lig
+                            )
+                            _ayni_hassasiyetler = []
+                            for _tol, _sonuc in sorted(_taramalar.items()):
+                                if not _sonuc:
+                                    continue
+                                _tt, _bb = _sonuc
+                                if _tt is None or str(_tt.get("ana_label", "") or "").strip() != _ana_label:
+                                    continue
+                                try:
+                                    _n = len(_bb) if _bb is not None else 0
+                                except Exception:
+                                    _n = int(_tt.get("ornek", 0) or 0)
+                                if _n < max(1, int(min_ornek or 1)):
+                                    continue
+                                _ayni_hassasiyetler.append(f"{float(_tol):.2f}")
+
+                            t["stability_tols"] = _ayni_hassasiyetler
+                            t["stability_count"] = len(_ayni_hassasiyetler)
+                            t["stability_pct"] = len(_ayni_hassasiyetler) / 11 * 100
+                            t["stability_text"] = " · ".join(_ayni_hassasiyetler)
+                            t["stability_early_tols"] = [x for x in _ayni_hassasiyetler if float(x) <= .05]
+                            t["stability_late_tols"] = [x for x in _ayni_hassasiyetler if float(x) > .05]
+                            t["stability_early_text"] = " · ".join(t["stability_early_tols"])
+                            t["stability_late_text"] = " · ".join(t["stability_late_tols"])
+                        except Exception as _stability_error:
+                            LOGGER.debug("Maç Analizi hassasiyet listesi üretilemedi: %s", type(_stability_error).__name__)
                 else:
                     t, b_det = hassasiyet_birlesik_hesapla(
                         gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
@@ -11146,13 +11179,41 @@ else:
 
     filtre = st.session_state.filtre
     if filtre == "yuksek":
-        goster = sorted(yuksek, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
+        goster = list(yuksek)
     elif filtre == "orta":
-        goster = sorted(orta, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
+        goster = list(orta)
     elif filtre == "kombo":
-        goster = sorted(kombolu, key=lambda x: x[1]["t"].get("playable_score", x[1]["t"].get("ana_p", 0)), reverse=True)
+        goster = list(kombolu)
     else:
-        goster = indexed_fl
+        goster = list(indexed_fl)
+
+    # Maç Analizi kartlarını istenen güven ailesine göre sırala.
+    # Tahminlerin kendisini değiştirmez; yalnızca ekrandaki kart sırasını değiştirir.
+    siralama_secimi = st.selectbox(
+        "Sırala",
+        ["Güven oranı", "2.5 Alt / Üst", "KG"],
+        index=0,
+        key="mac_analizi_siralama",
+    )
+
+    def _mac_analizi_siralama_anahtari(pair):
+        t = pair[1]["t"]
+        if siralama_secimi == "2.5 Alt / Üst":
+            return (
+                max(float(t.get("ms25_p", 0) or 0), float(t.get("ms25a_p", 0) or 0)),
+                float(t.get("ana_p", 0) or 0),
+            )
+        if siralama_secimi == "KG":
+            return (
+                max(float(t.get("kg_var_p", 0) or 0), float(t.get("kg_yok_p", 0) or 0), float(t.get("kg_p", 0) or 0)),
+                float(t.get("ana_p", 0) or 0),
+            )
+        return (
+            float(t.get("ana_p", 0) or 0),
+            float(t.get("playable_score", 0) or 0),
+        )
+
+    goster = sorted(goster, key=_mac_analizi_siralama_anahtari, reverse=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -11179,13 +11240,15 @@ else:
             combo_level = t.get("combo_level", "")
             level_text = f' · {combo_level}' if combo_level else ''
             combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
-        stability_html = ""
-        if t.get("stability_early_text"):
-            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#ffb366">🎯 Dar stabil: {t.get("stability_early_text", "")}</div>'
-        if t.get("stability_late_text"):
-            stability_html += f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_late_text", "")}</div>'
-        if not stability_html:
-            stability_html = f'<div style="margin-top:4px;font-size:0.70rem;color:#7fb3ff">🎯 Stabil: {t.get("stability_text", "-")}</div>'
+        _hassasiyet_yazi = str(t.get("stability_text", "") or "").strip()
+        if _hassasiyet_yazi:
+            stability_html = (
+                f'<div style="margin-top:5px;font-size:0.70rem;color:#7fb3ff">'
+                f'🎯 Hassasiyetler: <b>{escape(_hassasiyet_yazi)}</b>'
+                f' <span style="color:#94a3b8">({int(t.get("stability_count", 0) or 0)}/11)</span></div>'
+            )
+        else:
+            stability_html = '<div style="margin-top:5px;font-size:0.70rem;color:#64748b">🎯 Hassasiyetler: —</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
