@@ -26,7 +26,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.10.9"
+MODEL_VERSION = "2026.09.11.1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -1904,6 +1904,47 @@ def fake_confidence_duzelt(conf_prob, sample, tolerans):
 
 
 GEÇMİŞ_VERİ_DOSYASI = APP_DATA_DIR / "yapaikupon_gecmis_cache.csv"
+FOOTBALL_DATA_META_DOSYASI = APP_DATA_DIR / "yapaikupon_football_data_meta.json"
+
+def _football_data_meta_yaz(indirilen_dosya=0, hata_sayisi=0):
+    """Son başarılı gerçek Football-Data ağ çekimini kalıcı olarak kaydeder."""
+    try:
+        payload = {
+            "last_successful_fetch": kayit_zamani_iso(),
+            "downloaded_files": int(indirilen_dosya or 0),
+            "error_count": int(hata_sayisi or 0),
+        }
+        FOOTBALL_DATA_META_DOSYASI.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except (OSError, ValueError, TypeError):
+        pass
+
+def football_data_son_cekim_bilgisi():
+    """Sidebar için son gerçek çekim zamanı; eski kurulumda cache mtime'a geri düşer."""
+    try:
+        if FOOTBALL_DATA_META_DOSYASI.exists():
+            payload = json.loads(FOOTBALL_DATA_META_DOSYASI.read_text(encoding="utf-8"))
+            raw = payload.get("last_successful_fetch")
+            if raw:
+                dt = datetime.fromisoformat(str(raw))
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(TR_TIMEZONE)
+                return dt.strftime("%d.%m.%Y %H:%M"), "Football-Data"
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+
+    try:
+        if GEÇMİŞ_VERİ_DOSYASI.exists():
+            dt = datetime.fromtimestamp(
+                GEÇMİŞ_VERİ_DOSYASI.stat().st_mtime,
+                tz=timezone.utc,
+            ).astimezone(TR_TIMEZONE)
+            return dt.strftime("%d.%m.%Y %H:%M"), "cache dosyası"
+    except OSError:
+        pass
+    return "Henüz yok", "—"
 
 def _gecmis_cache_yukle():
     """Uygulamanın yanındaki kalıcı geçmiş CSV'sini ana veri kaynağı olarak yükler."""
@@ -2070,6 +2111,7 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
         if all(c in sonuc_tum.columns for c in anahtar):
             sonuc_tum = sonuc_tum.sort_values("Date", kind="stable").drop_duplicates(subset=anahtar, keep="last")
         _gecmis_cache_kaydet(sonuc_tum)
+        _football_data_meta_yaz(indirilen_dosya=len(liste), hata_sayisi=len(hatalar))
 
         sonuc = sonuc_tum.copy()
         if "season_code" in sonuc.columns:
@@ -3938,6 +3980,16 @@ TAKIM_ADI_ALIASLARI = {
     "gencbirligi": "genclerbirligi",
     "genclerbirligi": "genclerbirligi",
     "kasimpasa": "kasimpasa",
+    # Beşiktaş / Erzurum: The Odds API, manuel Toto ve Football-Data adlarını aynı kulübe bağla.
+    "besiktas": "besiktas",
+    "besiktasjk": "besiktas",
+    "besiktasjkas": "besiktas",
+    "besiktasas": "besiktas",
+    "erzurumbb": "erzurumspor",
+    "erzurumspor": "erzurumspor",
+    "erzurumsporfk": "erzurumspor",
+    "bberzurumspor": "erzurumspor",
+    "buyuksehirbelediyeerzurumspor": "erzurumspor",
     # İngiltere / İskoçya
     "manunited": "manchesterunited",
     "manutd": "manchesterunited",
@@ -7499,6 +7551,8 @@ with st.sidebar:
         if kullanilan not in (None, ""):
             kota_yazi += f" · Kullanılan: {kullanilan}"
     st.caption(f"🧠 Bülten cache: {cache_hazir}/{cache_toplam} lig · 6 saat · {kota_yazi}")
+    fd_son_cekim, fd_kaynak = football_data_son_cekim_bilgisi()
+    st.caption(f"⚽ Football-Data son çekim: {fd_son_cekim} · {fd_kaynak}")
     if st.button(
         "🔄 Oranları Yenile",
         use_container_width=True,
