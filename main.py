@@ -12211,10 +12211,7 @@ else:
                   <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
-                  <div class="oran-box" style="border:1px solid #245fa8"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>
-                  <div class="oran-box" style="border:1px solid #245fa8"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.68rem;color:#6ea8e8">↻ Alt/Üst ve KG tarafını aşağıdaki düğmelerden değiştirebilirsin</div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · 🏟️ Aynı lig: {int(t.get('ayni_lig_ornek', 0) or 0)}/{int(t['ornek'])} · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
                 {stability_html}
@@ -12227,22 +12224,24 @@ else:
                 line.strip() for line in textwrap.dedent(card_html).splitlines() if line.strip()
             )
             st.markdown(_card_html_render, unsafe_allow_html=True)
+            # Alt/Üst ve KG için ayrı kontrol düğmesi yok.
+            # Görünen oran kutularının kendisi tıklanabilir ve karşı tarafa geçer.
             _flip_ou_col, _flip_kg_col, _flip_spacer = st.columns([1.25, 1.25, 6.5], gap="small")
             with _flip_ou_col:
                 if st.button(
-                    f"↻ {_ou_label}  {_ou_oran_txt}",
+                    f"{_ou_label}  {_ou_oran_txt}",
                     key=f"flip_ou_{_kart_id}_{real_i}_{i}",
                     use_container_width=True,
-                    help="2.5 Üst / 2.5 Alt oranını çevir",
+                    help=f"Tıkla: {'2.5 Üst' if _ou_alt else '2.5 Alt'} oranına geç",
                 ):
                     st.session_state[_ou_state_key] = not _ou_alt
                     st.rerun()
             with _flip_kg_col:
                 if st.button(
-                    f"↻ {_kg_label}  {_kg_oran_txt}",
+                    f"{_kg_label}  {_kg_oran_txt}",
                     key=f"flip_kg_{_kart_id}_{real_i}_{i}",
                     use_container_width=True,
-                    help="KG Var / KG Yok oranını çevir",
+                    help=f"Tıkla: {'KG Var' if _kg_yok else 'KG Yok'} oranına geç",
                 ):
                     st.session_state[_kg_state_key] = not _kg_yok
                     st.rerun()
