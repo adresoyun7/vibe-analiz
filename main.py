@@ -11300,18 +11300,103 @@ else:
             on_change=_mac_analizi_oran_filtresi_degisti,
         )
 
-    # Kart filtresi: yalnızca ana tahmin oranı seçilen minimuma eşit veya yüksek olanları göster.
-    # Oranı bulunamayan kartları gizleme; veri eksikliği yüzünden maç kaybolmasın.
-    def _oran_filtresini_gecer(pair):
-        _oran = pair[1]["t"].get("ana_odd")
-        if _oran is None:
-            return True
-        try:
-            return float(_oran) >= float(gosterilecek_min_oran)
-        except (TypeError, ValueError):
-            return True
+    # Minimum oran filtresi artık kartı doğrudan silmez.
+    # Ana tahmin eşiği geçemiyorsa aynı maçın alternatif ve kombo seçeneğine bakılır.
+    # Eşiği geçen yedekler arasından güveni en yüksek olan kartın ana gösterimi olur.
+    # Böylece örneğin ana tahmin 1.35 ise, 1.70 oranlı güçlü alternatif/kombo varsa maç kaybolmaz.
+    def _oran_filtresine_gore_secim(pair):
+        real_i, item = pair
+        m = item["m"]
+        t0 = item["t"]
 
-    goster = [pair for pair in goster if _oran_filtresini_gecer(pair)]
+        try:
+            min_odd = float(gosterilecek_min_oran)
+        except (TypeError, ValueError):
+            min_odd = 1.50
+
+        ana_odd = t0.get("ana_odd")
+        try:
+            ana_odd_f = float(ana_odd) if ana_odd is not None else None
+        except (TypeError, ValueError):
+            ana_odd_f = None
+
+        # Oranı bilinmeyen ana marketlerde eski davranışı koru; veri eksikliği
+        # yüzünden kartı veya tahmini yapay biçimde değiştirme.
+        if ana_odd_f is None or ana_odd_f >= min_odd:
+            return pair
+
+        adaylar = []
+
+        # Alternatif tahminin gerçek 1/X/2 oranı mevcutsa kullan.
+        alt_label = str(t0.get("alt_label", "") or "").strip()
+        if alt_label:
+            alt_odd = market_label_to_odd(m, alt_label)
+            try:
+                alt_odd_f = float(alt_odd) if alt_odd is not None else None
+            except (TypeError, ValueError):
+                alt_odd_f = None
+            if alt_odd_f is not None and alt_odd_f >= min_odd:
+                adaylar.append({
+                    "tip": "Alternatif",
+                    "label": alt_label,
+                    "guven": float(t0.get("alt_p", 0) or 0),
+                    "oran": alt_odd_f,
+                })
+
+        # Kombo oranı API'de doğrudan yoksa uygulamanın mevcut tahmini kombo
+        # oran fonksiyonunu kullan. Kartta bunun tahmini oran olduğu ayrıca işaretlenir.
+        combo_label = str(t0.get("combo_label", "") or "").strip()
+        if t0.get("combo_var") and combo_label:
+            combo_odd = market_label_to_odd(m, combo_label)
+            combo_tahmini = False
+            if combo_odd is None:
+                combo_odd = kombo_tahmini_oran(combo_label, ana_odd_f)
+                combo_tahmini = combo_odd is not None
+            try:
+                combo_odd_f = float(combo_odd) if combo_odd is not None else None
+            except (TypeError, ValueError):
+                combo_odd_f = None
+            if combo_odd_f is not None and combo_odd_f >= min_odd:
+                adaylar.append({
+                    "tip": "Kombo",
+                    "label": combo_label,
+                    "guven": float(t0.get("combo_p", 0) or 0),
+                    "oran": combo_odd_f,
+                    "oran_tahmini": combo_tahmini,
+                })
+
+        if not adaylar:
+            return None
+
+        secim = max(adaylar, key=lambda x: (x["guven"], x["oran"]))
+        yeni_item = dict(item)
+        yeni_t = dict(t0)
+        yeni_t["filtre_orijinal_ana_label"] = t0.get("ana_label")
+        yeni_t["filtre_orijinal_ana_p"] = t0.get("ana_p")
+        yeni_t["filtre_orijinal_ana_odd"] = t0.get("ana_odd")
+        yeni_t["filtre_secim_tipi"] = secim["tip"]
+        yeni_t["filtre_secim_oran_tahmini"] = bool(secim.get("oran_tahmini", False))
+        yeni_t["ana_label"] = secim["label"]
+        yeni_t["ana_p"] = int(round(secim["guven"]))
+        yeni_t["ana_odd"] = float(secim["oran"])
+
+        # Ana karta terfi eden seçeneği sağ tarafta tekrar göstermeyelim.
+        if secim["tip"] == "Alternatif":
+            yeni_t["alt_label"] = ""
+            yeni_t["alt_p"] = 0
+        elif secim["tip"] == "Kombo":
+            yeni_t["combo_label"] = ""
+            yeni_t["combo_var"] = False
+
+        yeni_item["t"] = yeni_t
+        return (real_i, yeni_item)
+
+    _filtrelenmis_goster = []
+    for _pair in goster:
+        _secim_pair = _oran_filtresine_gore_secim(_pair)
+        if _secim_pair is not None:
+            _filtrelenmis_goster.append(_secim_pair)
+    goster = _filtrelenmis_goster
 
     def _mac_analizi_siralama_anahtari(pair):
         t = pair[1]["t"]
@@ -11374,6 +11459,16 @@ else:
         ai_comment_html = ""
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Maç sonucu tarafı net değil</div>' if t.get("belirsiz") and t.get("ana_label") in ["MS 1", "Beraberlik", "MS 2"] else ''
+        _filtre_tipi = str(t.get("filtre_secim_tipi", "") or "").strip()
+        _filtre_tahmini = bool(t.get("filtre_secim_oran_tahmini", False))
+        if _filtre_tipi:
+            _oran_notu = " · tahmini oran" if _filtre_tahmini else ""
+            filtre_secim_html = (
+                f'<div class="mk-mini" style="color:#7fb3ff;margin-top:4px">'
+                f'↪ Minimum oran nedeniyle {_filtre_tipi.lower()} gösteriliyor{_oran_notu}</div>'
+            )
+        else:
+            filtre_secim_html = ''
         combo_html = ''
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
         if combo_text:
@@ -11417,6 +11512,7 @@ else:
               <div>
                 <div class="mk-label">ANA TAHMİN</div>
                 <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
+                {filtre_secim_html}
                 {skor_html}
                 <div style="margin-top:10px">
                   <div class="mk-label">GÜVEN</div>
