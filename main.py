@@ -4529,6 +4529,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         iy_vc = ms_weights.reindex(b_ht.index).groupby(b_ht["HTR"]).sum() / ms_weights.reindex(b_ht.index).sum()
         iy05_raw = agirlikli_oran(ilk_yari_gol >= 1, goal_weights)
         iy15_raw = agirlikli_oran(ilk_yari_gol >= 2, goal_weights)
+        iykg_raw = agirlikli_oran((b_ht["HTHG"] > 0) & (b_ht["HTAG"] > 0), goal_weights.reindex(b_ht.index))
         htft_s = (
             b_ht["HTR"].replace({"H": "1", "A": "2", "D": "X"})
             + "/"
@@ -4542,6 +4543,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         iy_vc = pd.Series(dtype="float64")
         iy05_raw = 0.0
         iy15_raw = 0.0
+        iykg_raw = 0.0
         htft_s = pd.Series(dtype="object")
         htft_mod = "-"
         htft_raw = 0.0
@@ -4677,6 +4679,13 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     cond_kg_yok = ~cond_kg_var
     htft_series = htft_s
 
+    # İlk yarı koşullarını tam veri indeksine taşı; HT verisi olmayan satırlar False kalır.
+    cond_iy15 = pd.Series(False, index=b.index)
+    cond_iykg = pd.Series(False, index=b.index)
+    if not b_ht.empty:
+        cond_iy15.loc[b_ht.index] = ((b_ht["HTHG"] + b_ht["HTAG"]) >= 2).astype(bool)
+        cond_iykg.loc[b_ht.index] = ((b_ht["HTHG"] > 0) & (b_ht["HTAG"] > 0)).astype(bool)
+
     combo_defs = [
         ("MS1 + KG Var", cond_ms1 & cond_kg_var, "mskg"),
         ("MS1 + KG Yok", cond_ms1 & cond_kg_yok, "mskg"),
@@ -4692,6 +4701,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         ("MS2 + 2.5 Alt", cond_ms2 & cond_alt25, "msou"),
         ("2.5 Üst + KG Var", cond_ust25 & cond_kg_var, "oukg"),
         ("2.5 Alt + KG Yok", cond_alt25 & cond_kg_yok, "oukg"),
+        ("İY 1.5 Üst + MS1", cond_iy15 & cond_ms1, "iyms"),
+        ("İY 1.5 Üst + MS2", cond_iy15 & cond_ms2, "iyms"),
     ]
 
     raw_combo_list = []
@@ -4703,6 +4714,10 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
 
         if combo_type == "oukg":
             gerekli_raw = 0.30 if match_type != "Sürpriz Açık" else 0.27
+            gerekli_hit = max(4, onerilen_min_mac)
+        elif combo_type == "iyms":
+            # İlk yarı + maç sonucu komboları daha seyrektir; küçük örnekte öne çıkmasın.
+            gerekli_raw = 0.22 if match_type != "Sürpriz Açık" else 0.20
             gerekli_hit = max(4, onerilen_min_mac)
         else:
             gerekli_raw = 0.26 if match_type != "Sürpriz Açık" else 0.23
@@ -4953,6 +4968,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "iy05_p": int(round(_adj(iy05_raw, goal_bias, "İY 0.5 Üst", n=len(b_ht)) * 100)),
         "iy05a_p": int(round(_adj(1-iy05_raw, goal_bias, "İY 0.5 Alt", n=len(b_ht)) * 100)),
         "iy15_p": int(round(_adj(iy15_raw, goal_bias, "İY 1.5 Üst", n=len(b_ht)) * 100)),
+        "iykg_var_p": int(round(_adj(iykg_raw, goal_bias, "İY KG Var", n=len(b_ht)) * 100)),
+        "iykg_yok_p": int(round(_adj(1-iykg_raw, goal_bias, "İY KG Yok", n=len(b_ht)) * 100)) if not b_ht.empty else 0,
         "iy1_p": int(round(_adj(float(iy_vc.get("H", 0)), 1.0, "İY 1", n=len(b_ht)) * 100)),
         "iyx_p": int(round(_adj(float(iy_vc.get("D", 0)), 1.0, "İY X", n=len(b_ht)) * 100)),
         "iy2_p": int(round(_adj(float(iy_vc.get("A", 0)), 1.0, "İY 2", n=len(b_ht)) * 100)),
@@ -5189,7 +5206,7 @@ def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
             return
         if not filtreler.get("top10_filter_kg", True) and tip == "KG":
             return
-        if not filtreler.get("top10_filter_iy15", True) and label == "İY 1.5 Üst":
+        if not filtreler.get("top10_filter_iy15", True) and label in ("İY 1.5 Üst", "İY KG Var", "İY KG Yok"):
             return
         if not filtreler.get("top10_filter_combo", True) and tip in ["Kombo", "HT/FT"]:
             return
@@ -5203,12 +5220,12 @@ def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
             if str(t.get("goal_profile", "")) == "Düşük Gollü":
                 return
 
-        if label == "İY 1.5 Üst":
+        if label in ("İY 1.5 Üst", "İY KG Var"):
             if guven < 55:
                 return
             if safe_int(t.get("ornek", 0)) < 5:
                 return
-            if str(t.get("goal_profile", "")) == "Düşük Gollü":
+            if str(t.get("goal_profile", "")) == "Düşük Gollü" and label == "İY 1.5 Üst":
                 return
 
         # Aynı label tekrar eklenirse en yüksek güvenli olanı tut.
@@ -5256,6 +5273,7 @@ def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
     # Mevcut minimum güven/örnek kalite kontrolleri korunur.
     add("İY 0.5 Üst", t.get("iy05_p", 0), "İlk Yarı", None, bonus=0, min_guven=70)
     add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=0, min_guven=55)
+    add("İY KG Var", t.get("iykg_var_p", 0), "İlk Yarı", None, bonus=0, min_guven=55)
 
     # Kombo.
     if t.get("combo_var") and t.get("combo_label"):
@@ -5946,6 +5964,12 @@ def tahmin_tuttu_mu(label, row):
             return None
         translate = {"H": "1", "D": "X", "A": "2"}
         return f'{translate.get(row["HTR"], "?")}/{translate.get(row["FTR"], "?")}' == label[6:]
+    if label in ("İY KG Var", "İY KG Yok"):
+        hh, ha = row.get("HTHG"), row.get("HTAG")
+        if hh is None or ha is None or pd.isna(hh) or pd.isna(ha):
+            return None
+        var = float(hh) > 0 and float(ha) > 0
+        return var if label == "İY KG Var" else not var
     half = label.startswith("İY ")
     home, away = row.get("HTHG" if half else "FTHG"), row.get("HTAG" if half else "FTAG")
     if home is None or away is None or pd.isna(home) or pd.isna(away):
@@ -10848,6 +10872,10 @@ def detay_ana_icerik():
 
         iy_cls = "db-green" if t["iy05_p"] >= 50 else "db-red"
         iy_lbl = f"Üst %{int(t['iy05_p'])}" if t["iy05_p"] >= 50 else f"Alt %{int(t['iy05a_p'])}"
+        iy15_cls = "db-green" if t.get("iy15_p", 0) >= 55 else "db-gold"
+        iy15_lbl = f"Üst %{int(t.get('iy15_p', 0))}"
+        iykg_cls = "db-green" if t.get("iykg_var_p", 0) >= 50 else "db-red"
+        iykg_lbl = f"Var %{int(t.get('iykg_var_p', 0))}" if t.get("iykg_var_p", 0) >= 50 else f"Yok %{int(t.get('iykg_yok_p', 0))}"
 
         htft_cls = "db-green" if t["htft_p"] >= 40 else "db-gold"
         combo_cls = "db-gold" if t.get("combo_var", False) else "db-red"
@@ -10877,6 +10905,16 @@ def detay_ana_icerik():
           <div class="diger-row">
             <div class="diger-left"><span class="diger-icon">⏱</span><div><div class="diger-name">İlk Yarı / 0.5 Üst</div><div class="diger-sub">İlk Yarı Toplam Gol</div></div></div>
             <span class="diger-badge {iy_cls}">{iy_lbl}</span>
+          </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">⏱</span><div><div class="diger-name">İlk Yarı / 1.5 Üst</div><div class="diger-sub">İlk yarıda 2+ gol</div></div></div>
+            <span class="diger-badge {iy15_cls}">{iy15_lbl}</span>
+          </div>
+
+          <div class="diger-row">
+            <div class="diger-left"><span class="diger-icon">🤝</span><div><div class="diger-name">İlk Yarı KG</div><div class="diger-sub">İlk yarıda iki takım da gol</div></div></div>
+            <span class="diger-badge {iykg_cls}">{iykg_lbl}</span>
           </div>
 
           <div class="diger-row">
