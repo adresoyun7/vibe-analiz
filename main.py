@@ -2319,60 +2319,79 @@ def bulten_cek(key, kodlar, t):
                         break
 
                 # KG Var/Yok (BTTS) ek markettir ve The Odds API'de event bazlı
-                # endpointten alınır. Yalnızca bugünkü, kartta kullanılacak maç için
-                # tek ek market çağrısı yapılır; lig bülteni zaten 6 saat cache'lidir.
-                # Önce 1X2 bookmaker'ını, yoksa diğer EU bookmaker'ları tercih et.
+                # endpointten alınır. Ek market kapsamı bookmaker/region bazında değişir.
+                # Önce EU denenir; gerçek Yes/No çifti bulunamazsa UK bookmaker'larına
+                # fallback yapılır. Tahmini oran üretilmez, yalnız gerçek API fiyatı kullanılır.
                 try:
                     event_id = str(m.get("id", "") or "").strip()
                     if event_id:
-                        rb = requests.get(
-                            f"https://api.the-odds-api.com/v4/sports/{k}/events/{event_id}/odds",
-                            params={
-                                "apiKey": key,
-                                "regions": "eu",
-                                "markets": "btts",
-                                "oddsFormat": "decimal",
-                            },
-                            timeout=12,
-                        )
-                        try:
-                            st.session_state["odds_api_quota"] = {
-                                "remaining": rb.headers.get("x-requests-remaining"),
-                                "used": rb.headers.get("x-requests-used"),
-                                "last": rb.headers.get("x-requests-last"),
-                                "updated_at": time.time(),
-                            }
-                        except Exception:
-                            pass
-                        if rb.status_code == 200:
-                            event_data = rb.json()
-                            event_bookies = event_data.get("bookmakers", []) if isinstance(event_data, dict) else []
-                            event_bookies = sorted(
-                                event_bookies,
-                                key=lambda book: (str(book.get("key", "")) != secilen_bk_key, bk_priority(book)),
+                        for _btts_region in ("eu", "uk"):
+                            rb = requests.get(
+                                f"https://api.the-odds-api.com/v4/sports/{k}/events/{event_id}/odds",
+                                params={
+                                    "apiKey": key,
+                                    "regions": _btts_region,
+                                    "markets": "btts",
+                                    "oddsFormat": "decimal",
+                                },
+                                timeout=12,
                             )
-                            for ebk in event_bookies:
-                                ebmk = {str(mk.get("key", "")): mk for mk in ebk.get("markets", [])}.get("btts")
-                                if not ebmk:
-                                    continue
-                                names = {}
-                                for ox in ebmk.get("outcomes", []) or []:
-                                    try:
-                                        px = float(ox.get("price"))
-                                    except (TypeError, ValueError):
+                            try:
+                                st.session_state["odds_api_quota"] = {
+                                    "remaining": rb.headers.get("x-requests-remaining"),
+                                    "used": rb.headers.get("x-requests-used"),
+                                    "last": rb.headers.get("x-requests-last"),
+                                    "updated_at": time.time(),
+                                }
+                            except Exception:
+                                pass
+
+                            if rb.status_code == 200:
+                                event_data = rb.json()
+                                event_bookies = event_data.get("bookmakers", []) if isinstance(event_data, dict) else []
+                                event_bookies = sorted(
+                                    event_bookies,
+                                    key=lambda book: (str(book.get("key", "")) != secilen_bk_key, bk_priority(book)),
+                                )
+                                for ebk in event_bookies:
+                                    ebmk = {str(mk.get("key", "")): mk for mk in ebk.get("markets", [])}.get("btts")
+                                    if not ebmk:
                                         continue
-                                    if not math.isfinite(px) or px <= 1:
-                                        continue
-                                    names[str(ox.get("name", "")).strip().lower()] = px
-                                if "yes" in names and "no" in names:
-                                    btts_market = ebmk
-                                    btts_updated_at = ebmk.get("last_update") or ebk.get("last_update")
-                                    btts_bk_key = str(ebk.get("key", ""))
+                                    names = {}
+                                    for ox in ebmk.get("outcomes", []) or []:
+                                        try:
+                                            px = float(ox.get("price"))
+                                        except (TypeError, ValueError):
+                                            continue
+                                        if not math.isfinite(px) or px <= 1:
+                                            continue
+                                        outcome_name = str(ox.get("name", "")).strip().lower()
+                                        # Resmî API Yes/No döndürür; olası bookmaker isimlerini
+                                        # de toleranslı biçimde normalize et.
+                                        if outcome_name in ("yes", "y", "both teams to score - yes", "btts yes"):
+                                            names["yes"] = px
+                                        elif outcome_name in ("no", "n", "both teams to score - no", "btts no"):
+                                            names["no"] = px
+                                    if "yes" in names and "no" in names:
+                                        # Standartlaştırılmış outcome'ları sakla; aşağıdaki parser
+                                        # Yes/No isimlerinden değerleri doğrudan okuyabilsin.
+                                        btts_market = {
+                                            **ebmk,
+                                            "outcomes": [
+                                                {"name": "Yes", "price": names["yes"]},
+                                                {"name": "No", "price": names["no"]},
+                                            ],
+                                        }
+                                        btts_updated_at = ebmk.get("last_update") or ebk.get("last_update")
+                                        btts_bk_key = str(ebk.get("key", ""))
+                                        break
+                                if btts_market:
                                     break
-                        elif rb.status_code not in (404, 422):
-                            # BTTS kapsamı olmayan maçlarda ana bülteni bozma; sadece
-                            # gerçek BTTS oranı None kalır.
-                            LOGGER.debug("BTTS odds alınamadı %s: HTTP %s", event_id, rb.status_code)
+                            elif rb.status_code not in (404, 422):
+                                LOGGER.debug(
+                                    "BTTS odds alınamadı %s (%s): HTTP %s",
+                                    event_id, _btts_region, rb.status_code,
+                                )
                 except Exception as btts_exc:
                     LOGGER.debug("BTTS odds çağrısı başarısız: %s", type(btts_exc).__name__)
 
