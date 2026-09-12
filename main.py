@@ -6946,7 +6946,10 @@ def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
         ) or "—",
         axis=1,
     )
-    return b.sort_values("Date", ascending=False).head(int(limit))
+    b = b.sort_values("Date", ascending=False)
+    if limit is None or str(limit).strip().lower() in {'tümü', 'tum', 'all'}:
+        return b
+    return b.head(int(limit))
 
 
 
@@ -8352,7 +8355,8 @@ with st.sidebar:
         backtest_limit = st.number_input('En fazla test maçı', min_value=50, max_value=2000, value=500, step=50, key='backtest_limit')
         backtest_btn = False
     elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
-        gecmis_limit = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100], index=1, key='gecmis_limit')
+        gecmis_limit_secim = st.selectbox('Maç başına geçmiş örnek', [10, 25, 50, 100, 'Tümü'], index=4, key='gecmis_limit')
+        gecmis_limit = None if gecmis_limit_secim == 'Tümü' else int(gecmis_limit_secim)
         gecmis_btn = False
     elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
         # Oran Filtresi kutuları kullanıcı tarafından açılıp kapatılabilir.
