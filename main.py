@@ -11605,17 +11605,18 @@ else:
             ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
             index=0,
             key="mac_analizi_siralama",
+            on_change=_mac_analizi_oran_filtresi_degisti,
         )
     with oran_col:
         gosterilecek_min_oran = st.number_input(
             "Gösterilecek minimum oran",
-            min_value=1.01,
+            min_value=1.00,
             max_value=20.00,
             value=1.50,
             step=0.05,
             format="%.2f",
             key="mac_analizi_min_oran",
-            help="Gerçek bookmaker oranı bu değerin altında olan tahmin gösterilmez. Ana tahmin geçmezse gerçek oranı bulunan alternatif kontrol edilir.",
+            help="Gerçek bookmaker oranı bu değerin altında olan tahmin gösterilmez. 1.00 seçildiğinde oran filtresi fiilen kapalıdır. Ana tahmin geçmezse gerçek oranı bulunan alternatif kontrol edilir.",
             on_change=_mac_analizi_oran_filtresi_degisti,
         )
 
