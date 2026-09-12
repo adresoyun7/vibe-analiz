@@ -7871,10 +7871,10 @@ def sync_ayni_lig_globalden_gecmise():
 
 
 def sync_ayni_lig_gecmisten_globale():
-    """Geçmiş Örnekleri toggle'ını üstteki aynı-lig checkbox'ına yansıtır."""
+    """Geçmiş Örnekleri ekranındaki aynı-lig filtresini yalnızca bu görünümde uygula."""
     deger = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
-    st.session_state["sadece_ayni_lig"] = deger
-    # Mevcut geçmiş liste yeni duruma göre yeniden kurulmalı.
+    # Global/Top50 checkbox'ına yazma. Aksi halde yerel toggle kapalı olsa bile
+    # eski global state yeni geçmiş listesini tekrar aynı-lige kilitleyebiliyordu.
     st.session_state["gecmis_ayni_lig_uygulandi"] = not deger
     clear_detail_on_filter_change()
 
@@ -9120,6 +9120,9 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
     st.stop()
 
 if gecmis_btn:
+    # Geçmiş Örnekleri görünümünde filtreyi yalnızca kendi toggle'ı belirler.
+    # Global "sadece_ayni_lig" state'i burada kullanılmaz.
+    gecmis_filtre_ayni_lig = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
@@ -9132,13 +9135,13 @@ if gecmis_btn:
                     gi_gecmis,
                     gi_mac,
                     TOLERANS,
-                    sadece_ayni_lig=sadece_ayni_lig,
+                    sadece_ayni_lig=gecmis_filtre_ayni_lig,
                     limit=gecmis_limit,
                 )
                 # Satır başlığında aynı lig / toplam örnek sayısını gösterebilmek için
                 # toplam örnek sayısını ayrıca sakla. Aynı lig filtresi kapalıysa
                 # mevcut sonuç zaten toplam örnek listesidir; ekstra hesap yapma.
-                if sadece_ayni_lig:
+                if gecmis_filtre_ayni_lig:
                     tum_ornekler = gecmis_ornekleri_bul(
                         gi_gecmis,
                         gi_mac,
@@ -9159,6 +9162,9 @@ if gecmis_btn:
             # 2) En yüksek yüzde eşitse toplam örnek sayısı çoktan aza
             inceleme.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = inceleme
+            # Liste hangi filtreyle üretildiyse onu kaydet; toggle kapalıyken
+            # yanlışlıkla aynı-lig listesi "uygulanmış" sayılmasın.
+            st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_filtre_ayni_lig)
             st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
@@ -9178,9 +9184,11 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
 
         # Geçmiş Örnekleri için hızlı görünüm/filtre anahtarları.
         # İki aynı-lig kontrolü çift yönlü callback ile tek ayar gibi çalışır.
-        mevcut_ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
+        # Geçmiş Örnekleri filtresi global aynı-lig checkbox'ından bağımsızdır.
+        mevcut_ayni_lig = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
         if "gecmis_sadece_ayni_lig_toggle" not in st.session_state:
-            st.session_state["gecmis_sadece_ayni_lig_toggle"] = mevcut_ayni_lig
+            st.session_state["gecmis_sadece_ayni_lig_toggle"] = False
+            mevcut_ayni_lig = False
         if "gecmis_ayni_lig_uygulandi" not in st.session_state:
             st.session_state["gecmis_ayni_lig_uygulandi"] = mevcut_ayni_lig
         if "gecmis_oranlari_goster" not in st.session_state:
