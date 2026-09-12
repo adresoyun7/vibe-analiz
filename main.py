@@ -11543,7 +11543,12 @@ else:
               </div>
             </div>
             """
-            st.markdown(textwrap.dedent(card_html).strip(), unsafe_allow_html=True)
+            # Streamlit'in Markdown ayrıştırıcısı boş satırdan sonra raw HTML bloğunu
+            # kapatabildiği için kartı tek bir kesintisiz HTML satırı olarak gönder.
+            _card_html_render = "".join(
+                line.strip() for line in textwrap.dedent(card_html).splitlines() if line.strip()
+            )
+            st.markdown(_card_html_render, unsafe_allow_html=True)
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
