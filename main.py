@@ -11009,7 +11009,12 @@ if analiz_btn:
         st.session_state.detay_item = None
         st.session_state.son_analiz = tr_simdi().strftime("%d/%m/%Y %H:%M")
         st.session_state.toplam_mac = len(final)
-        st.rerun()
+        # Analiz butonuna basılması zaten Streamlit'in normal script çalışmasını
+        # başlatır. Hesap bittikten sonra ikinci bir st.rerun() yapmak gereksizdi.
+        # Özellikle Oran Hassasiyeti değiştirilip yeniden analiz edildiğinde bu
+        # ikinci rerun, sonuç kartlarının farklı/geçici bir görünümle yeniden
+        # kuruluyormuş gibi görünmesine neden olabiliyordu. Aynı çalışmada aşağıdaki
+        # tek Maç Analizi render akışına devam et; yalnızca veriler yenilensin.
 
 def secili_detay_itemi():
     if st.session_state.detay_item is not None:
