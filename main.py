@@ -4124,6 +4124,99 @@ def ek_market_oranlari_al(m_row, zorla_yenile=False):
         return {"markets": {}, "error": f"Ek market oranları alınamadı: {type(exc).__name__}"}
 
 
+
+
+def ana_kart_btts_oranlari_al(m_row):
+    """Ana kart için eksik BTTS Yes/No oranını event bazlı getirir.
+
+    Detay ekranının açılmasını beklemez. Sonuç 15 dakika session cache'inde
+    tutulur; aynı maç her rerun'da yeniden API çağrısı yapmaz. Yalnızca gerçek
+    bookmaker fiyatı döndürür.
+    """
+    try:
+        if not isinstance(m_row, dict):
+            m_row = m_row.to_dict()
+    except Exception:
+        return None, None
+
+    event_id = str(m_row.get("match_id", "") or "").strip()
+    sport_key = str(m_row.get("sport_key", "") or "").strip()
+    if not event_id or not sport_key:
+        return None, None
+
+    api_key = get_app_api_key()
+    if not api_key:
+        return None, None
+
+    cache = st.session_state.setdefault("ana_kart_btts_cache", {})
+    cache_key = f"{sport_key}|{event_id}"
+    now = time.time()
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict) and now - float(cached.get("ts", 0) or 0) < EK_MARKET_CACHE_TTL:
+        return cached.get("yes"), cached.get("no")
+
+    preferred_key = str(m_row.get("bookmaker_key", "") or "")
+    found_yes = found_no = None
+    for region in ("eu", "uk"):
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds",
+                params={
+                    "apiKey": api_key,
+                    "regions": region,
+                    "markets": "btts",
+                    "oddsFormat": "decimal",
+                },
+                timeout=12,
+            )
+            try:
+                st.session_state["odds_api_quota"] = {
+                    "remaining": r.headers.get("x-requests-remaining"),
+                    "used": r.headers.get("x-requests-used"),
+                    "last": r.headers.get("x-requests-last"),
+                    "updated_at": time.time(),
+                }
+            except Exception:
+                pass
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            bookies = data.get("bookmakers", []) if isinstance(data, dict) else []
+            bookies = sorted(bookies, key=lambda bk: _ek_market_bk_priority(bk, preferred_key))
+            for bk in bookies:
+                mk = next((x for x in (bk.get("markets", []) or []) if str(x.get("key", "")) == "btts"), None)
+                if not mk:
+                    continue
+                yes = no = None
+                for outcome in mk.get("outcomes", []) or []:
+                    name = str(outcome.get("name", "") or "").strip().lower()
+                    try:
+                        price = float(outcome.get("price"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(price) or price <= 1:
+                        continue
+                    if name in ("yes", "y", "both teams to score - yes", "btts yes"):
+                        yes = price
+                    elif name in ("no", "n", "both teams to score - no", "btts no"):
+                        no = price
+                if yes is not None and no is not None:
+                    found_yes, found_no = yes, no
+                    break
+            if found_yes is not None and found_no is not None:
+                break
+        except Exception:
+            continue
+
+    # Başarısız sonucu kısa süre cache'le; başarılı sonucu tam TTL sakla.
+    cache[cache_key] = {
+        "yes": found_yes,
+        "no": found_no,
+        "ts": now if (found_yes is not None and found_no is not None) else now - EK_MARKET_CACHE_TTL + 45,
+    }
+    return found_yes, found_no
+
+
 def detay_ek_market_oranlari_goster(m_row):
     """Detay ekranında gerçek ek market oranlarını kompakt tablolar halinde göster."""
     st.markdown("### 💹 Gerçek bookmaker oranları · Ek marketler")
@@ -12034,6 +12127,7 @@ else:
         _kg_yes = m.get("btts_yes")
         _kg_no = m.get("btts_no")
         if _kg_yes is None or _kg_no is None:
+            # Önce detay ekranında daha önce çekilmiş BTTS cache'ini kullan.
             try:
                 _event_id = str(m.get("match_id", "") or "").strip()
                 _sport_key = str(m.get("sport_key", "") or "").strip()
@@ -12055,6 +12149,15 @@ else:
                         _kg_no = _px
             except Exception:
                 pass
+
+        if _kg_yes is None or _kg_no is None:
+            # Detayı hiç açılmamış maçlarda da ana kartta KG oranı görünsün.
+            # Eksik BTTS yalnızca bir kez event endpointinden çekilir ve cache'lenir.
+            _f_yes, _f_no = ana_kart_btts_oranlari_al(m)
+            if _kg_yes is None:
+                _kg_yes = _f_yes
+            if _kg_no is None:
+                _kg_no = _f_no
         _kg_oran = _kg_no if _kg_yok else _kg_yes
         try:
             _ou_oran_txt = f"{float(_ou_oran):.2f}" if _ou_oran is not None else "—"
