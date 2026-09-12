@@ -7400,6 +7400,16 @@ with st.container(key="sticky_analysis_controls"):
         # Düğme, sidebar'da görünüm seçildikten sonra bu üst konuma yazdırılır.
         ust_analiz_buton_alani = st.empty()
 
+    # Maç Analizi varsayılan olarak yalnızca seçili hassasiyetle tek hesap yapar.
+    # İstenirse 0.00–0.10 arasındaki 11 hassasiyet ayrıca taranıp kartlarda gösterilir.
+    if st.session_state.get("sayfa_modu") == "Maç Analizi":
+        st.checkbox(
+            "🎯 11 hassasiyet taramasını göster (0.00–0.10)",
+            value=False,
+            key="mac_analizi_stabilite_tarama",
+            help="Kapalıyken Maç Analizi yalnızca seçtiğin Oran Hassasiyeti ile çalışır ve çok daha hızlıdır. Açıldığında her sonuç maçı için 0.00–0.10 arası 11 seviye ayrıca taranır.",
+        )
+
     secim_ozet_tarih = tarih_secimine_gore_date(
         st.session_state.get("date_mode", "Bugün"), bugun,
         st.session_state.get("special_date", bugun),
@@ -10260,9 +10270,12 @@ if analiz_btn:
                     _sayac_guven += 1
                     continue
 
-                # Performans: 11 hassasiyetli stabilite taramasını yalnızca gerçekten
-                # sonuç listesine girecek maçlar için yap. Ana tahmini değiştirmez.
-                if st.session_state.get("sayfa_modu") == "Maç Analizi":
+                # 11 hassasiyetli stabilite taraması Maç Analizi'nde OPSİYONELDİR.
+                # Kapalıyken her maç yalnızca seçili TOLERANS ile bir kez hesaplanır.
+                if (
+                    st.session_state.get("sayfa_modu") == "Maç Analizi"
+                    and st.session_state.get("mac_analizi_stabilite_tarama", False)
+                ):
                     try:
                         _ana_label = str(t.get("ana_label", "") or "").strip()
                         _taramalar = hassasiyet_taramasi(
@@ -11253,14 +11266,17 @@ else:
             level_text = f' · {combo_level}' if combo_level else ''
             combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
         _hassasiyet_yazi = str(t.get("stability_text", "") or "").strip()
+        _stabilite_tarama_acik = bool(st.session_state.get("mac_analizi_stabilite_tarama", False))
         if _hassasiyet_yazi:
             stability_html = (
                 f'<div style="margin-top:5px;font-size:0.70rem;color:#7fb3ff">'
                 f'🎯 Hassasiyetler: <b>{escape(_hassasiyet_yazi)}</b>'
                 f' <span style="color:#94a3b8">({int(t.get("stability_count", 0) or 0)}/11)</span></div>'
             )
-        else:
+        elif _stabilite_tarama_acik:
             stability_html = '<div style="margin-top:5px;font-size:0.70rem;color:#64748b">🎯 Hassasiyetler: —</div>'
+        else:
+            stability_html = '<div style="margin-top:5px;font-size:0.70rem;color:#64748b">🎯 11 hassasiyet taraması: kapalı</div>'
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
