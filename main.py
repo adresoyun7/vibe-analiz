@@ -2155,6 +2155,12 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
 
 
 def odds_spor_katalogu(key):
+    btts_debug = {
+        "event_id": event_id,
+        "sport_key": sport_key,
+        "calls": [],
+    }
+
     try:
         r = requests.get(
             "https://api.the-odds-api.com/v4/sports/",
@@ -3927,7 +3933,7 @@ def ek_market_oranlari_al(m_row, zorla_yenile=False):
         return {"markets": {}, "error": "ODDS API anahtarı gerekli."}
 
     cache = st.session_state.setdefault("ek_market_odds_cache", {})
-    cache_key = f"{sport_key}|{event_id}"
+    cache_key = f"btts-debug-v2|{sport_key}|{event_id}"
     now = time.time()
     cached = cache.get(cache_key)
     if (not zorla_yenile and isinstance(cached, dict)
@@ -3964,6 +3970,7 @@ def ek_market_oranlari_al(m_row, zorla_yenile=False):
                 "markets": {},
                 "error": f"Ek market oranları alınamadı (HTTP {r.status_code}). {err}".strip(),
                 "cached_at": now,
+                "btts_debug": btts_debug,
             }
             # Hataları uzun süre cache'leme; 45 sn sonra yeniden denenebilsin.
             result["cached_at"] = now - EK_MARKET_CACHE_TTL + 45
@@ -3972,6 +3979,28 @@ def ek_market_oranlari_al(m_row, zorla_yenile=False):
 
         data = r.json()
         bookies = data.get("bookmakers", []) if isinstance(data, dict) else []
+
+        # BTTS debug: EU ana ek-market isteğinde API'nin gerçekten ne döndürdüğünü kaydet.
+        _dbg_eu = {"region": "eu", "http": r.status_code, "bookmakers": []}
+        for _bk in bookies:
+            _mk_keys = [str(_mk.get("key", "") or "") for _mk in (_bk.get("markets", []) or [])]
+            _btts_mk = next((_mk for _mk in (_bk.get("markets", []) or []) if str(_mk.get("key", "")) == "btts"), None)
+            _entry = {
+                "bookmaker": str(_bk.get("key", "") or _bk.get("title", "") or ""),
+                "market_keys": _mk_keys,
+                "btts_outcomes": [],
+            }
+            if _btts_mk:
+                for _o in (_btts_mk.get("outcomes", []) or []):
+                    _entry["btts_outcomes"].append({
+                        "name": _o.get("name"),
+                        "price": _o.get("price"),
+                        "description": _o.get("description"),
+                        "point": _o.get("point"),
+                    })
+            _dbg_eu["bookmakers"].append(_entry)
+        btts_debug["calls"].append(_dbg_eu)
+
         preferred_key = str(m_row.get("bookmaker_key", "") or "")
         bookies = sorted(bookies, key=lambda bk: _ek_market_bk_priority(bk, preferred_key))
 
@@ -4006,10 +4035,82 @@ def ek_market_oranlari_al(m_row, zorla_yenile=False):
                     }
                     break
 
+        # EU isteğinde BTTS yoksa UK bölgesinde yalnız btts marketini ayrıca dene.
+        # Bu çağrı aynı zamanda parser / bookmaker kapsamı sorununu debug etmek için ham özeti saklar.
+        if "btts" not in selected:
+            try:
+                rb = requests.get(
+                    f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds",
+                    params={
+                        "apiKey": api_key,
+                        "regions": "uk",
+                        "markets": "btts",
+                        "oddsFormat": "decimal",
+                    },
+                    timeout=15,
+                )
+                _dbg_uk = {"region": "uk", "http": rb.status_code, "bookmakers": []}
+                if rb.status_code == 200:
+                    _uk_data = rb.json()
+                    _uk_bookies = _uk_data.get("bookmakers", []) if isinstance(_uk_data, dict) else []
+                    _uk_bookies = sorted(_uk_bookies, key=lambda bk: _ek_market_bk_priority(bk, preferred_key))
+                    for _bk in _uk_bookies:
+                        _mk_keys = [str(_mk.get("key", "") or "") for _mk in (_bk.get("markets", []) or [])]
+                        _btts_mk = next((_mk for _mk in (_bk.get("markets", []) or []) if str(_mk.get("key", "")) == "btts"), None)
+                        _entry = {
+                            "bookmaker": str(_bk.get("key", "") or _bk.get("title", "") or ""),
+                            "market_keys": _mk_keys,
+                            "btts_outcomes": [],
+                        }
+                        if _btts_mk:
+                            _rows = []
+                            for _o in (_btts_mk.get("outcomes", []) or []):
+                                _entry["btts_outcomes"].append({
+                                    "name": _o.get("name"),
+                                    "price": _o.get("price"),
+                                    "description": _o.get("description"),
+                                    "point": _o.get("point"),
+                                })
+                                try:
+                                    _price = float(_o.get("price"))
+                                except (TypeError, ValueError):
+                                    continue
+                                if math.isfinite(_price) and _price > 1:
+                                    _rows.append({
+                                        "Seçim": _ek_market_outcome_text(_o),
+                                        "Oran": _price,
+                                        "name": _o.get("name"),
+                                        "description": _o.get("description"),
+                                        "point": _o.get("point"),
+                                    })
+                            if _rows and "btts" not in selected:
+                                selected["btts"] = {
+                                    "bookmaker_key": str(_bk.get("key", "") or ""),
+                                    "bookmaker_title": str(_bk.get("title", "") or _bk.get("key", "") or ""),
+                                    "last_update": _btts_mk.get("last_update") or _bk.get("last_update"),
+                                    "rows": _rows,
+                                }
+                        _dbg_uk["bookmakers"].append(_entry)
+                    btts_debug["calls"].append(_dbg_uk)
+                else:
+                    try:
+                        _dbg_uk["error_text"] = rb.text[:500]
+                    except Exception:
+                        pass
+                    btts_debug["calls"].append(_dbg_uk)
+            except Exception as _btts_dbg_exc:
+                btts_debug["calls"].append({
+                    "region": "uk",
+                    "http": None,
+                    "error_text": f"{type(_btts_dbg_exc).__name__}: {_btts_dbg_exc}",
+                    "bookmakers": [],
+                })
+
         result = {
             "markets": selected,
             "error": "" if selected else "Bu maç/bookmaker bölgesi için ek market oranı bulunamadı.",
             "cached_at": now,
+            "btts_debug": btts_debug,
         }
         cache[cache_key] = result
         return result
@@ -4061,6 +4162,45 @@ def detay_ek_market_oranlari_goster(m_row):
             except Exception:
                 pass
             st.dataframe(tablo, use_container_width=True, hide_index=True)
+
+    # Geçici BTTS debug: API key gösterilmez. Event/region/bookmaker/market/outcome bilgisi görünür.
+    _dbg = veri.get("btts_debug", {}) if isinstance(veri, dict) else {}
+    with st.expander("🧪 BTTS debug", expanded=False):
+        st.caption("Geçici tanı ekranı · API anahtarı gösterilmez.")
+        st.code(
+            f"event_id={_dbg.get('event_id', '—')}\n"
+            f"sport_key={_dbg.get('sport_key', '—')}",
+            language="text",
+        )
+        _debug_rows = []
+        for _call in (_dbg.get("calls", []) or []):
+            _region = _call.get("region", "—")
+            _http = _call.get("http", "—")
+            _bookies = _call.get("bookmakers", []) or []
+            if not _bookies:
+                _debug_rows.append({
+                    "Region": _region,
+                    "HTTP": _http,
+                    "Bookmaker": "—",
+                    "Marketler": "—",
+                    "BTTS": _call.get("error_text", "BTTS/bookmaker dönmedi"),
+                })
+            for _bk in _bookies:
+                _outs = _bk.get("btts_outcomes", []) or []
+                _out_text = " | ".join(
+                    f"{o.get('name')}={o.get('price')}" for o in _outs
+                ) if _outs else "—"
+                _debug_rows.append({
+                    "Region": _region,
+                    "HTTP": _http,
+                    "Bookmaker": _bk.get("bookmaker", "—"),
+                    "Marketler": ", ".join(_bk.get("market_keys", []) or []) or "—",
+                    "BTTS": _out_text,
+                })
+        if _debug_rows:
+            st.dataframe(pd.DataFrame(_debug_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("Bu cache sonucunda BTTS debug verisi yok. Ek marketleri kapatıp tekrar açarak yeni sorgu oluşturabilirsin.")
 
     eksik = [title for key, title in market_titles if key not in markets]
     if eksik:
