@@ -10237,39 +10237,6 @@ if analiz_btn:
                         form_aktif=False,
                         kalibrasyon_aktif=False,
                     )
-                    # Ana tahmini değiştirmeden 0.00–0.10 taramasında aynı ana marketin
-                    # hangi hassasiyetlerde çıktığını kartta göstermek için sakla.
-                    if t is not None:
-                        try:
-                            _ana_label = str(t.get("ana_label", "") or "").strip()
-                            _taramalar = hassasiyet_taramasi(
-                                gecmis, tarama_hedefi(m), sadece_ayni_lig
-                            )
-                            _ayni_hassasiyetler = []
-                            for _tol, _sonuc in sorted(_taramalar.items()):
-                                if not _sonuc:
-                                    continue
-                                _tt, _bb = _sonuc
-                                if _tt is None or str(_tt.get("ana_label", "") or "").strip() != _ana_label:
-                                    continue
-                                try:
-                                    _n = len(_bb) if _bb is not None else 0
-                                except Exception:
-                                    _n = int(_tt.get("ornek", 0) or 0)
-                                if _n < max(1, int(min_ornek or 1)):
-                                    continue
-                                _ayni_hassasiyetler.append(f"{float(_tol):.2f}")
-
-                            t["stability_tols"] = _ayni_hassasiyetler
-                            t["stability_count"] = len(_ayni_hassasiyetler)
-                            t["stability_pct"] = len(_ayni_hassasiyetler) / 11 * 100
-                            t["stability_text"] = " · ".join(_ayni_hassasiyetler)
-                            t["stability_early_tols"] = [x for x in _ayni_hassasiyetler if float(x) <= .05]
-                            t["stability_late_tols"] = [x for x in _ayni_hassasiyetler if float(x) > .05]
-                            t["stability_early_text"] = " · ".join(t["stability_early_tols"])
-                            t["stability_late_text"] = " · ".join(t["stability_late_tols"])
-                        except Exception as _stability_error:
-                            LOGGER.debug("Maç Analizi hassasiyet listesi üretilemedi: %s", type(_stability_error).__name__)
                 else:
                     t, b_det = hassasiyet_birlesik_hesapla(
                         gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
@@ -10292,6 +10259,41 @@ if analiz_btn:
                 if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
                     _sayac_guven += 1
                     continue
+
+                # Performans: 11 hassasiyetli stabilite taramasını yalnızca gerçekten
+                # sonuç listesine girecek maçlar için yap. Ana tahmini değiştirmez.
+                if st.session_state.get("sayfa_modu") == "Maç Analizi":
+                    try:
+                        _ana_label = str(t.get("ana_label", "") or "").strip()
+                        _taramalar = hassasiyet_taramasi(
+                            gecmis, tarama_hedefi(m), sadece_ayni_lig
+                        )
+                        _ayni_hassasiyetler = []
+                        for _tol, _sonuc in sorted(_taramalar.items()):
+                            if not _sonuc:
+                                continue
+                            _tt, _bb = _sonuc
+                            if _tt is None or str(_tt.get("ana_label", "") or "").strip() != _ana_label:
+                                continue
+                            try:
+                                _n = len(_bb) if _bb is not None else 0
+                            except Exception:
+                                _n = int(_tt.get("ornek", 0) or 0)
+                            if _n < max(1, int(min_ornek or 1)):
+                                continue
+                            _ayni_hassasiyetler.append(f"{float(_tol):.2f}")
+
+                        t["stability_tols"] = _ayni_hassasiyetler
+                        t["stability_count"] = len(_ayni_hassasiyetler)
+                        t["stability_pct"] = len(_ayni_hassasiyetler) / 11 * 100
+                        t["stability_text"] = " · ".join(_ayni_hassasiyetler)
+                        t["stability_early_tols"] = [x for x in _ayni_hassasiyetler if float(x) <= .05]
+                        t["stability_late_tols"] = [x for x in _ayni_hassasiyetler if float(x) > .05]
+                        t["stability_early_text"] = " · ".join(t["stability_early_tols"])
+                        t["stability_late_text"] = " · ".join(t["stability_late_tols"])
+                    except Exception as _stability_error:
+                        LOGGER.debug("Maç Analizi hassasiyet listesi üretilemedi: %s", type(_stability_error).__name__)
+
                 m_dict = m.to_dict()
                 m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
                 final.append({"m": m_dict, "t": t, "b": b_det})
@@ -11191,13 +11193,18 @@ else:
     # Tahminlerin kendisini değiştirmez; yalnızca ekrandaki kart sırasını değiştirir.
     siralama_secimi = st.selectbox(
         "Sırala",
-        ["Güven oranı", "2.5 Alt / Üst", "KG"],
+        ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo"],
         index=0,
         key="mac_analizi_siralama",
     )
 
     def _mac_analizi_siralama_anahtari(pair):
         t = pair[1]["t"]
+        if siralama_secimi == "Oran":
+            return (
+                float(t.get("ana_odd", 0) or 0),
+                float(t.get("ana_p", 0) or 0),
+            )
         if siralama_secimi == "2.5 Alt / Üst":
             return (
                 max(float(t.get("ms25_p", 0) or 0), float(t.get("ms25a_p", 0) or 0)),
@@ -11206,6 +11213,11 @@ else:
         if siralama_secimi == "KG":
             return (
                 max(float(t.get("kg_var_p", 0) or 0), float(t.get("kg_yok_p", 0) or 0), float(t.get("kg_p", 0) or 0)),
+                float(t.get("ana_p", 0) or 0),
+            )
+        if siralama_secimi == "Kombo":
+            return (
+                float(t.get("combo_p", 0) or 0),
                 float(t.get("ana_p", 0) or 0),
             )
         return (
