@@ -27,7 +27,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.12.1"
+MODEL_VERSION = "2026.09.12.2"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -412,10 +412,36 @@ def tabana_yaklastir(raw, count, prior, strength=5.0):
     return (float(raw) * max(0.0, count) + float(prior) * strength) / (max(0.0, count) + strength)
 
 
+def kararlilik_havuz_destegi(havuzlar):
+    """Örtüşen örnek havuzlarının puana katkısını azaltır; bağımsız test sayısı değildir.
+
+    Aynı havuzun 11 tekrarı tek katkı verir. Kısmen örtüşen havuzlar Jaccard
+    benzerliğiyle azaltılır; yeni geçmiş maçlar geldikçe katkı kademeli artar.
+    """
+    havuzlar = [frozenset(havuz) for havuz in havuzlar if havuz]
+    if not havuzlar:
+        return 0.0
+    toplam = sum(len(a & b) / len(a | b) for a in havuzlar for b in havuzlar)
+    return min(float(len(havuzlar)), len(havuzlar) ** 2 / toplam) if toplam else 0.0
+
+
+def etkin_kararlilik_sayisi(kayit):
+    """Yeni analiz ve kupon kayıtlarında örtüşmeye göre azaltılmış katkıyı okur."""
+    raw = kayit.get("top10_hassasiyet_sayisi", kayit.get("stability_count", kayit.get("hassasiyet_sayisi", 0)))
+    value = kayit.get("stability_effective_count", kayit.get("hassasiyet_etkin_sayisi"))
+    try:
+        raw = max(0.0, min(11.0, float(raw or 0)))
+        # Eski kayıtlarda örnek havuzları yok: tekrarları ayrı kanıt sayma.
+        value = min(raw, 1.0) if value is None else float(value)
+        return max(0.0, min(raw, value)) if math.isfinite(value) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def birlesik_aday_puani(guven, kararlilik, medyan_ornek):
-    """Güven %80 + hassasiyet kararlılığı %20; az etkin örneğe kademeli ceza."""
+    """Güven %80 + örtüşmesi azaltılmış kararlılık en çok %20; az örneğe ceza."""
     ceza = 8.0 * max(0.0, min(1.0, (5.0 - float(medyan_ornek)) / 4.0))
-    return round(float(guven) * .8 + min(int(kararlilik), 11) / 11 * 20 - ceza, 1)
+    return round(float(guven) * .8 + max(0.0, min(float(kararlilik), 11.0)) / 11 * 20 - ceza, 1)
 
 
 @st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
@@ -463,7 +489,7 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
                "2.5 Üst": "ms25_p", "2.5 Alt": "ms25a_p", "KG Var": "kg_var_p", "KG Yok": "kg_yok_p"}
     groups = {}
     for tol, (t, b) in taramalar.items():
-        if t is None or t.get("belirsiz"):
+        if t is None:
             continue
         n = len(b)
         if n < max(int(min_ornek), dinamik_min_mac(tol)):
@@ -471,10 +497,17 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
         candidates = (top10_market_adaylari(t, filtreler=filtreler, tum_guvenler=True) if ek_marketler else
                       [{"label": label, "guven": t.get(field, 0), "oran": market_label_to_odd(m, label)}
                        for label, field in alanlar.items()])
+        if not ek_marketler:
+            # Ana market seçimi yine yedi temel marketten yapılır. Kombolar ayrıca
+            # tüm hassasiyetlerde değerlendirilir; tek temsilciden güven taşınmaz.
+            candidates += [dict(candidate, tip="Kombo", oran=None)
+                           for candidate in t.get("combo_candidates", [])]
         for candidate in candidates:
             confidence = int(candidate.get("guven", 0))
             label = candidate["label"]
             effective = market_etkin_ornek(t, label)
+            if effective <= 0:
+                continue
 
             # 10.4: Effective sample artık hard-filter değildir. Gerçek örnek sayısı
             # yeterliyse adayı koruruz; düşük etkin örnek birlesik_aday_puani() içinde
@@ -508,11 +541,15 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
                          if column in record["b"]]], index=False).tolist()) for record in records]
         unique_pools = len(set(sample_keys))
         unique_samples = len(frozenset().union(*sample_keys))
+        supported_pools = [pool for record, pool in zip(records, sample_keys) if record["guven"] > 60]
+        effective_stability = kararlilik_havuz_destegi(supported_pools)
         representative = max(records, key=lambda record: (record["guven"], -record["tol"]))
         result.append({
             "label": label, "guven": confidence, "ham_guven": round(raw, 1),
-            "puan": round(birlesik_aday_puani(confidence, len(supported), effective_median) - min(6.0, spread * 0.3), 1),
+            "puan": round(birlesik_aday_puani(confidence, effective_stability, effective_median) - min(6.0, spread * 0.3), 1),
             "ornek": int(round(median)), "kararlilik": len(supported), "guven_dalgalanmasi": round(spread, 2),
+            "etkin_kararlilik": effective_stability,
+            "kararlilik_puan_katkisi": round(effective_stability / 11 * 20, 2),
             "kararlilik_pct": len(supported) / 11 * 100,
             "az_ornek_cezasi": round(8.0 * max(0.0, min(1.0, (5.0-effective_median)/4.0)), 2),
             "ms_belirsiz_cezasi": round(ms_belirsiz_cezasi, 2),
@@ -530,11 +567,14 @@ def birlesik_tahmin_olustur(ana, havuz, m):
     t = dict(ana["temsilci"]["t"])
     b = ana["temsilci"]["b"]
     alt = next((candidate for candidate in havuz if candidate["label"] != ana["label"]
+                and "+" not in candidate["label"]
                 and _tahmin_market_ailesi(candidate["label"]) != _tahmin_market_ailesi(ana["label"])), None)
     t.update({
         "confidence_spread": ana.get("guven_dalgalanmasi", 0),
         "effective_combined_samples": ana.get("effective_median", 0),
         "stability_unique_pools": ana.get("unique_pools", 0),
+        "stability_effective_count": ana.get("etkin_kararlilik", 0.0),
+        "stability_score_contribution": ana.get("kararlilik_puan_katkisi", 0.0),
         "unique_history_samples": ana.get("unique_samples", 0),
         "ana_label": ana["label"], "ana_p": ana["guven"], "ana_ham_guven": ana["ham_guven"],
         "ana_odd": market_label_to_odd(m, ana["label"]),
@@ -546,7 +586,7 @@ def birlesik_tahmin_olustur(ana, havuz, m):
         "birlesik_model": True, "model_version": MODEL_VERSION,
         "az_ornek_cezasi": ana["az_ornek_cezasi"],
         "market_gecmis_basari": ana["market_gecmis_basari"], "market_gecmis_adet": ana["market_gecmis_adet"],
-        "market_guven_delta": ana["market_guven_delta"], "puan_formulu": "Güven %80 + Kararlılık %20 − Dalgalanma cezası",
+        "market_guven_delta": ana["market_guven_delta"], "puan_formulu": "Güven %80 + örtüşmesi azaltılmış kararlılık en çok %20 − cezalar",
         "oynanabilir": ana["guven"] > 60, "oynanabilir_esik_ok": ana["guven"] > 60,
         "alt_label": alt["label"] if alt else "", "alt_p": alt["guven"] if alt else 0,
         "alt_ornek": alt["ornek"] if alt else 0, "alt_puan": alt["puan"] if alt else 0,
@@ -566,21 +606,19 @@ def birlesik_tahmin_olustur(ana, havuz, m):
     t["scenario_label"] = ana["label"]
     t["guven_renk"], t["guven_badge_cls"], t["guven_badge_lbl"] = guven_renk(t["ana_p"])
     # A different representative's combo must not contradict the selected market.
-    previous_combo = {key: t.get(key) for key in ("combo_var", "combo_label", "combo_p", "combo_hit", "combo_raw_p", "combo_level")}
     t["combo_var"] = False
     t["combo_label"], t["combo_p"], t["combo_level"], t["combo_hit"], t["combo_raw_p"] = "", 0, "", 0, 0
     def compatible(label):
         return any(tahmin_tuttu_mu(ana["label"], {"FTHG": home, "FTAG": away})
                    and tahmin_tuttu_mu(label, {"FTHG": home, "FTAG": away})
                    for home in range(6) for away in range(6))
-    combo = next((candidate for candidate in havuz if "+" in candidate["label"] and compatible(candidate["label"])), None)
-    if combo and combo["label"] != ana["label"]:
+    combo = (ana if "+" in ana["label"] else
+             next((candidate for candidate in havuz if "+" in candidate["label"] and compatible(candidate["label"])), None))
+    if combo:
         combo_examples = combo["temsilci"]["b"]
         hits = sum(bool(tahmin_tuttu_mu(combo["label"], row)) for _, row in combo_examples.iterrows())
         t.update(combo_var=True, combo_label=combo["label"], combo_p=combo["guven"], combo_hit=hits,
                  combo_raw_p=round(hits / len(combo_examples) * 100), combo_level="Premium")
-    elif previous_combo.get("combo_var") and compatible(previous_combo.get("combo_label")):
-        t.update(previous_combo)
     t["eg"], t["dg"] = skoru_tahmine_uydur(t.get("eg", 1), t.get("dg", 1), t["ana_label"], t.get("ms_mod", "D"), t["alt_label"], "")
     return t, b
 
@@ -853,7 +891,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 91
+APP_SCHEMA_VERSION = 92
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     korunan = {key: st.session_state[key] for key in ("user_api_key", "user_api_football_key", "koyu_mod") if key in st.session_state}
     st.session_state.clear()
@@ -2834,14 +2872,13 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
         ornek = int(t.get("ornek", 0) or 0)
         tolerans = hassasiyet_oku(t.get("kullanilan_tolerans"))
         stabil = int(t.get("stability_count", 0) or 0)
+        etkin_stabil = etkin_kararlilik_sayisi(t)
         dar_stabil = len(t.get("stability_early_tols", []) or [])
-        oran = t.get("ana_odd")
-        oran_sayi = float(oran) if oran is not None else None
 
         secim_label = str(t.get("ana_label", "-"))
         secim_guven = guven
-        secim_oran = oran_sayi
-        oran_tahmini = bool(t.get("top10_market_oran_tahmini", False))
+        secim_oran = market_label_to_odd(m, secim_label)
+        oran_tahmini = False
         combo_label = str(t.get("combo_label", "") or "")
         combo_p = int(t.get("combo_p", 0) or 0)
         combo_hit = int(t.get("combo_hit", 0) or 0)
@@ -2857,15 +2894,14 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             combo_uygun = combo_uygun and combo_p >= max(65, guven - 3)
         elif profil == "Dengeli":
             combo_uygun = combo_uygun and combo_p >= max(52, guven - 8)
-        # Hassasiyet taramasında normal profillerde seçilen market korunur.
-        # Ancak Yüksek Oran profili yalnızca kombo kabul ettiği için, mevcut güçlü
-        # combo_label şartları sağlıyorsa hassasiyet taramalı kayıtta da komboya geç.
-        combo_secildi = combo_uygun and (profil == "Yüksek Oran" or not t.get("hassasiyet_taramali"))
+        # Tarama sonucunun güveni, örnekleri ve kararlılığı seçilen markete aittir.
+        # Yüksek Oran'ın ana adayı zaten bir kombodur; temsilcinin başka kombosuna
+        # geçip eski marketin kararlılığını taşımak doğru değildir.
+        combo_secildi = combo_uygun and not t.get("hassasiyet_taramali")
         if combo_secildi:
             secim_label = combo_label
             secim_guven = combo_p
-            secim_oran = kombo_tahmini_oran(combo_label, oran_sayi)
-            oran_tahmini = True
+            secim_oran = market_label_to_odd(m, combo_label)
 
         kombinasyon_secimi = "+" in secim_label
 
@@ -2876,7 +2912,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
         if profil == "Temkinli" and kombinasyon_secimi:
             continue
 
-        if guven < cfg["min_guven"]:
+        if secim_guven < cfg["min_guven"]:
             continue
         if ornek < max(5, dinamik_min_mac(tolerans)):
             continue
@@ -2888,11 +2924,9 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
         kalite = (
             float(t.get("playable_score", guven) or guven)
             + min(ornek, 40) * 0.20
-            + stabil * 2.0
-            + dar_stabil * 1.5
+            + etkin_stabil * 2.0
+            + min(dar_stabil, etkin_stabil) * 1.5
         )
-        if profil == "Yüksek Oran" and secim_oran is not None:
-            kalite += min(secim_oran, 5.0) * 3.0
         if combo_secildi:
             kalite += min(combo_hit, 20) * 0.20
 
@@ -2918,7 +2952,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
         )
     elif profil == "Yüksek Oran":
         adaylar.sort(
-            key=lambda x: (x["combo_secim"], x["oran"] or 0, x["kalite"]),
+            key=lambda x: (x["secim_guven"], x["kalite"]),
             reverse=True,
         )
     else:
@@ -2956,6 +2990,7 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
             "hassasiyet": hassasiyet_oku(t.get("kullanilan_tolerans")),
             "hassasiyetler": list(aday.get("hassasiyetler") or t.get("top10_hassasiyetler") or t.get("stability_tols") or []),
             "hassasiyet_sayisi": int(aday.get("hassasiyet_sayisi") or len(aday.get("hassasiyetler") or []) or 0),
+            "hassasiyet_etkin_sayisi": etkin_kararlilik_sayisi(t),
             "otomatik": True,
             "profil": profil,
             # Kupon geçmişinden maç detayını yeniden oluşturabilmek için
@@ -2976,91 +3011,23 @@ def gunun_kuponunu_olustur(final_list, profil="Dengeli", onceliksiz_secimler=Non
 
 
 def gunun_kuponunu_profil_adaylarindan_olustur(gecmis_df, bulten_df, min_ornek=5, sadece_ayni_lig=False, maks=6):
-    """Günün Kuponu sıkı filtresi boş kalırsa profil adaylarından tek kupon üretir.
-
-    Temkinli, Dengeli ve Yüksek Oran aday havuzları ayrı ayrı oluşturulur.
-    Aynı maçtan yalnızca en güçlü tek seçim alınır. Böylece profil adayları mevcutsa
-    Günün Kuponu tamamen boş kalmaz.
-    """
-    profil_onceligi = {"Temkinli": 3, "Dengeli": 2, "Yüksek Oran": 1}
-    tum_adaylar = []
-
-    for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
-        kaynak = gunun_en_iyi_10_uret(
-            gecmis_df,
-            bulten_df,
-            min_ornek=min_ornek,
-            limit=500,
-            sadece_ayni_lig=sadece_ayni_lig,
-            kupon_modu=True,
-            kupon_profili=profil_adi,
-            tum_marketler=True,
-        )
-        kullanilan = set()
-        while True:
-            parca = gunun_kuponunu_olustur(
-                kaynak, profil_adi, haric_secimler=kullanilan, aday_listesi_modu=True
-            )
-            if not parca:
-                break
-            yeni = False
-            for secim in parca:
-                secim_key = (
-                    f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
-                    secim.get("tahmin", ""),
-                )
-                if secim_key in kullanilan:
-                    continue
-                kullanilan.add(secim_key)
-                aday = dict(secim)
-                aday["kaynak_profil"] = profil_adi
-                tum_adaylar.append(aday)
-                yeni = True
-            if not yeni:
-                break
-
-    # Güven ve 11 hassasiyetteki kararlılık ana sıralama ölçütü; profil yalnızca
-    # yakın/eşit adaylarda daha temkinli olanı öne almak için eşitlik bozucudur.
-    tum_adaylar.sort(
-        key=lambda x: (
-            int(x.get("guven", 0) or 0),
-            int(x.get("hassasiyet_sayisi", 0) or 0),
-            profil_onceligi.get(x.get("kaynak_profil"), 0),
-            float(x.get("oran", 0) or 0),
-        ),
-        reverse=True,
+    """Eski çağrılar da Günün Kuponu'nun aynı kalite koşullarını kullanır."""
+    kaynak = gunun_en_iyi_10_uret(
+        gecmis_df, bulten_df, min_ornek=min_ornek, limit=500,
+        sadece_ayni_lig=sadece_ayni_lig, kupon_modu=True,
+        kupon_profili="Günün Kuponu", tum_marketler=True,
     )
-
-    secimler = []
-    kullanilan_maclar = set()
-    for aday in tum_adaylar:
-        mac_id = (
-            str(aday.get("ev", "")),
-            str(aday.get("dep", "")),
-            str(aday.get("zaman_iso", ""))[:16],
-        )
-        if mac_id in kullanilan_maclar:
-            continue
-        secim = dict(aday)
-        secim.pop("kaynak_profil", None)
-        secim["profil"] = "Günün Kuponu"
-        secim["otomatik"] = True
-        secim["profil_aday_fallback"] = True
-        secimler.append(secim)
-        kullanilan_maclar.add(mac_id)
-        if len(secimler) >= int(maks):
-            break
-
-    return secimler
+    return gunun_en_guvenli_kuponunu_olustur(
+        kaynak, maks=maks, min_guven=72, gecmis_df=gecmis_df,
+    )
 
 
 def gunun_kuponlarini_kaliteye_gore_bol(secimler, maks_kupon_mac=6, min_anlamli_dusus=4.0):
     """Sıralı Günün Kuponu seçimlerini kalite kırılımında ayrı kuponlara böler.
 
-    Kalite = güven + 11 hassasiyet kararlılığı katkısı. Ardışık iki seçim arasında
-    anlamlı bir düşüş varsa yeni kupon başlatılır. Ancak özellikle profil adaylarından
-    gelen fallback seçimlerde, yeni kuponun ilk maçı minimum güven + kararlılık
-    yeterliliğini geçmiyorsa sırf elde kaldığı için ayrı kupon oluşturulmaz.
+    Kalite = güven + örtüşmesi azaltılmış kararlılık katkısı. Ardışık iki seçim
+    arasında anlamlı bir düşüş varsa yeni kupon başlatılır. Eski gevşek profil
+    sonuçları yeni Günün Kuponu gruplarına alınmaz.
     """
     if not secimler:
         return []
@@ -3073,7 +3040,7 @@ def gunun_kuponlarini_kaliteye_gore_bol(secimler, maks_kupon_mac=6, min_anlamli_
             except Exception:
                 pass
         guven = float(x.get("guven", 0) or 0)
-        stabil = float(x.get("hassasiyet_sayisi", 0) or 0)
+        stabil = etkin_kararlilik_sayisi(x)
         return guven + stabil * 1.8
 
     def _yeni_kupon_baslangici_yeterli(x):
@@ -3081,28 +3048,21 @@ def gunun_kuponlarini_kaliteye_gore_bol(secimler, maks_kupon_mac=6, min_anlamli_
         if not x.get("profil_aday_fallback"):
             return True
 
-        # Profil fallback adayları zaten Temkinli / Dengeli / Yüksek Oran
-        # aday motorunun kendi uygunluk kapılarından geçmiştir. Burada ikinci kez
-        # aşırı sert bir eşik uygulamak aday havuzu varken 0 kupon üretebiliyordu.
-        # Yeni grubun başlangıcında yalnızca çok zayıf/boş kayıtları ele.
-        guven = float(x.get("guven", 0) or 0)
-        stabil = int(x.get("hassasiyet_sayisi", 0) or 0)
-        return guven >= 40 and stabil >= 1
+        # Eski gevşek fallback sonuçları yeni Günün Kuponu olarak sunulmaz.
+        return False
 
     sirali = sorted(
-        [dict(x) for x in secimler if isinstance(x, dict)],
+        [dict(x) for x in secimler if isinstance(x, dict) and not x.get("profil_aday_fallback")],
         key=lambda x: (_kalite(x), float(x.get("guven", 0) or 0), int(x.get("hassasiyet_sayisi", 0) or 0)),
         reverse=True,
     )
     if not sirali:
         return []
 
-    # Profil aday havuzu boş değilse Günün Kuponu hiçbir zaman sırf bu ikinci
-    # kalite kapısı yüzünden 0 kupona düşmesin. Önce uygun başlangıcı ara;
-    # bulunamazsa havuzdaki en güçlü adayı tek başına başlangıç kabul et.
+    # Kaliteyi geçen başlangıç yoksa kupon oluşturulmaz.
     ilk_index = next((i for i, x in enumerate(sirali) if _yeni_kupon_baslangici_yeterli(x)), None)
     if ilk_index is None:
-        ilk_index = 0
+        return []
 
     ilk = sirali[ilk_index]
     kuponlar = [[ilk]]
@@ -3569,6 +3529,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
         ornek = int(t.get("ornek", 0) or 0)
         tolerans = hassasiyet_oku(t.get("kullanilan_tolerans"))
         stabil = int(t.get("top10_hassasiyet_sayisi", t.get("stability_count", 0)) or 0)
+        etkin_stabil = etkin_kararlilik_sayisi(t)
         stabil_skor = float(t.get("top10_stabilite_skoru", item.get("top10_stabilite_skoru", 0)) or 0)
         min_ornek_gerekli = max(5, dinamik_min_mac(tolerans))
         secim_label = str(t.get("ana_label", "-"))
@@ -3578,14 +3539,13 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
         if guven < int(min_guven) or ornek < min_ornek_gerekli or stabil < 3:
             continue
         # Güçlü H2H ters sinyali Günün Kuponu'nda gerçek bir kalite kapısıdır.
-        # Son 5 H2H'nin hiçbiri ana tahmini desteklemiyorsa doğrudan ele.
-        # Yalnız 1/5 destekliyorsa ancak çok güçlü ana model + yüksek kararlılık geçsin.
+        # Son 5 H2H'de 0 veya 1 destek varsa aynı güçlü-model koşulu aranır.
+        # Daha az destek, daha kolay geçiş sağlamamalıdır.
         h2h_b = baglam.get("h2h", {}) if isinstance(baglam, dict) else {}
         h2h_mac = int((h2h_b or {}).get("mac", 0) or 0)
         h2h_tutan = int((h2h_b or {}).get("tutan", 0) or 0)
         if h2h_mac >= 5:
-            # H2H 0/5 artık doğrudan eleme değildir; toplam bağlam puanına negatif sinyal olarak yansır.
-            if h2h_tutan == 1 and not (guven >= 90 and stabil >= 7):
+            if h2h_tutan <= 1 and not (guven >= 90 and stabil >= 7):
                 continue
 
         # Toplam bağlam artık yalnız sıralama bonusu/cezası değil, kalite kapısı da.
@@ -3619,7 +3579,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
         # Örnek sayısı ve mevcut stabilite skoru eşitlik/ince ayar için kullanılır.
         gunun_puani = (
             guven
-            + stabil * 1.8
+            + etkin_stabil * 1.8
             + min(ornek, 40) * 0.12
             + min(max(stabil_skor, 0.0), 200.0) * 0.015
             + baglam_ayari
@@ -3696,6 +3656,7 @@ def gunun_en_guvenli_kuponunu_olustur(final_list, maks=6, min_guven=72, gecmis_d
             "hassasiyet": hassasiyet_oku(t.get("kullanilan_tolerans")),
             "hassasiyetler": list(t.get("top10_hassasiyetler", t.get("stability_tols", [])) or []),
             "hassasiyet_sayisi": int(aday["stabil"]),
+            "hassasiyet_etkin_sayisi": etkin_kararlilik_sayisi(t),
             "gunun_puani": round(float(aday["gunun_puani"]), 1),
             "baglam_ayari": round(float(aday["baglam_ayari"]), 2),
             "baglam": aday.get("baglam", {}),
@@ -5312,11 +5273,16 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     ]
 
     raw_combo_list = []
+    all_combo_stats = []
     for combo_label, combo_cond, combo_type in combo_defs:
         combo_hit = int(combo_cond.sum())
-        combo_raw = agirlikli_oran(combo_cond, goal_weights)
+        # İlk yarı verisi olmayan maçlar ilk yarı kombosunun kaybı sayılmaz.
+        combo_values = combo_cond.reindex(b_ht.index) if combo_type == "iyms" else combo_cond
+        combo_weights = goal_weights.reindex(combo_values.index)
+        combo_n = etkin_ornek(combo_weights)
+        combo_raw = agirlikli_oran(combo_values, combo_weights)
         combo_conf = min(combo_raw * guven_carpani * combo_bias * form_market_carpani(combo_label, form_profili), 0.99)
-        combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, goal_n, float(tolerans))
+        combo_conf, combo_fake_drop = fake_confidence_duzelt(combo_conf, combo_n, float(tolerans))
 
         if combo_type == "oukg":
             gerekli_raw = 0.30 if match_type != "Sürpriz Açık" else 0.27
@@ -5329,15 +5295,16 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
             gerekli_raw = 0.26 if match_type != "Sürpriz Açık" else 0.23
             gerekli_hit = max(3, onerilen_min_mac)
 
-        if combo_hit >= gerekli_hit and combo_raw >= gerekli_raw:
-            raw_combo_list.append({
-                "label": combo_label,
-                "raw_prob": combo_raw,
-                "conf_prob": combo_conf,
-                "hit": combo_hit,
-                "fake_drop": combo_fake_drop,
-                "type": combo_type,
-            })
+        combo_stat = {
+            "label": combo_label, "raw_prob": combo_raw, "conf_prob": combo_conf,
+            "hit": combo_hit, "fake_drop": combo_fake_drop, "type": combo_type,
+            "eligible": combo_hit >= gerekli_hit and combo_raw >= gerekli_raw,
+        }
+        # Tarama zayıf sonuçları da taşır. Yalnız kazanan komboyu ortalamaya
+        # almak, diğer hassasiyetlerdeki aleyhte kanıtı sessizce düşürüyordu.
+        all_combo_stats.append(combo_stat)
+        if combo_stat["eligible"]:
+            raw_combo_list.append(combo_stat)
 
     htft_counts = (ms_weights.reindex(htft_series.index).groupby(htft_series).sum() / ms_weights.reindex(htft_series.index).sum())
     for htft_label, htft_raw_prob in htft_counts.items():
@@ -5650,10 +5617,23 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         sonuc["alt_p"] = sonuc[label_fields[sonuc["alt_label"]]]
     sonuc["ms_p"] = sonuc[label_fields[ms_side]]
     sonuc["kg_p"] = sonuc[label_fields[kg_label]]
+    combo_bound_fields = {**label_fields, "İY 1.5 Üst": "iy15_p"}
+    sonuc["combo_candidates"] = []
+    for candidate in all_combo_stats:
+        parts = [{"MS1": "MS 1", "MSX": "Beraberlik", "MS2": "MS 2"}.get(part.strip(), part.strip())
+                 for part in candidate["label"].split("+")]
+        bounds = [sonuc[combo_bound_fields[part]] for part in parts if part in combo_bound_fields]
+        confidence = max(0, min(99, int(round(candidate["conf_prob"] * 100))))
+        confidence = min([confidence, *bounds])
+        sonuc["combo_candidates"].append({
+            "label": candidate["label"], "guven": confidence,
+            "raw_p": round(candidate["raw_prob"] * 100, 2), "hit": candidate["hit"],
+            "eligible": candidate["eligible"],
+        })
     if sonuc["combo_var"]:
         combo_parts = [{"MS1": "MS 1", "MSX": "Beraberlik", "MS2": "MS 2"}.get(part.strip(), part.strip())
                        for part in sonuc["combo_label"].split("+")]
-        bounds = [sonuc[label_fields[part]] for part in combo_parts if part in label_fields]
+        bounds = [sonuc[combo_bound_fields[part]] for part in combo_parts if part in combo_bound_fields]
         if bounds:
             sonuc["combo_p"] = min(sonuc["combo_p"], *bounds)
     if sonuc["alt_p"] <= 60:
@@ -5736,30 +5716,12 @@ def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False,
                                market_gecmis_kayitlari=None, taramalar=None):
     havuz = birlesik_market_havuzu(b_df, m_row, min_ornek, sadece_ayni_lig,
                                  market_gecmis_kayitlari, taramalar=taramalar)
-    return birlesik_tahmin_olustur(havuz[0], havuz, m_row) if havuz else (None, pd.DataFrame())
+    ana = next((candidate for candidate in havuz if "+" not in candidate["label"]), None)
+    return birlesik_tahmin_olustur(ana, havuz, m_row) if ana else (None, pd.DataFrame())
 
 def kombo_tahmini_oran(label, ana_odd=None):
-    """Top 10 Market içinde kombo marketler için yaklaşık oran üretir.
-    Gerçek bookmaker kombo oranı API'den gelmediği için sadece tahmini gösterim amaçlıdır.
-    """
-    if not label:
-        return None
-
-    label = str(label)
-    try:
-        base = float(ana_odd) if ana_odd else 1.60
-    except Exception:
-        base = 1.60
-
-    if label.startswith("HT/FT"):
-        return 4.50
-    if "KG Var" in label or "KG Yok" in label:
-        return round(base * 1.55, 2)
-    if "2.5 Üst" in label or "2.5 Alt" in label:
-        return round(base * 1.50, 2)
-    if "MS1" in label or "MS2" in label or "MSX" in label:
-        return round(base * 1.45, 2)
-    return round(base * 1.40, 2)
+    """Eski çağrılar için uyumluluk: gerçek kombo fiyatı yoksa oran türetilmez."""
+    return None
 
 
 def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
@@ -5826,7 +5788,7 @@ def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
             if str(t.get("goal_profile", "")) == "Düşük Gollü":
                 return
 
-        if label in ("İY 1.5 Üst", "İY KG Var"):
+        if label in ("İY 1.5 Üst", "İY KG Var") and not tum_guvenler:
             if guven < 55:
                 return
             if safe_int(t.get("ornek", 0)) < 5:
@@ -5881,8 +5843,13 @@ def top10_market_adaylari(t, filtreler=None, tum_guvenler=False):
     add("İY 1.5 Üst", t.get("iy15_p", 0), "İlk Yarı", None, bonus=0, min_guven=55)
     add("İY KG Var", t.get("iykg_var_p", 0), "İlk Yarı", None, bonus=0, min_guven=55)
 
-    # Kombo.
-    if t.get("combo_var") and t.get("combo_label"):
+    # Her kombo bütün yeterli hassasiyetlerde değerlendirilir. Düşük güvenli
+    # gözlemler tum_guvenler taramasında korunur; yalnız seçilen kombo taşınmaz.
+    if "combo_candidates" in t:
+        for candidate in t["combo_candidates"]:
+            if tum_guvenler or candidate.get("eligible"):
+                add(candidate["label"], candidate["guven"], "Kombo", None, min_guven=48)
+    elif not tum_guvenler and t.get("combo_var") and t.get("combo_label"):
         combo_label_txt = str(t.get("combo_label", ""))
         # Top 10 / Top 50 listesinde HT/FT ana öneri gibi öne çıkmasın.
         # HT/FT detay ekranında görünmeye devam eder; liste önerisi MS / Alt-Üst / KG ağırlıklı kalır.
@@ -10655,7 +10622,8 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
             Her maç yalnızca kendisinden önce oynanmış karşılaşmalar kullanılarak analiz edilir; gelecek veri sızıntısı yapılmaz.
             Backtest yalnızca güveni %60'ın üstünde olan (%61+) tahminleri değerlendirir.
             Ana sonuç 0.00–0.10 arasındaki yeterli örnekli marketleri güven %80 ve
-            hassasiyet kararlılığı %20 ile sıralar. Örnek sayısı puan kazandırmaz; yalnızca minimum yeterlilik
+            hassasiyet kararlılığı en çok %20 ile sıralar. Örtüşen örnek havuzlarının kararlılık katkısı azaltılır;
+            11/11 aynı maçların tekrarından oluşabilir. Örnek sayısı yalnızca minimum yeterlilik
             koşuludur ve çok az örnekte ayrıca ceza uygulanır. Marketin geçmiş backtest başarısı güvene küçük,
             veri miktarına göre azaltılmış bir düzeltme yapar. 11 tekil hassasiyet ayrıca karşılaştırma için gösterilir.
             Form ve Value/Edge kullanılmaz.
@@ -12358,10 +12326,10 @@ else:
                     use_container_width=True,
                     disabled=not combo_uygun,
                 ):
-                    combo_oran = kombo_tahmini_oran(combo_label, t.get("ana_odd"))
+                    combo_oran = market_label_to_odd(m, combo_label)
                     manuel_kupona_ekle(
                         m, t, combo_label, t.get("combo_p", 0),
-                        oran=combo_oran, oran_tahmini=True,
+                        oran=combo_oran, oran_tahmini=False,
                     )
                     st.rerun()
 
@@ -12631,30 +12599,14 @@ else:
                 gunun_kaynagi, maks=6, min_guven=72,
                 gecmis_df=st.session_state.get("last_gecmis_df")
             )
-            # Günün Kuponu'nun kendi sıkı kalite filtresi boş kalırsa, ekranda
-            # aday üretebilen Temkinli / Dengeli / Yüksek Oran havuzlarını kullan.
-            # Böylece profil adayları bulunduğu halde Günün Kuponu boş kalmaz.
-            profil_aday_fallback = False
-            if not gunun_secimleri:
-                gunun_secimleri = gunun_kuponunu_profil_adaylarindan_olustur(
-                    st.session_state.get("last_gecmis_df"),
-                    st.session_state.get("last_bulten_df"),
-                    min_ornek=min_ornek,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    maks=6,
-                )
-                profil_aday_fallback = bool(gunun_secimleri)
-
+            # Kaliteyi geçen aday yoksa Günün Kuponu boş kalır. Diğer profillerin
+            # daha gevşek adayları bu başlık altında yeniden sunulmaz.
             if gunun_secimleri:
                 # Adayları tek kupona 6 maç doldurmak yerine kalite kırılımında böl.
                 # Ardışık kalite puanı 4+ düştüğünde yeni Günün Kuponu başlar.
                 gunun_kuponlari = gunun_kuponlarini_kaliteye_gore_bol(
                     gunun_secimleri, maks_kupon_mac=6, min_anlamli_dusus=4.0
                 )
-                # Son güvenlik ağı: profil adayları gerçekten üretildiyse bölme
-                # mantığı Günün Kuponu'nu tamamen boş bırakamaz.
-                if not gunun_kuponlari and gunun_secimleri:
-                    gunun_kuponlari = [[dict(gunun_secimleri[0])]]
 
                 for kupon_no, kupon_secimleri in enumerate(gunun_kuponlari, start=1):
                     # Görünüm yalnızca tam "Günün Kuponu" profilini listeliyor.
@@ -12665,20 +12617,14 @@ else:
                 st.session_state.coupon_popup_open = True
                 st.session_state.scroll_to_coupon = True
                 dagilim = " + ".join(str(len(k)) for k in gunun_kuponlari)
-                if profil_aday_fallback:
-                    kupon_mesaji = (
-                        "success",
-                        f"⭐ Günün Kuponu oluşturuldu: profil adayları kalite düştüğü noktalarda {len(gunun_kuponlari)} kupona bölündü ({dagilim} maç)."
-                    )
-                else:
-                    kupon_mesaji = (
-                        "success",
-                        f"⭐ Günün Kuponu oluşturuldu: seçimler kalite düştüğü noktalarda {len(gunun_kuponlari)} kupona bölündü ({dagilim} maç)."
-                    )
+                kupon_mesaji = (
+                    "success",
+                    f"⭐ Günün Kuponu oluşturuldu: seçimler kalite düştüğü noktalarda {len(gunun_kuponlari)} kupona bölündü ({dagilim} maç)."
+                )
             else:
                 kupon_mesaji = (
                     "warning",
-                    "Günün Kuponu oluşturulamadı; Temkinli, Dengeli ve Yüksek Oran aday havuzlarında da uygun seçim yok."
+                    "Günün Kuponu için kalite şartlarını karşılayan seçim bulunamadı."
                 )
 
         if gunun_kupon_btn:
@@ -12842,9 +12788,9 @@ else:
                     except Exception:
                         pass
                 guven = float(secim.get("guven", 0) or 0)
-                stabil = int(secim.get("hassasiyet_sayisi", 0) or 0)
+                stabil = etkin_kararlilik_sayisi(secim)
                 if stabil <= 0:
-                    stabil = len(_secim_hassasiyetleri(secim))
+                    stabil = min(1, len(_secim_hassasiyetleri(secim)))
                 return guven + stabil * 1.8
 
             def _otomatik_kupon_kalite_anahtari(kayit):
