@@ -11234,6 +11234,13 @@ else:
 
     # Maç Analizi kartlarını istenen güven ailesine göre sırala.
     # Tahminlerin kendisini değiştirmez; yalnızca ekrandaki kart sırasını değiştirir.
+    # Oran filtresi değiştiğinde daha önce kapatılmış/son açılmış detay modalının
+    # session_state üzerinden yeniden açılmasını engelle.
+    def _mac_analizi_oran_filtresi_degisti():
+        st.session_state.detay_idx = None
+        st.session_state.detay_item = None
+        st.session_state.detay_gecmis_acik = False
+
     sir_col, oran_col = st.columns([1.35, 1.0])
     with sir_col:
         siralama_secimi = st.selectbox(
@@ -11252,6 +11259,7 @@ else:
             format="%.2f",
             key="mac_analizi_min_oran",
             help="Ana tahmin oranı bu değerin altında olan maç kartları gösterilmez.",
+            on_change=_mac_analizi_oran_filtresi_degisti,
         )
 
     # Kart filtresi: yalnızca ana tahmin oranı seçilen minimuma eşit veya yüksek olanları göster.
