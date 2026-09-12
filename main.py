@@ -2484,7 +2484,7 @@ ODDS_BULTEN_CACHE_TTL = 6 * 60 * 60  # 6 saat; filtre değişiklikleri API kredi
 def odds_cache_key(kod, tarih, api_key=None):
     key = get_app_api_key() if api_key is None else api_key
     account = hashlib.sha256(str(key or "").encode()).hexdigest()[:16]
-    return f"v3|{account}|{kod}|{tarih.isoformat()}"
+    return f"v4-btts|{account}|{kod}|{tarih.isoformat()}"
 
 
 def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
@@ -12026,7 +12026,36 @@ else:
         _ou_label = "2.5 Alt" if _ou_alt else "2.5 Üst"
         _kg_label = "KG Yok" if _kg_yok else "KG Var"
         _ou_oran = m.get("o25_under") if _ou_alt else m.get("o25_over")
-        _kg_oran = m.get("btts_no") if _kg_yok else m.get("btts_yes")
+
+        # KG oranı önce bülten satırından alınır. Eski bülten cache'inde BTTS
+        # boşsa, detay ekranında daha önce çekilip 15 dk cache'lenen gerçek
+        # btts marketini ana karta da yansıt. Böylece detayda görünen Yes/No
+        # oranları ana kartta "—" kalmaz.
+        _kg_yes = m.get("btts_yes")
+        _kg_no = m.get("btts_no")
+        if _kg_yes is None or _kg_no is None:
+            try:
+                _event_id = str(m.get("match_id", "") or "").strip()
+                _sport_key = str(m.get("sport_key", "") or "").strip()
+                _ek_cache = st.session_state.get("ek_market_odds_cache", {})
+                _ek_key = f"btts-debug-v2|{_sport_key}|{_event_id}"
+                _ek_cached = _ek_cache.get(_ek_key, {}) if _event_id and _sport_key else {}
+                _btts_sel = ((_ek_cached.get("markets", {}) or {}).get("btts", {}) or {})
+                for _row in (_btts_sel.get("rows", []) or []):
+                    _nm = str(_row.get("name", _row.get("Seçim", "")) or "").strip().lower()
+                    try:
+                        _px = float(_row.get("Oran"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(_px) or _px <= 1:
+                        continue
+                    if _nm == "yes":
+                        _kg_yes = _px
+                    elif _nm == "no":
+                        _kg_no = _px
+            except Exception:
+                pass
+        _kg_oran = _kg_no if _kg_yok else _kg_yes
         try:
             _ou_oran_txt = f"{float(_ou_oran):.2f}" if _ou_oran is not None else "—"
         except (TypeError, ValueError):
