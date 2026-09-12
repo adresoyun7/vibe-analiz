@@ -2155,12 +2155,6 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
 
 
 def odds_spor_katalogu(key):
-    btts_debug = {
-        "event_id": event_id,
-        "sport_key": sport_key,
-        "calls": [],
-    }
-
     try:
         r = requests.get(
             "https://api.the-odds-api.com/v4/sports/",
