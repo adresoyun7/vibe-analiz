@@ -5,6 +5,7 @@ import json
 import math
 import re
 import time
+import textwrap
 import unicodedata
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
@@ -11542,7 +11543,7 @@ else:
               </div>
             </div>
             """
-            st.markdown(card_html, unsafe_allow_html=True)
+            st.markdown(textwrap.dedent(card_html).strip(), unsafe_allow_html=True)
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
