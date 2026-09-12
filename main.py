@@ -27,7 +27,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.11.2"
+MODEL_VERSION = "2026.09.12.1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -41,7 +41,9 @@ BOOKMAKER_HISTORY_PREFIX = {"bet365": "B365", "bet365_au": "B365",
                             "bwin": "BW", "betvictor": "VC"}
 ORAN_KAYIT_ALANLARI = ("match_id", "bookmaker_key", "odds_updated_at", "odds_phase",
                       "totals_updated_at", "totals_phase", "totals_bookmaker_key",
-                      "o25_over", "o25_under", "odds_fetched_at")
+                      "o25_over", "o25_under",
+                      "btts_updated_at", "btts_bookmaker_key", "btts_yes", "btts_no",
+                      "odds_fetched_at")
 
 
 def hassasiyet_oku(value, default=0.08):
@@ -2263,10 +2265,13 @@ def bulten_cek(key, kodlar, t):
 
                 market = None
                 totals_market = None
+                btts_market = None
                 secilen_bk_key = ""
                 odds_updated_at = None
                 totals_updated_at = None
                 totals_bk_key = ""
+                btts_updated_at = None
+                btts_bk_key = ""
                 sirali_bk = sorted(bookies, key=bk_priority)
 
                 # 1X2 için tercih edilen bookmaker'ı seç.
@@ -2313,6 +2318,64 @@ def bulten_cek(key, kodlar, t):
                         totals_bk_key = str(bk.get("key", ""))
                         break
 
+                # KG Var/Yok (BTTS) ek markettir ve The Odds API'de event bazlı
+                # endpointten alınır. Yalnızca bugünkü, kartta kullanılacak maç için
+                # tek ek market çağrısı yapılır; lig bülteni zaten 6 saat cache'lidir.
+                # Önce 1X2 bookmaker'ını, yoksa diğer EU bookmaker'ları tercih et.
+                try:
+                    event_id = str(m.get("id", "") or "").strip()
+                    if event_id:
+                        rb = requests.get(
+                            f"https://api.the-odds-api.com/v4/sports/{k}/events/{event_id}/odds",
+                            params={
+                                "apiKey": key,
+                                "regions": "eu",
+                                "markets": "btts",
+                                "oddsFormat": "decimal",
+                            },
+                            timeout=12,
+                        )
+                        try:
+                            st.session_state["odds_api_quota"] = {
+                                "remaining": rb.headers.get("x-requests-remaining"),
+                                "used": rb.headers.get("x-requests-used"),
+                                "last": rb.headers.get("x-requests-last"),
+                                "updated_at": time.time(),
+                            }
+                        except Exception:
+                            pass
+                        if rb.status_code == 200:
+                            event_data = rb.json()
+                            event_bookies = event_data.get("bookmakers", []) if isinstance(event_data, dict) else []
+                            event_bookies = sorted(
+                                event_bookies,
+                                key=lambda book: (str(book.get("key", "")) != secilen_bk_key, bk_priority(book)),
+                            )
+                            for ebk in event_bookies:
+                                ebmk = {str(mk.get("key", "")): mk for mk in ebk.get("markets", [])}.get("btts")
+                                if not ebmk:
+                                    continue
+                                names = {}
+                                for ox in ebmk.get("outcomes", []) or []:
+                                    try:
+                                        px = float(ox.get("price"))
+                                    except (TypeError, ValueError):
+                                        continue
+                                    if not math.isfinite(px) or px <= 1:
+                                        continue
+                                    names[str(ox.get("name", "")).strip().lower()] = px
+                                if "yes" in names and "no" in names:
+                                    btts_market = ebmk
+                                    btts_updated_at = ebmk.get("last_update") or ebk.get("last_update")
+                                    btts_bk_key = str(ebk.get("key", ""))
+                                    break
+                        elif rb.status_code not in (404, 422):
+                            # BTTS kapsamı olmayan maçlarda ana bülteni bozma; sadece
+                            # gerçek BTTS oranı None kalır.
+                            LOGGER.debug("BTTS odds alınamadı %s: HTTP %s", event_id, rb.status_code)
+                except Exception as btts_exc:
+                    LOGGER.debug("BTTS odds çağrısı başarısız: %s", type(btts_exc).__name__)
+
                 outcomes = market.get("outcomes", [])
                 h = next((x["price"] for x in outcomes if x["name"] == home), None)
                 a = next((x["price"] for x in outcomes if x["name"] == away), None)
@@ -2340,6 +2403,20 @@ def bulten_cek(key, kodlar, t):
                         elif name == "under":
                             o25_under = price
 
+                btts_yes = None
+                btts_no = None
+                if btts_market:
+                    for x in btts_market.get("outcomes", []) or []:
+                        try:
+                            price = float(x.get("price"))
+                        except Exception:
+                            continue
+                        name = str(x.get("name", "")).strip().lower()
+                        if name == "yes":
+                            btts_yes = price
+                        elif name == "no":
+                            btts_no = price
+
                 res.append({
                     "match_id": m.get("id", ""),
                     "match_key": match_key,
@@ -2358,6 +2435,10 @@ def bulten_cek(key, kodlar, t):
                     "totals_bookmaker_key": totals_bk_key,
                     "o25_over": o25_over,
                     "o25_under": o25_under,
+                    "btts_updated_at": btts_updated_at,
+                    "btts_bookmaker_key": btts_bk_key,
+                    "btts_yes": btts_yes,
+                    "btts_no": btts_no,
                 })
         except Exception as exc:
             st.session_state["odds_api_last_error"] = f"{k}: {type(exc).__name__}: {exc}"
@@ -3730,18 +3811,36 @@ def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
 # ==========================================================
 
 def market_label_to_odd(m_row, label):
+    """Tahmin etiketinin yalnızca GERÇEK bookmaker oranını döndürür.
+
+    1-X-2 ve featured 2.5 totals lig bülteninden; KG Var/Yok ise event-bazlı
+    BTTS marketinden gelir. Bir market için gerçek oran yoksa None döner; başka
+    marketten oran türetmez ve tahmini kombo oranını burada kullanmaz.
+    """
     if not isinstance(m_row, dict):
         try:
             m_row = m_row.to_dict()
         except Exception:
             pass
-    if label == "MS 1":
-        return m_row.get("h")
-    if label == "MS 2":
-        return m_row.get("a")
-    if label == "Beraberlik":
-        return m_row.get("b")
-    return None
+    label = str(label or "").strip()
+    mapping = {
+        "MS 1": "h", "MS1": "h",
+        "MS 2": "a", "MS2": "a",
+        "Beraberlik": "b", "MS X": "b", "MSX": "b",
+        "2.5 Üst": "o25_over",
+        "2.5 Alt": "o25_under",
+        "KG Var": "btts_yes",
+        "KG Yok": "btts_no",
+    }
+    key = mapping.get(label)
+    if not key:
+        return None
+    value = m_row.get(key)
+    try:
+        value = float(value)
+        return value if math.isfinite(value) and value > 1 else None
+    except (TypeError, ValueError):
+        return None
 
 
 
@@ -11297,7 +11396,7 @@ else:
             step=0.05,
             format="%.2f",
             key="mac_analizi_min_oran",
-            help="Ana tahmin oranı bu değerin altında olan maç kartları gösterilmez.",
+            help="Gerçek bookmaker oranı bu değerin altında olan tahmin gösterilmez. Ana tahmin geçmezse gerçek oranı bulunan alternatif kontrol edilir.",
             on_change=_mac_analizi_oran_filtresi_degisti,
         )
 
@@ -11321,9 +11420,11 @@ else:
         except (TypeError, ValueError):
             ana_odd_f = None
 
-        # Oranı bilinmeyen ana marketlerde eski davranışı koru; veri eksikliği
-        # yüzünden kartı veya tahmini yapay biçimde değiştirme.
-        if ana_odd_f is None or ana_odd_f >= min_odd:
+        # Minimum oran filtresi yalnızca gerçek bookmaker oranıyla çalışır.
+        # Oranı bilinmeyen market artık otomatik geçmez; önce gerçek oranı olan
+        # alternatiflere bakılır. Böylece HT/FT / kombo tahmini oranları filtreyi
+        # yanlışlıkla geçiremez.
+        if ana_odd_f is not None and ana_odd_f >= min_odd:
             return pair
 
         adaylar = []
@@ -11344,15 +11445,12 @@ else:
                     "oran": alt_odd_f,
                 })
 
-        # Kombo oranı API'de doğrudan yoksa uygulamanın mevcut tahmini kombo
-        # oran fonksiyonunu kullan. Kartta bunun tahmini oran olduğu ayrıca işaretlenir.
+        # Kombolar için gerçek market oranı yoksa minimum oran filtresinde
+        # tahmini oran KULLANILMAZ. İleride exact combo marketi çekilirse
+        # market_label_to_odd üzerinden otomatik olarak buraya dahil edilebilir.
         combo_label = str(t0.get("combo_label", "") or "").strip()
         if t0.get("combo_var") and combo_label:
             combo_odd = market_label_to_odd(m, combo_label)
-            combo_tahmini = False
-            if combo_odd is None:
-                combo_odd = kombo_tahmini_oran(combo_label, ana_odd_f)
-                combo_tahmini = combo_odd is not None
             try:
                 combo_odd_f = float(combo_odd) if combo_odd is not None else None
             except (TypeError, ValueError):
@@ -11363,7 +11461,7 @@ else:
                     "label": combo_label,
                     "guven": float(t0.get("combo_p", 0) or 0),
                     "oran": combo_odd_f,
-                    "oran_tahmini": combo_tahmini,
+                    "oran_tahmini": False,
                 })
 
         if not adaylar:
