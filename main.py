@@ -9300,6 +9300,23 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         for sira, item in enumerate(inceleme, start=1):
             m = item["m"]
             ornekler = item["ornekler"]
+
+            # KESİN aynı-lig koruması: session_state/cache içinde eski veya karışık
+            # örnek listesi kalmış olsa bile, görünümde "Sadece aynı ligler" açıkken
+            # başka ligden tek satır gösterme. Ana filtre gecmis_ornekleri_bul içinde
+            # zaten uygulanıyor; bu ikinci kontrol yalnızca UI/cache güvenlik katmanıdır.
+            if bool(gecmis_ayni_lig) and ornekler is not None and not getattr(ornekler, "empty", True):
+                sport_key = str(m.get("sport_key", "") or "")
+                history_code = ODDS_TO_HISTORY.get(sport_key)
+                if history_code and "league_code" in ornekler.columns:
+                    ornekler = ornekler[
+                        ornekler["league_code"].astype(str) == str(history_code)
+                    ].copy()
+                else:
+                    # Lig eşlemesi bilinmiyorsa aynı-lig açıkken başka ligleri
+                    # yanlışlıkla göstermek yerine örnek listesini boş bırak.
+                    ornekler = ornekler.iloc[0:0].copy()
+
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
             ozet = gecmis_ornek_ozeti(ornekler)
             iy_sonuc, _, iy_pct = ozet["iy"]
