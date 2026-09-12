@@ -7903,6 +7903,29 @@ def clear_detail_and_rebuild_top_markets():
 def selected_league_codes():
     return [lig['kod'] for lig in tum_lig_listesi() if st.session_state.get(f"cb_{lig['kod']}", False)]
 
+
+def secili_liglere_gore_gorunum_listesi(items, secili_kodlar):
+    """Önceden üretilmiş/session'da kalmış listelerde seçimi kaldırılan ligleri göstermeme garantisi.
+
+    Lig kutusu değişince Streamlit yeniden çalışır; analiz tekrar başlatılmamış olsa bile
+    eski final/top50/geçmiş filtre listelerinde artık seçili olmayan ligler görünmez.
+    Yeni eklenen liglerin verisi ise doğal olarak bir sonraki Analizi Başlat / Getir ile gelir.
+    """
+    if items is None:
+        return None
+    aktif = {str(k) for k in (secili_kodlar or [])}
+    if not aktif:
+        return []
+    sonuc = []
+    for item in list(items or []):
+        try:
+            m = item.get("m", {}) if isinstance(item, dict) else {}
+            if str(m.get("sport_key", "")) in aktif:
+                sonuc.append(item)
+        except Exception:
+            continue
+    return sonuc
+
 if 'date_mode' not in st.session_state:
     st.session_state['date_mode'] = 'Bugün'
 if 'special_date' not in st.session_state:
@@ -9164,7 +9187,9 @@ if gecmis_btn:
             st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
-    inceleme = st.session_state.get("gecmis_inceleme_list")
+    inceleme = secili_liglere_gore_gorunum_listesi(
+        st.session_state.get("gecmis_inceleme_list"), secili_kodlar
+    )
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
     elif not inceleme:
@@ -9909,7 +9934,9 @@ if yuksek_oran_btn:
             st.rerun()
 
 elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
-    oran_liste = st.session_state.get("oran_filtresi_list")
+    oran_liste = secili_liglere_gore_gorunum_listesi(
+        st.session_state.get("oran_filtresi_list"), secili_kodlar
+    )
     if oran_liste is None:
         st.info("Lig, tarih ve marketleri seçip ORAN FİLTRESİNİ ÇALIŞTIR butonuna bas.")
     elif not oran_liste:
@@ -10173,7 +10200,9 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
 
 
 if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
-    yuksek_liste = st.session_state.get("yuksek_oran_list")
+    yuksek_liste = secili_liglere_gore_gorunum_listesi(
+        st.session_state.get("yuksek_oran_list"), secili_kodlar
+    )
     if yuksek_liste is None:
         st.info("Lig, tarih ve marketleri seçip ÖRNEKLERİ GETİR butonuna bas.")
     elif not yuksek_liste:
@@ -11734,7 +11763,14 @@ if st.session_state.detay_item is not None or st.session_state.detay_idx is not 
         with st.container(border=True):
             detay_popup_icerigi()
 
-fl = st.session_state.final_list
+_ham_fl = list(st.session_state.final_list or [])
+_aktif_ligler_gorunum = {str(k) for k in (secili_kodlar or [])}
+# Orijinal session indeksini koru: Detay düğmeleri filtrelenmiş görünümde de doğru maça gider.
+_filtreli_indexed_fl = [
+    (idx, item) for idx, item in enumerate(_ham_fl)
+    if str((item.get("m", {}) or {}).get("sport_key", "")) in _aktif_ligler_gorunum
+]
+fl = [item for _, item in _filtreli_indexed_fl]
 
 # Son analiz teşhisi rerun sonrasında da görünür kalsın.
 if "son_bulten_mac_sayisi" in st.session_state:
@@ -11801,7 +11837,7 @@ if not fl and aktif_sayfa_modu != "Top 50 Market":
     </div>
     """, unsafe_allow_html=True)
 else:
-    indexed_fl = list(enumerate(fl))
+    indexed_fl = list(_filtreli_indexed_fl)
     yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
     orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
     kombolu = [(idx, x) for idx, x in indexed_fl if x["t"].get("combo_var", False)]
@@ -11810,7 +11846,9 @@ else:
     # GUNUN EN IYI 10 MACI - HASSASIYETTEN BAGIMSIZ
     # API kullanmaz; analizde cekilen maclar uzerinden 0.00 - 0.10 arasi en iyi toleransi secer.
     # ==========================================================
-    gunun_top_liste = st.session_state.get("top50_list", [])
+    gunun_top_liste = secili_liglere_gore_gorunum_listesi(
+        st.session_state.get("top50_list", []), secili_kodlar
+    ) or []
     top_baslik = "🔥 TOP 50 MARKET"
 
     if aktif_sayfa_modu == "Top 50 Market":
