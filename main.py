@@ -11809,6 +11809,69 @@ else:
 
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
+
+        # Kart oranları: 1/X/2 sabit. Alt/Üst ve KG tek yüz gösterir; kullanıcı
+        # düğmeye bastıkça karşı tarafa döner. Bu yalnızca görünümü değiştirir,
+        # tahmin veya minimum oran filtresi mantığını etkilemez.
+        _kart_id_raw = str(m.get("match_key") or m.get("match_id") or f"{m.get('ev','')}-{m.get('dep','')}-{m.get('zaman','')}")
+        _kart_id = hashlib.md5(_kart_id_raw.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        _ou_state_key = f"kart_ou_alt_{_kart_id}"
+        _kg_state_key = f"kart_kg_yok_{_kart_id}"
+
+        # İlk görünüm maçın ürettiği tahminle uyumlu olsun. Kullanıcı bir kez
+        # çevirdikten sonra session_state içindeki seçimi korunur.
+        _ana_lbl = str(t.get("ana_label", "") or "")
+        _alt_lbl = str(t.get("alt_label", "") or "")
+        _combo_lbl = str(t.get("combo_label", "") or "")
+        _tahmin_metinleri = " | ".join(x for x in (_ana_lbl, _alt_lbl, _combo_lbl) if x)
+
+        if _ou_state_key not in st.session_state:
+            if "2.5 Alt" in _ana_lbl:
+                st.session_state[_ou_state_key] = True
+            elif "2.5 Üst" in _ana_lbl:
+                st.session_state[_ou_state_key] = False
+            elif "2.5 Alt" in _combo_lbl:
+                st.session_state[_ou_state_key] = True
+            elif "2.5 Üst" in _combo_lbl:
+                st.session_state[_ou_state_key] = False
+            elif "2.5 Alt" in _alt_lbl:
+                st.session_state[_ou_state_key] = True
+            elif "2.5 Üst" in _alt_lbl:
+                st.session_state[_ou_state_key] = False
+            else:
+                st.session_state[_ou_state_key] = False
+
+        if _kg_state_key not in st.session_state:
+            if "KG Yok" in _ana_lbl:
+                st.session_state[_kg_state_key] = True
+            elif "KG Var" in _ana_lbl:
+                st.session_state[_kg_state_key] = False
+            elif "KG Yok" in _combo_lbl:
+                st.session_state[_kg_state_key] = True
+            elif "KG Var" in _combo_lbl:
+                st.session_state[_kg_state_key] = False
+            elif "KG Yok" in _alt_lbl:
+                st.session_state[_kg_state_key] = True
+            elif "KG Var" in _alt_lbl:
+                st.session_state[_kg_state_key] = False
+            else:
+                st.session_state[_kg_state_key] = False
+
+        _ou_alt = bool(st.session_state.get(_ou_state_key, False))
+        _kg_yok = bool(st.session_state.get(_kg_state_key, False))
+        _ou_label = "2.5 Alt" if _ou_alt else "2.5 Üst"
+        _kg_label = "KG Yok" if _kg_yok else "KG Var"
+        _ou_oran = m.get("o25_under") if _ou_alt else m.get("o25_over")
+        _kg_oran = m.get("btts_no") if _kg_yok else m.get("btts_yes")
+        try:
+            _ou_oran_txt = f"{float(_ou_oran):.2f}" if _ou_oran is not None else "—"
+        except (TypeError, ValueError):
+            _ou_oran_txt = "—"
+        try:
+            _kg_oran_txt = f"{float(_kg_oran):.2f}" if _kg_oran is not None else "—"
+        except (TypeError, ValueError):
+            _kg_oran_txt = "—"
+
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
@@ -11848,13 +11911,14 @@ else:
 
               <div>
                 <div class="mk-label">ORANLAR</div>
-                <div class="oran-row">
+                <div class="oran-row" style="gap:7px;flex-wrap:wrap">
                   <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
-                  <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
-                  <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
+                  <div class="oran-box" style="border:1px solid #245fa8"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>
+                  <div class="oran-box" style="border:1px solid #245fa8"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>
                 </div>
+                <div style="margin-top:8px;font-size:0.68rem;color:#6ea8e8">↻ Alt/Üst ve KG tarafını aşağıdaki düğmelerden değiştirebilirsin</div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · 🏟️ Aynı lig: {int(t.get('ayni_lig_ornek', 0) or 0)}/{int(t['ornek'])} · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
                 {stability_html}
@@ -11867,6 +11931,25 @@ else:
                 line.strip() for line in textwrap.dedent(card_html).splitlines() if line.strip()
             )
             st.markdown(_card_html_render, unsafe_allow_html=True)
+            _flip_ou_col, _flip_kg_col, _flip_spacer = st.columns([1.25, 1.25, 6.5], gap="small")
+            with _flip_ou_col:
+                if st.button(
+                    f"↻ {_ou_label}  {_ou_oran_txt}",
+                    key=f"flip_ou_{_kart_id}_{real_i}_{i}",
+                    use_container_width=True,
+                    help="2.5 Üst / 2.5 Alt oranını çevir",
+                ):
+                    st.session_state[_ou_state_key] = not _ou_alt
+                    st.rerun()
+            with _flip_kg_col:
+                if st.button(
+                    f"↻ {_kg_label}  {_kg_oran_txt}",
+                    key=f"flip_kg_{_kart_id}_{real_i}_{i}",
+                    use_container_width=True,
+                    help="KG Var / KG Yok oranını çevir",
+                ):
+                    st.session_state[_kg_state_key] = not _kg_yok
+                    st.rerun()
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
