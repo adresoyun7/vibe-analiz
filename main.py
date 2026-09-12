@@ -11234,12 +11234,38 @@ else:
 
     # Maç Analizi kartlarını istenen güven ailesine göre sırala.
     # Tahminlerin kendisini değiştirmez; yalnızca ekrandaki kart sırasını değiştirir.
-    siralama_secimi = st.selectbox(
-        "Sırala",
-        ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
-        index=0,
-        key="mac_analizi_siralama",
-    )
+    sir_col, oran_col = st.columns([1.35, 1.0])
+    with sir_col:
+        siralama_secimi = st.selectbox(
+            "Sırala",
+            ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
+            index=0,
+            key="mac_analizi_siralama",
+        )
+    with oran_col:
+        gosterilecek_min_oran = st.number_input(
+            "Gösterilecek minimum oran",
+            min_value=1.01,
+            max_value=20.00,
+            value=1.50,
+            step=0.05,
+            format="%.2f",
+            key="mac_analizi_min_oran",
+            help="Ana tahmin oranı bu değerin altında olan maç kartları gösterilmez.",
+        )
+
+    # Kart filtresi: yalnızca ana tahmin oranı seçilen minimuma eşit veya yüksek olanları göster.
+    # Oranı bulunamayan kartları gizleme; veri eksikliği yüzünden maç kaybolmasın.
+    def _oran_filtresini_gecer(pair):
+        _oran = pair[1]["t"].get("ana_odd")
+        if _oran is None:
+            return True
+        try:
+            return float(_oran) >= float(gosterilecek_min_oran)
+        except (TypeError, ValueError):
+            return True
+
+    goster = [pair for pair in goster if _oran_filtresini_gecer(pair)]
 
     def _mac_analizi_siralama_anahtari(pair):
         t = pair[1]["t"]
@@ -11269,13 +11295,16 @@ else:
         )
 
     if siralama_secimi == "Lig":
-        # Ligleri alfabetik grupla; aynı lig içinde güveni yüksek olan üstte olsun.
+        # Aynı ligden bulunan geçmiş örnek sayısı en yüksek olan maç üstte.
+        # Eşitlikte toplam örnek, ardından güven oranı kullanılır.
         goster = sorted(
             goster,
             key=lambda pair: (
-                str(pair[1]["m"].get("lig", "") or "").casefold(),
-                -float(pair[1]["t"].get("ana_p", 0) or 0),
+                int(pair[1]["t"].get("ayni_lig_ornek", 0) or 0),
+                int(pair[1]["t"].get("ornek", 0) or 0),
+                float(pair[1]["t"].get("ana_p", 0) or 0),
             ),
+            reverse=True,
         )
     else:
         goster = sorted(goster, key=_mac_analizi_siralama_anahtari, reverse=True)
