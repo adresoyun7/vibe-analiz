@@ -431,8 +431,14 @@ def hassasiyet_taramasi(gecmis_df, hedef, sadece_ayni_lig=False, model_version=M
     hedef["analysis_priors"] = gecmis_tabanlari(havuz, hedef)
     mask = oran_eslesme_maskesi(havuz, hedef, .10)
     havuz = havuz.loc[mask].copy()
-    return {round(i / 100, 2): hesapla(havuz, hedef, round(i / 100, 2), form_aktif=False, kalibrasyon_aktif=False)
-            for i in range(11)}
+    return {
+        round(i / 100, 2): hesapla(
+            havuz, hedef, round(i / 100, 2),
+            sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=False,
+            hazir_havuz=True,
+        )
+        for i in range(11)
+    }
 
 
 def tarama_hedefi(m):
@@ -3971,6 +3977,17 @@ def ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig=False):
     return gecmis_df[gecmis_df["league_code"] == history_code].copy()
 
 
+def ayni_lig_ornek_sayisi(ornek_df, m_row):
+    """Seçilen benzer örneklerin kaçının güncel maçla aynı ligden olduğunu döndürür."""
+    if ornek_df is None or getattr(ornek_df, "empty", True) or "league_code" not in ornek_df.columns:
+        return 0
+    sport_key = m_row.get("sport_key", "") if hasattr(m_row, "get") else ""
+    history_code = ODDS_TO_HISTORY.get(str(sport_key))
+    if not history_code:
+        return 0
+    return int((ornek_df["league_code"].astype(str) == str(history_code)).sum())
+
+
 TAKIM_ADI_ALIASLARI = {
     # Türkiye
     "istanbulbasaksehir": "basaksehir",
@@ -4431,18 +4448,24 @@ def form_ozet_yazi(profil):
         f"({dep['gf']:.1f}/{dep['ga']:.1f} gol)"
     )
 
-def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=False, form_profili_override=None):
+def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kalibrasyon_aktif=False, form_profili_override=None, hazir_havuz=False):
     # Kesin güvenlik filtresi:
     # İlk yarı verisi eksik 16 extra/worldwide lig hiçbir koşulda model örneği,
     # güven hesabı, örnek sayısı veya detay geçmişi olarak kullanılmasın.
-    b_df = zaman_uyumlu_gecmis(sadece_tam_verili_gecmis(b_df), m_row)
-    b_df = tarih_oncesi_gecmis(b_df, m_row.get("zaman", m_row.get("Date")))
-    if b_df is None or getattr(b_df, "empty", True):
-        return None, pd.DataFrame()
+    # hazir_havuz=True yalnızca hassasiyet_taramasi tarafından kullanılır:
+    # tarih/lig ön hazırlığı bir kez yapılmış havuzu 11 kez yeniden hazırlamayız.
+    if not hazir_havuz:
+        b_df = zaman_uyumlu_gecmis(sadece_tam_verili_gecmis(b_df), m_row)
+        b_df = tarih_oncesi_gecmis(b_df, m_row.get("zaman", m_row.get("Date")))
+        if b_df is None or getattr(b_df, "empty", True):
+            return None, pd.DataFrame()
 
-    # Form, oran eşleşmesi yapılmadan önceki tarihsel takım maçlarından hesaplanır.
-    form_kaynagi = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
-    b_df = form_kaynagi
+        # Form, oran eşleşmesi yapılmadan önceki tarihsel takım maçlarından hesaplanır.
+        form_kaynagi = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
+        b_df = form_kaynagi
+    else:
+        if b_df is None or getattr(b_df, "empty", True):
+            return None, pd.DataFrame()
     if b_df.empty:
         return None, b_df
     priors = m_row.get("analysis_priors") or gecmis_tabanlari(b_df, m_row)
@@ -10270,6 +10293,13 @@ if analiz_btn:
                     _sayac_guven += 1
                     continue
 
+                # Kartta toplam benzer örneğin kaçının aynı ligden geldiğini göster.
+                # Bu bilgi sadece_ayni_lig kapalıyken de hesaplanır.
+                try:
+                    t["ayni_lig_ornek"] = ayni_lig_ornek_sayisi(b_det, m)
+                except Exception:
+                    t["ayni_lig_ornek"] = 0
+
                 # 11 hassasiyetli stabilite taraması Maç Analizi'nde OPSİYONELDİR.
                 # Kapalıyken her maç yalnızca seçili TOLERANS ile bir kez hesaplanır.
                 if (
@@ -11206,7 +11236,7 @@ else:
     # Tahminlerin kendisini değiştirmez; yalnızca ekrandaki kart sırasını değiştirir.
     siralama_secimi = st.selectbox(
         "Sırala",
-        ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo"],
+        ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
         index=0,
         key="mac_analizi_siralama",
     )
@@ -11238,7 +11268,17 @@ else:
             float(t.get("playable_score", 0) or 0),
         )
 
-    goster = sorted(goster, key=_mac_analizi_siralama_anahtari, reverse=True)
+    if siralama_secimi == "Lig":
+        # Ligleri alfabetik grupla; aynı lig içinde güveni yüksek olan üstte olsun.
+        goster = sorted(
+            goster,
+            key=lambda pair: (
+                str(pair[1]["m"].get("lig", "") or "").casefold(),
+                -float(pair[1]["t"].get("ana_p", 0) or 0),
+            ),
+        )
+    else:
+        goster = sorted(goster, key=_mac_analizi_siralama_anahtari, reverse=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -11325,7 +11365,7 @@ else:
                   <div style="color:#2a2a2a">/</div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · 🏟️ Aynı lig: {int(t.get('ayni_lig_ornek', 0) or 0)}/{int(t['ornek'])} · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
                 {stability_html}
               </div>
