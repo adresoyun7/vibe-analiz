@@ -11259,9 +11259,19 @@ def detay_ana_icerik():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Ek market oranları yalnız detay açıldığında tek event isteğiyle alınır.
-    # Böylece uzun bültende her maç için ek API çağrısı yapılmaz.
-    detay_ek_market_oranlari_goster(m)
+    # Ek marketler detay ekranında kullanıcı isterse yüklenir.
+    # Toggle kapalıyken ek API çağrısı yapılmaz; uzun bültende gereksiz kredi/süre harcanmaz.
+    _ek_market_key = f"detay_ek_market_goster_{abs(hash(mac_key(m)))}"
+    _ek_market_acik = st.toggle(
+        "💹 Ek marketleri göster",
+        value=False,
+        key=_ek_market_key,
+        help="İY KG, İY/MS, doğru skor, alternatif Alt/Üst, korner ve kart oranlarını yükler.",
+    )
+    if _ek_market_acik:
+        detay_ek_market_oranlari_goster(m)
+    else:
+        st.caption("Ek marketler kapalı · Açılmadıkça ilave The Odds API sorgusu yapılmaz.")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
