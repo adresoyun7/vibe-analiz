@@ -12101,6 +12101,17 @@ else:
         _combo_lbl = str(t.get("combo_label", "") or "")
         _tahmin_metinleri = " | ".join(x for x in (_ana_lbl, _alt_lbl, _combo_lbl) if x)
 
+        # Kartın tahmin içeriği değişirse eski flip state'i taşınmasın.
+        # Böylece örn. kombo "2.5 Alt + KG Yok" ise ilk görünüm gerçekten
+        # 2.5 Alt ve KG Yok olur; önceki rerun'dan kalan KG Var state'i kullanılmaz.
+        _pred_signature = f"{_ana_lbl}||{_combo_lbl}||{_alt_lbl}"
+        _sig_key = f"kart_oran_sig_{_kart_id}"
+        _signature_changed = st.session_state.get(_sig_key) != _pred_signature
+        if _signature_changed:
+            st.session_state[_sig_key] = _pred_signature
+            st.session_state.pop(_ou_state_key, None)
+            st.session_state.pop(_kg_state_key, None)
+
         if _ou_state_key not in st.session_state:
             if "2.5 Alt" in _ana_lbl:
                 st.session_state[_ou_state_key] = True
@@ -12230,10 +12241,10 @@ else:
                   <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
-                  <a href="?yk_flip_ou={_kart_id}" title="Tıkla: {'2.5 Üst' if _ou_alt else '2.5 Alt'} oranına geç" style="text-decoration:none;color:inherit">
+                  <a href="?yk_flip_ou={_kart_id}" target="_self" title="Tıkla: {'2.5 Üst' if _ou_alt else '2.5 Alt'} oranına geç" style="text-decoration:none;color:inherit">
                     <div class="oran-box" style="cursor:pointer"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>
                   </a>
-                  <a href="?yk_flip_kg={_kart_id}" title="Tıkla: {'KG Var' if _kg_yok else 'KG Yok'} oranına geç" style="text-decoration:none;color:inherit">
+                  <a href="?yk_flip_kg={_kart_id}" target="_self" title="Tıkla: {'KG Var' if _kg_yok else 'KG Yok'} oranına geç" style="text-decoration:none;color:inherit">
                     <div class="oran-box" style="cursor:pointer"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>
                   </a>
                 </div>
