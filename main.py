@@ -12272,10 +12272,20 @@ else:
             # Alt/Üst ve KG oranları statik gösterilir; kart çevirme kapalıdır.
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-            if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
-                st.session_state.detay_idx = real_i
+            # Detay butonu callback kullanır. Streamlit buton tıklamasında zaten
+            # bir kez rerun yaptığı için burada ayrıca st.rerun() çağırmak gereksizdi;
+            # bu ekstra rerun kart listesinin yeniden çiziliyormuş gibi görünmesine
+            # ve aynı render maliyetinin iki kez oluşmasına neden oluyordu.
+            def _mac_analizi_detay_ac(_idx=real_i):
+                st.session_state.detay_idx = _idx
                 st.session_state.detay_item = None
-                st.rerun()
+
+            st.button(
+                "Detay →",
+                key=f"d_{real_i}_{i}",
+                use_container_width=True,
+                on_click=_mac_analizi_detay_ac,
+            )
             with st.popover("+ Kupona", use_container_width=True):
                 st.caption("Kupona eklenecek tercihi seç")
                 if st.button(
