@@ -4217,6 +4217,58 @@ def ana_kart_btts_oranlari_al(m_row):
     return found_yes, found_no
 
 
+
+def gorunum_market_oranlari(m_row):
+    """Tüm güncel maç görünümleri için ortak 1-X-2 / 2.5 / KG oran snapshot'ı.
+
+    2.5 oranları ana bülten totals verisinden gelir. BTTS alanı eski/eksik cache'de
+    boşsa mevcut event endpointi fallback'i kullanılır. Bu yardımcı sadece gerçek
+    bookmaker oranlarını döndürür; tahmini oran üretmez.
+    """
+    m = dict(m_row or {})
+    yes = m.get("btts_yes")
+    no = m.get("btts_no")
+    if yes is None or no is None:
+        try:
+            fy, fn = ana_kart_btts_oranlari_al(m)
+            if yes is None:
+                yes = fy
+            if no is None:
+                no = fn
+        except Exception:
+            pass
+    return {
+        "1": m.get("h"),
+        "X": m.get("b"),
+        "2": m.get("a"),
+        "2.5 Üst": m.get("o25_over"),
+        "2.5 Alt": m.get("o25_under"),
+        "KG Var": yes,
+        "KG Yok": no,
+    }
+
+
+def gorunum_market_oran_html(m_row, mini=False):
+    """Oran Filtresi / Yüksek Oran / Kupon görünümlerinde ortak oran satırı."""
+    odds = gorunum_market_oranlari(m_row)
+    def _fmt(v):
+        try:
+            x = float(v)
+            return f"{x:.2f}" if math.isfinite(x) and x > 1 else "—"
+        except (TypeError, ValueError):
+            return "—"
+    size = ".68rem" if mini else ".74rem"
+    pad = "4px 7px" if mini else "5px 8px"
+    parts = []
+    for label in ("1", "X", "2", "2.5 Üst", "2.5 Alt", "KG Var", "KG Yok"):
+        parts.append(
+            f'<span style="display:inline-block;border:1px solid rgba(148,163,184,.30);'
+            f'border-radius:7px;padding:{pad};margin:2px 3px 2px 0;background:rgba(15,23,42,.36);'
+            f'color:#cbd5e1;font-size:{size};white-space:nowrap">'
+            f'{escape(label)} <b style="color:#f8fafc">{_fmt(odds.get(label))}</b></span>'
+        )
+    return '<div style="margin:7px 0 5px 0">' + ''.join(parts) + '</div>'
+
 def detay_ek_market_oranlari_goster(m_row):
     """Detay ekranında gerçek ek market oranlarını kompakt tablolar halinde göster."""
     st.markdown("### 💹 Gerçek bookmaker oranları · Ek marketler")
@@ -9991,6 +10043,8 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                     expanded=False,
                 ):
                     ist_map = {x.get("label"): x for x in istatistikler}
+                    # Güncel gerçek bookmaker oranları bu görünümde de Maç Analizi ile aynı kaynaktan gelir.
+                    st.markdown(gorunum_market_oran_html(m), unsafe_allow_html=True)
 
                     # Açılır bölümde tüm seçili market gruplarını tek satırda, yan yana göster.
                     detay_kartlari = []
@@ -10119,6 +10173,8 @@ if st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
                 f"#{sira}  {m.get('ev', '')} – {m.get('dep', '')}  ·  {saat}  ·  {oneri_baslik}",
                 expanded=(sira == 1),
             ):
+                # Yüksek Oran Filtresi de aynı gerçek 2.5 ve KG oranlarını gösterir.
+                st.markdown(gorunum_market_oran_html(m), unsafe_allow_html=True)
                 oneri_renk = {
                     "GÜÇLÜ DENENEBİLİR": "#16a34a",
                     "DENENEBİLİR": "#2563eb",
@@ -12872,6 +12928,16 @@ else:
                                 f'Bağlam ayarı: <b>{baglam_val:+.1f}</b> puan</div>'
                                 if secim.get("profil") == "Günün Kuponu" or "baglam_ayari" in secim else ""
                             )
+                            # Kupon kaydındaki maç snapshot'ından güncel market oran satırı.
+                            # Yeni kuponlarda 2.5/KG alanları doğrudan taşınır; event id varsa eksik BTTS fallback ile tamamlanır.
+                            _secim_oran_m = dict(secim)
+                            _snap = secim.get("detay_snapshot")
+                            if isinstance(_snap, dict) and isinstance(_snap.get("m"), dict):
+                                for _k, _v in _snap["m"].items():
+                                    if _secim_oran_m.get(_k) is None:
+                                        _secim_oran_m[_k] = _v
+                            _kupon_market_html = gorunum_market_oran_html(_secim_oran_m, mini=True)
+
                             # Maç bilgileri ve aksiyonlar aynı görsel kartın içinde.
                             kart_key = f"auto_coupon_match_{abs(hash(str(kayit.get('kupon_id'))))}_{secim_no}"
                             st.markdown(
@@ -12909,6 +12975,7 @@ else:
                                           <div style="font-size:.80rem;color:#dbeafe;margin-top:5px">
                                             {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
                                           </div>
+                                          {_kupon_market_html}
                                           {hassasiyet_alt}
                                           {baglam_alt}
                                         </div>
