@@ -3844,6 +3844,209 @@ def market_label_to_odd(m_row, label):
 
 
 
+
+EK_MARKET_CACHE_TTL = 15 * 60  # Detay oranlarını 15 dk cache'le; aynı maçı tekrar açmak kredi harcamasın.
+EK_MARKET_KEYS = (
+    "alternate_totals",
+    "btts",
+    "btts_h1",
+    "halftime_fulltime",
+    "correct_score",
+    "alternate_totals_corners",
+    "alternate_totals_cards",
+)
+
+
+def _ek_market_bk_priority(bk, preferred_key=""):
+    """Ek marketlerde mevcut 1X2 bookmaker'ını öncele, sonra sabit tercih sırasını kullan."""
+    bk_key = str((bk or {}).get("key", "") or "")
+    preferred = ("williamhill", "pinnacle", "bwin", "betvictor", "bet365")
+    if preferred_key and bk_key == str(preferred_key):
+        return (0, -1, bk_key)
+    return (1, preferred.index(bk_key) if bk_key in preferred else len(preferred), bk_key)
+
+
+def _ek_market_outcome_text(outcome):
+    """The Odds API outcome nesnesini kullanıcıya okunur etikete çevir."""
+    name = str((outcome or {}).get("name", "") or "").strip()
+    desc = str((outcome or {}).get("description", "") or "").strip()
+    point = (outcome or {}).get("point")
+    parts = []
+    if desc and desc.lower() != name.lower():
+        parts.append(desc)
+    if name:
+        parts.append(name)
+    try:
+        p = float(point)
+        if math.isfinite(p):
+            parts.append(f"{p:g}")
+    except (TypeError, ValueError):
+        pass
+    return " · ".join(parts) if parts else "—"
+
+
+def ek_market_oranlari_al(m_row, zorla_yenile=False):
+    """Bir maçın additional soccer marketlerini yalnız detay açıldığında getirir.
+
+    Tek event isteğinde alternate totals, BTTS, İY BTTS, İY/MS, doğru skor,
+    korner ve kart toplamlarını ister. Sonuç session_state'te 15 dk cache'lenir.
+    Gerçek bookmaker fiyatı olmayan hiçbir değeri tahmin etmez.
+    """
+    if not isinstance(m_row, dict):
+        try:
+            m_row = m_row.to_dict()
+        except Exception:
+            return {"markets": {}, "error": "Maç bilgisi okunamadı."}
+
+    event_id = str(m_row.get("match_id", "") or "").strip()
+    sport_key = str(m_row.get("sport_key", "") or "").strip()
+    if not event_id or not sport_key:
+        return {"markets": {}, "error": "Event ID / lig kodu bulunamadı."}
+
+    api_key = get_app_api_key()
+    if not api_key:
+        return {"markets": {}, "error": "ODDS API anahtarı gerekli."}
+
+    cache = st.session_state.setdefault("ek_market_odds_cache", {})
+    cache_key = f"{sport_key}|{event_id}"
+    now = time.time()
+    cached = cache.get(cache_key)
+    if (not zorla_yenile and isinstance(cached, dict)
+            and now - float(cached.get("cached_at", 0) or 0) < EK_MARKET_CACHE_TTL):
+        return cached
+
+    try:
+        r = requests.get(
+            f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds",
+            params={
+                "apiKey": api_key,
+                "regions": "eu",
+                "markets": ",".join(EK_MARKET_KEYS),
+                "oddsFormat": "decimal",
+            },
+            timeout=15,
+        )
+        try:
+            st.session_state["odds_api_quota"] = {
+                "remaining": r.headers.get("x-requests-remaining"),
+                "used": r.headers.get("x-requests-used"),
+                "last": r.headers.get("x-requests-last"),
+                "updated_at": time.time(),
+            }
+        except Exception:
+            pass
+
+        if r.status_code != 200:
+            try:
+                err = r.text[:350]
+            except Exception:
+                err = ""
+            result = {
+                "markets": {},
+                "error": f"Ek market oranları alınamadı (HTTP {r.status_code}). {err}".strip(),
+                "cached_at": now,
+            }
+            # Hataları uzun süre cache'leme; 45 sn sonra yeniden denenebilsin.
+            result["cached_at"] = now - EK_MARKET_CACHE_TTL + 45
+            cache[cache_key] = result
+            return result
+
+        data = r.json()
+        bookies = data.get("bookmakers", []) if isinstance(data, dict) else []
+        preferred_key = str(m_row.get("bookmaker_key", "") or "")
+        bookies = sorted(bookies, key=lambda bk: _ek_market_bk_priority(bk, preferred_key))
+
+        selected = {}
+        for market_key in EK_MARKET_KEYS:
+            for bk in bookies:
+                mk = next((x for x in (bk.get("markets", []) or [])
+                           if str(x.get("key", "")) == market_key), None)
+                if not mk:
+                    continue
+                rows = []
+                for outcome in mk.get("outcomes", []) or []:
+                    try:
+                        price = float(outcome.get("price"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(price) or price <= 1:
+                        continue
+                    rows.append({
+                        "Seçim": _ek_market_outcome_text(outcome),
+                        "Oran": price,
+                        "name": outcome.get("name"),
+                        "description": outcome.get("description"),
+                        "point": outcome.get("point"),
+                    })
+                if rows:
+                    selected[market_key] = {
+                        "bookmaker_key": str(bk.get("key", "") or ""),
+                        "bookmaker_title": str(bk.get("title", "") or bk.get("key", "") or ""),
+                        "last_update": mk.get("last_update") or bk.get("last_update"),
+                        "rows": rows,
+                    }
+                    break
+
+        result = {
+            "markets": selected,
+            "error": "" if selected else "Bu maç/bookmaker bölgesi için ek market oranı bulunamadı.",
+            "cached_at": now,
+        }
+        cache[cache_key] = result
+        return result
+    except Exception as exc:
+        LOGGER.debug("Ek market odds çağrısı başarısız: %s", type(exc).__name__)
+        return {"markets": {}, "error": f"Ek market oranları alınamadı: {type(exc).__name__}"}
+
+
+def detay_ek_market_oranlari_goster(m_row):
+    """Detay ekranında gerçek ek market oranlarını kompakt tablolar halinde göster."""
+    st.markdown("### 💹 Gerçek bookmaker oranları · Ek marketler")
+    st.caption(
+        "Bu bölüm yalnız maç detayı açıldığında The Odds API'den çekilir ve 15 dakika cache'lenir. "
+        "Gösterilen fiyatlar gerçek API oranlarıdır; tahmini oran kullanılmaz."
+    )
+
+    veri = ek_market_oranlari_al(m_row)
+    markets = veri.get("markets", {}) if isinstance(veri, dict) else {}
+    hata = str(veri.get("error", "") or "") if isinstance(veri, dict) else ""
+    if not markets:
+        st.info(hata or "Ek market oranı bulunamadı.")
+        return
+
+    market_titles = [
+        ("alternate_totals", "⚽ Alt / Üst · tüm çizgiler"),
+        ("btts", "🤝 KG Var / Yok"),
+        ("btts_h1", "⏱ İY KG Var / Yok"),
+        ("halftime_fulltime", "🔁 İY / MS"),
+        ("correct_score", "🎯 Doğru Skor"),
+        ("alternate_totals_corners", "🚩 Korner Alt / Üst"),
+        ("alternate_totals_cards", "🟨 Kart Alt / Üst"),
+    ]
+
+    for key, title in market_titles:
+        mk = markets.get(key)
+        if not mk:
+            continue
+        rows = mk.get("rows", []) or []
+        if not rows:
+            continue
+        st.markdown(f"**{title}**")
+        bk_title = mk.get("bookmaker_title") or mk.get("bookmaker_key") or "Bookmaker"
+        updated = str(mk.get("last_update", "") or "")
+        st.caption(f"{bk_title}" + (f" · güncelleme: {updated}" if updated else ""))
+        tablo = pd.DataFrame([{"Seçim": r.get("Seçim", "—"), "Oran": r.get("Oran")} for r in rows])
+        if not tablo.empty:
+            try:
+                tablo["Oran"] = pd.to_numeric(tablo["Oran"], errors="coerce").round(2)
+            except Exception:
+                pass
+            st.dataframe(tablo, use_container_width=True, hide_index=True)
+
+    eksik = [title for key, title in market_titles if key not in markets]
+    if eksik:
+        st.caption("Bu maçta API'den gelmeyen marketler: " + " · ".join(x.split(" ", 1)[-1] for x in eksik))
+
 def ms_fair_probability(m_row, label):
     """1-X-2 bookmaker marjını normalize ederek fair piyasa olasılığını döndürür."""
     try:
@@ -11053,6 +11256,12 @@ def detay_ana_icerik():
           </div>
         </div>
         """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Ek market oranları yalnız detay açıldığında tek event isteğiyle alınır.
+    # Böylece uzun bültende her maç için ek API çağrısı yapılmaz.
+    detay_ek_market_oranlari_goster(m)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
