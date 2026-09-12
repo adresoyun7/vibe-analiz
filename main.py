@@ -3935,6 +3935,11 @@ def ek_market_oranlari_al(m_row, zorla_yenile=False):
     cache = st.session_state.setdefault("ek_market_odds_cache", {})
     cache_key = f"btts-debug-v2|{sport_key}|{event_id}"
     now = time.time()
+    btts_debug = {
+        "event_id": event_id,
+        "sport_key": sport_key,
+        "calls": [],
+    }
     cached = cache.get(cache_key)
     if (not zorla_yenile and isinstance(cached, dict)
             and now - float(cached.get("cached_at", 0) or 0) < EK_MARKET_CACHE_TTL):
