@@ -12018,6 +12018,25 @@ else:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ORANLAR bölümündeki 2.5 ve KG kutularının kendisi tıklanabilir.
+    # Ayrı Streamlit flip düğmesi kullanmıyoruz; link query-param ile aynı
+    # session_state değerini çevirip parametreyi hemen temizliyor.
+    try:
+        _qp_flip_ou = st.query_params.get("yk_flip_ou")
+        if _qp_flip_ou:
+            _flip_key = f"kart_ou_alt_{str(_qp_flip_ou)}"
+            st.session_state[_flip_key] = not bool(st.session_state.get(_flip_key, False))
+            del st.query_params["yk_flip_ou"]
+            st.rerun()
+        _qp_flip_kg = st.query_params.get("yk_flip_kg")
+        if _qp_flip_kg:
+            _flip_key = f"kart_kg_yok_{str(_qp_flip_kg)}"
+            st.session_state[_flip_key] = not bool(st.session_state.get(_flip_key, False))
+            del st.query_params["yk_flip_kg"]
+            st.rerun()
+    except Exception:
+        pass
+
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
         gc, _, _ = guven_renk(t["ana_p"])
@@ -12211,6 +12230,12 @@ else:
                   <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
+                  <a href="?yk_flip_ou={_kart_id}" title="Tıkla: {'2.5 Üst' if _ou_alt else '2.5 Alt'} oranına geç" style="text-decoration:none;color:inherit">
+                    <div class="oran-box" style="cursor:pointer"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>
+                  </a>
+                  <a href="?yk_flip_kg={_kart_id}" title="Tıkla: {'KG Var' if _kg_yok else 'KG Yok'} oranına geç" style="text-decoration:none;color:inherit">
+                    <div class="oran-box" style="cursor:pointer"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>
+                  </a>
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · 🏟️ Aynı lig: {int(t.get('ayni_lig_ornek', 0) or 0)}/{int(t['ornek'])} · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
@@ -12224,27 +12249,7 @@ else:
                 line.strip() for line in textwrap.dedent(card_html).splitlines() if line.strip()
             )
             st.markdown(_card_html_render, unsafe_allow_html=True)
-            # Alt/Üst ve KG için ayrı kontrol düğmesi yok.
-            # Görünen oran kutularının kendisi tıklanabilir ve karşı tarafa geçer.
-            _flip_ou_col, _flip_kg_col, _flip_spacer = st.columns([1.25, 1.25, 6.5], gap="small")
-            with _flip_ou_col:
-                if st.button(
-                    f"{_ou_label}  {_ou_oran_txt}",
-                    key=f"flip_ou_{_kart_id}_{real_i}_{i}",
-                    use_container_width=True,
-                    help=f"Tıkla: {'2.5 Üst' if _ou_alt else '2.5 Alt'} oranına geç",
-                ):
-                    st.session_state[_ou_state_key] = not _ou_alt
-                    st.rerun()
-            with _flip_kg_col:
-                if st.button(
-                    f"{_kg_label}  {_kg_oran_txt}",
-                    key=f"flip_kg_{_kart_id}_{real_i}_{i}",
-                    use_container_width=True,
-                    help=f"Tıkla: {'KG Var' if _kg_yok else 'KG Yok'} oranına geç",
-                ):
-                    st.session_state[_kg_state_key] = not _kg_yok
-                    st.rerun()
+            # Alt/Üst ve KG oranları artık doğrudan ORANLAR bölümünde tıklanır.
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
