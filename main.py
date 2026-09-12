@@ -9149,31 +9149,30 @@ if gecmis_btn:
             gi_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
             inceleme = []
             for _, gi_mac in gi_bulten.iterrows():
-                ornekler = gecmis_ornekleri_bul(
+                # Geçmiş Örnekleri için iki havuzu DAİMA ayrı sakla.
+                # Böylece toggle yalnızca hangi hazır havuzun gösterileceğini seçer;
+                # session_state / eski hesaplama / global checkbox filtresini bozamaz.
+                tum_ornekler = gecmis_ornekleri_bul(
                     gi_gecmis,
                     gi_mac,
                     TOLERANS,
-                    sadece_ayni_lig=gecmis_filtre_ayni_lig,
+                    sadece_ayni_lig=False,
                     limit=gecmis_limit,
                 )
-                # Satır başlığında aynı lig / toplam örnek sayısını gösterebilmek için
-                # toplam örnek sayısını ayrıca sakla. Aynı lig filtresi kapalıysa
-                # mevcut sonuç zaten toplam örnek listesidir; ekstra hesap yapma.
-                if gecmis_filtre_ayni_lig:
-                    tum_ornekler = gecmis_ornekleri_bul(
-                        gi_gecmis,
-                        gi_mac,
-                        TOLERANS,
-                        sadece_ayni_lig=False,
-                        limit=gecmis_limit,
-                    )
-                    tum_ornek_sayisi = int(len(tum_ornekler))
-                else:
-                    tum_ornek_sayisi = int(len(ornekler))
+                ayni_lig_ornekler = gecmis_ornekleri_bul(
+                    gi_gecmis,
+                    gi_mac,
+                    TOLERANS,
+                    sadece_ayni_lig=True,
+                    limit=gecmis_limit,
+                )
+                aktif_ornekler = ayni_lig_ornekler if gecmis_filtre_ayni_lig else tum_ornekler
                 inceleme.append({
                     "m": gi_mac.to_dict(),
-                    "ornekler": ornekler,
-                    "tum_ornek_sayisi": tum_ornek_sayisi,
+                    "ornekler": aktif_ornekler,
+                    "ornekler_tum": tum_ornekler,
+                    "ornekler_ayni_lig": ayni_lig_ornekler,
+                    "tum_ornek_sayisi": int(len(tum_ornekler)),
                 })
             # Geçmiş Örnekleri sıralaması:
             # 1) İY, MS, 2.5 veya KG içindeki EN YÜKSEK YÜZDE çoktan aza
@@ -9232,53 +9231,37 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 help="Kapatınca maç başlığındaki ve geçmiş tablo içindeki 1-X-2 oranları gizlenir.",
             )
 
-        # Aynı lig anahtarı değiştiyse mevcut maç listesini API'ye tekrar gitmeden
-        # yalnızca yerel/tarihsel veriyle yeniden hesapla. Karşılaştırmayı global
-        # widget ile değil, bu listenin en son uygulanan durumuyla yapıyoruz; böylece
-        # AÇIK -> KAPALI geçişinde de eski (tüm ligler) görünüm geri gelir.
-        gecmis_ayni_lig_uygulandi = bool(st.session_state.get("gecmis_ayni_lig_uygulandi", mevcut_ayni_lig))
-        gecmis_ayni_lig_dirty = bool(st.session_state.get("gecmis_ayni_lig_dirty", False))
-        if gecmis_ayni_lig_dirty or bool(gecmis_ayni_lig) != gecmis_ayni_lig_uygulandi:
-            # `sadece_ayni_lig` anahtarı sayfanın başka yerinde zaten bir widget key'i
-            # olarak oluşturulmuş olabilir. Widget oluşturulduktan sonra aynı key'e
-            # session_state üzerinden değer yazmak StreamlitWidgetAlreadyInstantiatedError
-            # üretir. Bu yüzden Geçmiş Örnekleri anahtarını bağımsız tutup yalnızca
-            # bu görünümün örneklerini yeniden hesaplıyoruz.
+        # Bu toggle artık yeniden hesaplama state'i kullanmaz. Her maç için "tüm ligler"
+        # ve "aynı lig" havuzları ayrı tutulur; burada yalnızca görünüm seçilir.
+        # Eski session kaydı varsa bir kez yeni çift-havuz yapısına yükselt.
+        eksik_cift_havuz = any(
+            not isinstance(x, dict) or "ornekler_tum" not in x or "ornekler_ayni_lig" not in x
+            for x in inceleme
+        )
+        if eksik_cift_havuz:
             gi_gecmis_yeniden = futbol_veri_motoru(tuple(yillar))
             yeniden = []
             for eski_item in inceleme:
                 gi_mac_dict = dict(eski_item.get("m", {}) or {})
                 gi_mac_series = pd.Series(gi_mac_dict)
-                yeni_ornekler = gecmis_ornekleri_bul(
-                    gi_gecmis_yeniden,
-                    gi_mac_series,
-                    TOLERANS,
-                    sadece_ayni_lig=bool(gecmis_ayni_lig),
-                    limit=gecmis_limit,
+                tum_ornekler = gecmis_ornekleri_bul(
+                    gi_gecmis_yeniden, gi_mac_series, TOLERANS,
+                    sadece_ayni_lig=False, limit=gecmis_limit,
                 )
-                # Toggle açıkken satırda "aynı lig / toplam" gösterebilmek için
-                # toplam örnek sayısını filtresiz olarak ayrıca hesapla.
-                if bool(gecmis_ayni_lig):
-                    tum_ornekler = gecmis_ornekleri_bul(
-                        gi_gecmis_yeniden,
-                        gi_mac_series,
-                        TOLERANS,
-                        sadece_ayni_lig=False,
-                        limit=gecmis_limit,
-                    )
-                    tum_ornek_sayisi = int(len(tum_ornekler))
-                else:
-                    tum_ornek_sayisi = int(len(yeni_ornekler))
+                ayni_lig_ornekler = gecmis_ornekleri_bul(
+                    gi_gecmis_yeniden, gi_mac_series, TOLERANS,
+                    sadece_ayni_lig=True, limit=gecmis_limit,
+                )
                 yeniden.append({
                     "m": gi_mac_dict,
-                    "ornekler": yeni_ornekler,
-                    "tum_ornek_sayisi": tum_ornek_sayisi,
+                    "ornekler": ayni_lig_ornekler if bool(gecmis_ayni_lig) else tum_ornekler,
+                    "ornekler_tum": tum_ornekler,
+                    "ornekler_ayni_lig": ayni_lig_ornekler,
+                    "tum_ornek_sayisi": int(len(tum_ornekler)),
                 })
             yeniden.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = yeniden
-            st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_ayni_lig)
-            st.session_state["gecmis_ayni_lig_dirty"] = False
-            st.rerun()
+            inceleme = yeniden
 
         # Geçmiş maç başlıklarını eskisi gibi aralıksız/kompakt göster.
         # Key'li container'lar Streamlit'in varsayılan dikey boşluğunu taşıdığı için
@@ -9332,12 +9315,15 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         )
         for sira, item in enumerate(inceleme, start=1):
             m = item["m"]
-            ornekler = item["ornekler"]
+            # Tek doğruluk kaynağı: toggle AÇIK => önceden hazırlanmış aynı-lig havuzu,
+            # KAPALI => önceden hazırlanmış tüm-lig havuzu.
+            # Artık item["ornekler"] veya global filtre state'i görünümü belirlemez.
+            if bool(gecmis_ayni_lig):
+                ornekler = item.get("ornekler_ayni_lig", pd.DataFrame())
+            else:
+                ornekler = item.get("ornekler_tum", pd.DataFrame())
 
-            # KESİN aynı-lig koruması: session_state/cache içinde eski veya karışık
-            # örnek listesi kalmış olsa bile, görünümde "Sadece aynı ligler" açıkken
-            # başka ligden tek satır gösterme. Ana filtre gecmis_ornekleri_bul içinde
-            # zaten uygulanıyor; bu ikinci kontrol yalnızca UI/cache güvenlik katmanıdır.
+            # Son güvenlik: aynı-lig havuzunda yanlış lig satırı kalırsa burada da kes.
             if bool(gecmis_ayni_lig) and ornekler is not None and not getattr(ornekler, "empty", True):
                 sport_key = str(m.get("sport_key", "") or "")
                 history_code = ODDS_TO_HISTORY.get(sport_key)
@@ -9346,8 +9332,6 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         ornekler["league_code"].astype(str) == str(history_code)
                     ].copy()
                 else:
-                    # Lig eşlemesi bilinmiyorsa aynı-lig açıkken başka ligleri
-                    # yanlışlıkla göstermek yerine örnek listesini boş bırak.
                     ornekler = ornekler.iloc[0:0].copy()
 
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
