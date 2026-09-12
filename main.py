@@ -7865,20 +7865,17 @@ def clear_detail_on_filter_change():
 
 
 def sync_ayni_lig_globalden_gecmise():
-    """Üstteki aynı-lig checkbox'ını Geçmiş Örnekleri toggle'ına yansıtır."""
-    deger = bool(st.session_state.get("sadece_ayni_lig", False))
-    st.session_state["gecmis_sadece_ayni_lig_toggle"] = deger
-    # Geçmiş örnek listesi bu yeni duruma göre yeniden kurulmalı.
-    st.session_state["gecmis_ayni_lig_uygulandi"] = not deger
+    """Global aynı-lig ayarı Geçmiş Örnekleri toggle'ını değiştirmesin."""
+    # Geçmiş Örnekleri filtresi tamamen kendi toggle'ına aittir.
+    # Böylece başka sayfadaki/global checkbox bu ekranı gizlice aynı lige kilitlemez.
     clear_detail_on_filter_change()
 
 
 def sync_ayni_lig_gecmisten_globale():
-    """Geçmiş Örnekleri ekranındaki aynı-lig filtresini yalnızca bu görünümde uygula."""
-    deger = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
-    # Global/Top50 checkbox'ına yazma. Aksi halde yerel toggle kapalı olsa bile
-    # eski global state yeni geçmiş listesini tekrar aynı-lige kilitleyebiliyordu.
-    st.session_state["gecmis_ayni_lig_uygulandi"] = not deger
+    """Geçmiş Örnekleri aynı-lig toggle'ı değiştiğinde listeyi kesin yeniden kur."""
+    # Callback yalnızca kirli bayrağı bırakır. Yeni değer widget tarafından zaten
+    # session_state'e yazılmıştır; script rerun'ında liste o değere göre hesaplanır.
+    st.session_state["gecmis_ayni_lig_dirty"] = True
     clear_detail_on_filter_change()
 
 
@@ -9169,6 +9166,7 @@ if gecmis_btn:
             # Liste hangi filtreyle üretildiyse onu kaydet; toggle kapalıyken
             # yanlışlıkla aynı-lig listesi "uygulanmış" sayılmasın.
             st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_filtre_ayni_lig)
+            st.session_state["gecmis_ayni_lig_dirty"] = False
             st.rerun()
 
 if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
@@ -9195,6 +9193,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             mevcut_ayni_lig = False
         if "gecmis_ayni_lig_uygulandi" not in st.session_state:
             st.session_state["gecmis_ayni_lig_uygulandi"] = mevcut_ayni_lig
+        if "gecmis_ayni_lig_dirty" not in st.session_state:
+            st.session_state["gecmis_ayni_lig_dirty"] = False
         if "gecmis_oranlari_goster" not in st.session_state:
             st.session_state["gecmis_oranlari_goster"] = False
 
@@ -9218,7 +9218,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         # widget ile değil, bu listenin en son uygulanan durumuyla yapıyoruz; böylece
         # AÇIK -> KAPALI geçişinde de eski (tüm ligler) görünüm geri gelir.
         gecmis_ayni_lig_uygulandi = bool(st.session_state.get("gecmis_ayni_lig_uygulandi", mevcut_ayni_lig))
-        if bool(gecmis_ayni_lig) != gecmis_ayni_lig_uygulandi:
+        gecmis_ayni_lig_dirty = bool(st.session_state.get("gecmis_ayni_lig_dirty", False))
+        if gecmis_ayni_lig_dirty or bool(gecmis_ayni_lig) != gecmis_ayni_lig_uygulandi:
             # `sadece_ayni_lig` anahtarı sayfanın başka yerinde zaten bir widget key'i
             # olarak oluşturulmuş olabilir. Widget oluşturulduktan sonra aynı key'e
             # session_state üzerinden değer yazmak StreamlitWidgetAlreadyInstantiatedError
@@ -9257,6 +9258,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             yeniden.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = yeniden
             st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_ayni_lig)
+            st.session_state["gecmis_ayni_lig_dirty"] = False
             st.rerun()
 
         # Geçmiş maç başlıklarını eskisi gibi aralıksız/kompakt göster.
