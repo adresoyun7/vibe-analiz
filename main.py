@@ -12074,24 +12074,8 @@ else:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ORANLAR bölümündeki 2.5 ve KG kutularının kendisi tıklanabilir.
-    # Ayrı Streamlit flip düğmesi kullanmıyoruz; link query-param ile aynı
-    # session_state değerini çevirip parametreyi hemen temizliyor.
-    try:
-        _qp_flip_ou = st.query_params.get("yk_flip_ou")
-        if _qp_flip_ou:
-            _flip_key = f"kart_ou_alt_{str(_qp_flip_ou)}"
-            st.session_state[_flip_key] = not bool(st.session_state.get(_flip_key, False))
-            del st.query_params["yk_flip_ou"]
-            st.rerun()
-        _qp_flip_kg = st.query_params.get("yk_flip_kg")
-        if _qp_flip_kg:
-            _flip_key = f"kart_kg_yok_{str(_qp_flip_kg)}"
-            st.session_state[_flip_key] = not bool(st.session_state.get(_flip_key, False))
-            del st.query_params["yk_flip_kg"]
-            st.rerun()
-    except Exception:
-        pass
+    # Kart çevirme kapalı: 2.5 ve KG kutuları yalnızca tahmine göre statik görünür.
+    # Böylece oran kutusuna tıklama kaynaklı query-param / st.rerun yükü oluşmaz.
 
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
@@ -12142,66 +12126,39 @@ else:
         alt_html = f'<span class="alt-pill">{t["alt_label"]}</span>' if t.get("alt_label") else '<span style="font-size:0.78rem;color:#6f7990">—</span>'
         value_html = ''
 
-        # Kart oranları: 1/X/2 sabit. Alt/Üst ve KG tek yüz gösterir; kullanıcı
-        # düğmeye bastıkça karşı tarafa döner. Bu yalnızca görünümü değiştirir,
-        # tahmin veya minimum oran filtresi mantığını etkilemez.
-        _kart_id_raw = str(m.get("match_key") or m.get("match_id") or f"{m.get('ev','')}-{m.get('dep','')}-{m.get('zaman','')}")
-        _kart_id = hashlib.md5(_kart_id_raw.encode("utf-8", errors="ignore")).hexdigest()[:12]
-        _ou_state_key = f"kart_ou_alt_{_kart_id}"
-        _kg_state_key = f"kart_kg_yok_{_kart_id}"
-
-        # İlk görünüm maçın ürettiği tahminle uyumlu olsun. Kullanıcı bir kez
-        # çevirdikten sonra session_state içindeki seçimi korunur.
+        # Kart oranları statik: 1/X/2 sabit, 2.5 ve KG tarafı tahmine göre seçilir.
+        # Tıklama/çevirme/session_state kullanılmaz.
         _ana_lbl = str(t.get("ana_label", "") or "")
         _alt_lbl = str(t.get("alt_label", "") or "")
         _combo_lbl = str(t.get("combo_label", "") or "")
-        _tahmin_metinleri = " | ".join(x for x in (_ana_lbl, _alt_lbl, _combo_lbl) if x)
 
-        # Kartın tahmin içeriği değişirse eski flip state'i taşınmasın.
-        # Böylece örn. kombo "2.5 Alt + KG Yok" ise ilk görünüm gerçekten
-        # 2.5 Alt ve KG Yok olur; önceki rerun'dan kalan KG Var state'i kullanılmaz.
-        _pred_signature = f"{_ana_lbl}||{_combo_lbl}||{_alt_lbl}"
-        _sig_key = f"kart_oran_sig_{_kart_id}"
-        _signature_changed = st.session_state.get(_sig_key) != _pred_signature
-        if _signature_changed:
-            st.session_state[_sig_key] = _pred_signature
-            st.session_state.pop(_ou_state_key, None)
-            st.session_state.pop(_kg_state_key, None)
+        # Öncelik: ana tahmin -> kombo -> alternatif.
+        if "2.5 Alt" in _ana_lbl:
+            _ou_alt = True
+        elif "2.5 Üst" in _ana_lbl:
+            _ou_alt = False
+        elif "2.5 Alt" in _combo_lbl:
+            _ou_alt = True
+        elif "2.5 Üst" in _combo_lbl:
+            _ou_alt = False
+        elif "2.5 Alt" in _alt_lbl:
+            _ou_alt = True
+        else:
+            _ou_alt = False
 
-        if _ou_state_key not in st.session_state:
-            if "2.5 Alt" in _ana_lbl:
-                st.session_state[_ou_state_key] = True
-            elif "2.5 Üst" in _ana_lbl:
-                st.session_state[_ou_state_key] = False
-            elif "2.5 Alt" in _combo_lbl:
-                st.session_state[_ou_state_key] = True
-            elif "2.5 Üst" in _combo_lbl:
-                st.session_state[_ou_state_key] = False
-            elif "2.5 Alt" in _alt_lbl:
-                st.session_state[_ou_state_key] = True
-            elif "2.5 Üst" in _alt_lbl:
-                st.session_state[_ou_state_key] = False
-            else:
-                st.session_state[_ou_state_key] = False
+        if "KG Yok" in _ana_lbl:
+            _kg_yok = True
+        elif "KG Var" in _ana_lbl:
+            _kg_yok = False
+        elif "KG Yok" in _combo_lbl:
+            _kg_yok = True
+        elif "KG Var" in _combo_lbl:
+            _kg_yok = False
+        elif "KG Yok" in _alt_lbl:
+            _kg_yok = True
+        else:
+            _kg_yok = False
 
-        if _kg_state_key not in st.session_state:
-            if "KG Yok" in _ana_lbl:
-                st.session_state[_kg_state_key] = True
-            elif "KG Var" in _ana_lbl:
-                st.session_state[_kg_state_key] = False
-            elif "KG Yok" in _combo_lbl:
-                st.session_state[_kg_state_key] = True
-            elif "KG Var" in _combo_lbl:
-                st.session_state[_kg_state_key] = False
-            elif "KG Yok" in _alt_lbl:
-                st.session_state[_kg_state_key] = True
-            elif "KG Var" in _alt_lbl:
-                st.session_state[_kg_state_key] = False
-            else:
-                st.session_state[_kg_state_key] = False
-
-        _ou_alt = bool(st.session_state.get(_ou_state_key, False))
-        _kg_yok = bool(st.session_state.get(_kg_state_key, False))
         _ou_label = "2.5 Alt" if _ou_alt else "2.5 Üst"
         _kg_label = "KG Yok" if _kg_yok else "KG Var"
         _ou_oran = m.get("o25_under") if _ou_alt else m.get("o25_over")
@@ -12297,12 +12254,8 @@ else:
                   <div class="oran-box"><div class="ov">1</div><div class="val">{m['h']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">X</div><div class="val">{m['b']:.2f}</div></div>
                   <div class="oran-box"><div class="ov">2</div><div class="val">{m['a']:.2f}</div></div>
-                  <a href="?yk_flip_ou={_kart_id}" target="_self" title="Tıkla: {'2.5 Üst' if _ou_alt else '2.5 Alt'} oranına geç" style="text-decoration:none;color:inherit">
-                    <div class="oran-box" style="cursor:pointer"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>
-                  </a>
-                  <a href="?yk_flip_kg={_kart_id}" target="_self" title="Tıkla: {'KG Var' if _kg_yok else 'KG Yok'} oranına geç" style="text-decoration:none;color:inherit">
-                    <div class="oran-box" style="cursor:pointer"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>
-                  </a>
+                  <div class="oran-box"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>
+                  <div class="oran-box"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>
                 </div>
                 <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · 🏟️ Aynı lig: {int(t.get('ayni_lig_ornek', 0) or 0)}/{int(t['ornek'])} · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
@@ -12316,7 +12269,7 @@ else:
                 line.strip() for line in textwrap.dedent(card_html).splitlines() if line.strip()
             )
             st.markdown(_card_html_render, unsafe_allow_html=True)
-            # Alt/Üst ve KG oranları artık doğrudan ORANLAR bölümünde tıklanır.
+            # Alt/Üst ve KG oranları statik gösterilir; kart çevirme kapalıdır.
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
             if st.button("Detay →", key=f"d_{real_i}_{i}", use_container_width=True):
