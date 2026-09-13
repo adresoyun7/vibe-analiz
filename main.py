@@ -5985,7 +5985,7 @@ def _tahmin_market_ailesi(label):
 # İLK ANA TAHMİN / DEĞİŞMEYE MÜSAİT MAÇ FİLTRESİ
 # ==========================================================
 ILK_ANA_TAHMIN_PATH = APP_DATA_DIR / "yapaikupon_ilk_ana_tahminler.json"
-ANA_TAHMIN_STRES_ADIMI = 0.03
+ANA_TAHMIN_STRES_ADIMI = 0.02
 
 
 def _ilk_ana_tahmin_anahtari(m, tolerans, sadece_ayni_lig=False):
@@ -6014,7 +6014,7 @@ def ilk_ana_tahminleri_yaz(harita):
 def ana_tahmin_stres_testi(gecmis_df, m_row, tolerans, sadece_ayni_lig, min_ornek, beklenen_label):
     """Mevcut 1-X-2 oranlarını küçük miktarda oynatıp ana tahmin yönünü sınar.
 
-    API çağrısı yapmaz. H/D/A oranlarının her birini ayrı ayrı ±0.03 oynatır.
+    API çağrısı yapmaz. H/D/A oranlarının her birini ayrı ayrı ±0.02 oynatır.
     Tek bir senaryoda bile ana tahmin değişir veya yeterli örnek kalmazsa maç
     'değişmeye müsait' kabul edilir.
     """
@@ -11130,7 +11130,7 @@ if analiz_btn:
                         LOGGER.debug("Maç Analizi hassasiyet listesi üretilemedi: %s", type(_stability_error).__name__)
 
                 # İlk görülen ana tahmini esas al. Aynı maç/ayar daha sonra başka
-                # ana tahmine dönerse veya ±0.03 oran stresinde yön değiştirirse
+                # ana tahmine dönerse veya ±0.02 oran stresinde yön değiştirirse
                 # Maç Analizi ana listesine hiç alma. Bu filtre yalnızca ana tahmini
                 # etkiler; alternatif/kombo değişimleri maçın elenmesine yol açmaz.
                 if st.session_state.get("sayfa_modu") == "Maç Analizi" and not _sonuc_reset_genis_tarama:
