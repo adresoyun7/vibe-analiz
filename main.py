@@ -27,7 +27,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.12.2"
+MODEL_VERSION = "2026.09.13.1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -891,7 +891,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 92
+APP_SCHEMA_VERSION = 93
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     korunan = {key: st.session_state[key] for key in ("user_api_key", "user_api_football_key", "koyu_mod") if key in st.session_state}
     st.session_state.clear()
@@ -5981,6 +5981,149 @@ def _tahmin_market_ailesi(label):
     return l
 
 
+# ==========================================================
+# İLK ANA TAHMİN / DEĞİŞMEYE MÜSAİT MAÇ FİLTRESİ
+# ==========================================================
+ILK_ANA_TAHMIN_PATH = APP_DATA_DIR / "yapaikupon_ilk_ana_tahminler.json"
+ANA_TAHMIN_STRES_ADIMI = 0.03
+
+
+def _ilk_ana_tahmin_anahtari(m, tolerans, sadece_ayni_lig=False):
+    """Aynı maç + aynı analiz ayarını tek anahtarda tutar.
+
+    Hassasiyet veya aynı-lig ayarı bilinçli olarak değiştirilirse bu, gerçek oran
+    hareketi sayılmaz; yeni ayar kendi ilk tahminini oluşturur.
+    """
+    match = str(m.get("match_id") or mac_key(m))
+    return f"{match}|tol={float(tolerans):.2f}|lig={int(bool(sadece_ayni_lig))}"
+
+
+def ilk_ana_tahminleri_oku():
+    try:
+        kayitlar = kayit_deposu().read("ilk_ana_tahminler", ILK_ANA_TAHMIN_PATH)
+        return {str(x.get("anahtar", "")): dict(x) for x in kayitlar if isinstance(x, dict) and x.get("anahtar")}
+    except (OSError, ValueError, sqlite3.Error):
+        return {}
+
+
+def ilk_ana_tahminleri_yaz(harita):
+    kayitlar = [dict(v) for v in harita.values() if isinstance(v, dict)]
+    return kayitlari_degistir("ilk_ana_tahminler", lambda _: kayitlar, ILK_ANA_TAHMIN_PATH)
+
+
+def ana_tahmin_stres_testi(gecmis_df, m_row, tolerans, sadece_ayni_lig, min_ornek, beklenen_label):
+    """Mevcut 1-X-2 oranlarını küçük miktarda oynatıp ana tahmin yönünü sınar.
+
+    API çağrısı yapmaz. H/D/A oranlarının her birini ayrı ayrı ±0.03 oynatır.
+    Tek bir senaryoda bile ana tahmin değişir veya yeterli örnek kalmazsa maç
+    'değişmeye müsait' kabul edilir.
+    """
+    beklenen = str(beklenen_label or "").strip()
+    if not beklenen or beklenen in {"Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"}:
+        return False, ["geçersiz ana tahmin"]
+
+    try:
+        baz = {k: float(m_row.get(k)) for k in ("h", "b", "a")}
+    except (TypeError, ValueError):
+        return False, ["oran okunamadı"]
+
+    degisenler = []
+    for alan in ("h", "b", "a"):
+        for yon in (-1, 1):
+            yeni_deger = baz[alan] + yon * ANA_TAHMIN_STRES_ADIMI
+            if not math.isfinite(yeni_deger) or yeni_deger <= 1.01:
+                continue
+            hedef = m_row.copy() if hasattr(m_row, "copy") else dict(m_row)
+            hedef[alan] = round(yeni_deger, 4)
+            try:
+                tt, bb = hesapla(
+                    gecmis_df, hedef, tolerans,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    form_aktif=False, kalibrasyon_aktif=False,
+                )
+                n = len(bb) if bb is not None else 0
+                yeni_label = str((tt or {}).get("ana_label", "") or "").strip()
+            except Exception as error:
+                LOGGER.debug("Ana tahmin stres testi başarısız: %s", type(error).__name__)
+                return False, [f"{alan} stres hatası"]
+
+            if tt is None or n < max(1, int(min_ornek or 1)):
+                degisenler.append(f"{alan}{'+' if yon > 0 else '-'}: örnek yetersiz")
+                continue
+            if yeni_label != beklenen:
+                degisenler.append(f"{alan}{'+' if yon > 0 else '-'}: {yeni_label or 'tahmin yok'}")
+
+    return len(degisenler) == 0, degisenler
+
+
+def ilk_ana_tahmin_filtresi_uygula(registry, m, t, gecmis_df, tolerans, sadece_ayni_lig, min_ornek):
+    """İlk görülen ana tahmini kilitler ve değişmeye müsait maçları kalıcı eler."""
+    label = str(t.get("ana_label", "") or "").strip()
+    if not label or label in {"Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"}:
+        return False, "geçersiz ana tahmin"
+    if not mac_baslamadi_mi(m.get("zaman")):
+        return True, ""
+
+    anahtar = _ilk_ana_tahmin_anahtari(m, tolerans, sadece_ayni_lig)
+    kayit = dict(registry.get(anahtar, {}) or {})
+
+    # Daha önce bu maç/ayar değişken bulunduysa tekrar listeye dönmesin.
+    if kayit.get("elendi"):
+        return False, str(kayit.get("elenme_nedeni", "Ana tahmin daha önce değişken bulundu."))
+
+    # İlk görülen tahmin daha sonra gerçekten değiştiyse maç kalıcı olarak elenir.
+    if kayit.get("ilk_tahmin") and str(kayit.get("ilk_tahmin")) != label:
+        kayit.update(
+            son_tahmin=label, elendi=True,
+            elenme_nedeni=f"İlk tahmin {kayit.get('ilk_tahmin')} → {label} değişti",
+            son_kontrol=kayit_zamani_iso(),
+        )
+        registry[anahtar] = kayit
+        return False, kayit["elenme_nedeni"]
+
+    # İlk kez görülüyorsa önce etiketi/oranları sabitle; stres testinde elenirse de
+    # bu ilk tahmin korunur ve sonraki analizde başka tahminle tekrar listeye giremez.
+    if not kayit:
+        kayit = {
+            "anahtar": anahtar,
+            "match_id": str(m.get("match_id", "") or ""),
+            "sport_key": str(m.get("sport_key", "") or ""),
+            "ev": str(m.get("ev", "") or ""),
+            "dep": str(m.get("dep", "") or ""),
+            "zaman": m.get("zaman").isoformat() if hasattr(m.get("zaman"), "isoformat") else str(m.get("zaman", "")),
+            "tolerans": float(tolerans),
+            "sadece_ayni_lig": bool(sadece_ayni_lig),
+            "ilk_tahmin": label,
+            "ilk_guven": int(t.get("ana_p", 0) or 0),
+            "ilk_h": float(m.get("h")) if m.get("h") is not None else None,
+            "ilk_b": float(m.get("b")) if m.get("b") is not None else None,
+            "ilk_a": float(m.get("a")) if m.get("a") is not None else None,
+            "ilk_gorulme": kayit_zamani_iso(),
+            "elendi": False,
+        }
+
+    stabil, nedenler = ana_tahmin_stres_testi(
+        gecmis_df, m, tolerans, sadece_ayni_lig, min_ornek, label
+    )
+    kayit["son_tahmin"] = label
+    kayit["son_kontrol"] = kayit_zamani_iso()
+    kayit["stres_adimi"] = ANA_TAHMIN_STRES_ADIMI
+    kayit["stres_stabil"] = bool(stabil)
+    kayit["stres_nedenleri"] = list(nedenler)
+    if not stabil:
+        kayit["elendi"] = True
+        kayit["elenme_nedeni"] = "Küçük oran değişiminde ana tahmin değişiyor / örnek yetersizleşiyor"
+    registry[anahtar] = kayit
+
+    if not stabil:
+        return False, kayit["elenme_nedeni"]
+
+    t["ilk_ana_tahmin"] = kayit.get("ilk_tahmin", label)
+    t["ilk_ana_tahmin_stabil"] = True
+    t["ilk_ana_tahmin_stres_adimi"] = ANA_TAHMIN_STRES_ADIMI
+    return True, ""
+
+
 def _en_iyi_alternatif(ana_label, kayitlar):
     """Aynı maçın kayıtlarından farklı market ailesindeki en güçlü %60+ alternatifi bulur."""
     adaylar = []
@@ -10888,6 +11031,9 @@ if analiz_btn:
                     st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı.")
 
         final = []
+        _ilk_ana_registry = ilk_ana_tahminleri_oku() if st.session_state.get("sayfa_modu") == "Maç Analizi" else {}
+        _ilk_ana_registry_degisti = False
+        _sayac_ilk_tahmin_kararsiz = 0
         # Analiz filtresi teşhisi: hangi aşamada kaç maç eleniyor?
         _sayac_toplam = 0
         _sayac_t_none = 0
@@ -10983,6 +11129,22 @@ if analiz_btn:
                     except Exception as _stability_error:
                         LOGGER.debug("Maç Analizi hassasiyet listesi üretilemedi: %s", type(_stability_error).__name__)
 
+                # İlk görülen ana tahmini esas al. Aynı maç/ayar daha sonra başka
+                # ana tahmine dönerse veya ±0.03 oran stresinde yön değiştirirse
+                # Maç Analizi ana listesine hiç alma. Bu filtre yalnızca ana tahmini
+                # etkiler; alternatif/kombo değişimleri maçın elenmesine yol açmaz.
+                if st.session_state.get("sayfa_modu") == "Maç Analizi" and not _sonuc_reset_genis_tarama:
+                    _m_for_first = m.to_dict()
+                    _before = copy.deepcopy(_ilk_ana_registry)
+                    _ilk_ok, _ilk_neden = ilk_ana_tahmin_filtresi_uygula(
+                        _ilk_ana_registry, _m_for_first, t, gecmis, TOLERANS, sadece_ayni_lig, min_ornek
+                    )
+                    if _ilk_ana_registry != _before:
+                        _ilk_ana_registry_degisti = True
+                    if not _ilk_ok:
+                        _sayac_ilk_tahmin_kararsiz += 1
+                        continue
+
                 m_dict = m.to_dict()
                 m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
                 final.append({"m": m_dict, "t": t, "b": b_det})
@@ -10992,6 +11154,9 @@ if analiz_btn:
             final = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig)
             final = [item for item in final if int(item["t"]["ana_p"]) >= int(oynanabilir_esik or 0)]
             _sayac_toplam, _sayac_gecen = len(bulten), len(final)
+        elif _ilk_ana_registry_degisti:
+            ilk_ana_tahminleri_yaz(_ilk_ana_registry)
+
         final.sort(key=lambda item: (item["t"].get("score", 0), item["t"].get("ana_p", 0),
                                      item["t"].get("stability_count", 0), mac_key(item["m"])), reverse=True)
         st.session_state.final_list = final
@@ -11001,6 +11166,7 @@ if analiz_btn:
             "t_none": _sayac_t_none,
             "ornek": _sayac_ornek,
             "guven": _sayac_guven,
+            "ilk_tahmin_kararsiz": _sayac_ilk_tahmin_kararsiz,
             "gecen": _sayac_gecen,
             "min_ornek": int(min_ornek or 0),
             "oynanabilir_esik": int(oynanabilir_esik or 0),
