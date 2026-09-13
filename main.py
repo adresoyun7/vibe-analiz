@@ -27,7 +27,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.13.1"
+MODEL_VERSION = "2026.09.13.2"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -5985,15 +5985,14 @@ def _tahmin_market_ailesi(label):
 # İLK ANA TAHMİN / DEĞİŞMEYE MÜSAİT MAÇ FİLTRESİ
 # ==========================================================
 ILK_ANA_TAHMIN_PATH = APP_DATA_DIR / "yapaikupon_ilk_ana_tahminler.json"
-ANA_TAHMIN_STRES_ADIMI = 0.02
+ANA_TAHMIN_STRES_ELEME_ADIMI = 0.01
+ANA_TAHMIN_STRES_UYARI_ADIMI = 0.02
+ANA_TAHMIN_STRES_PUAN_CEZASI = 3.0
+ANA_TAHMIN_STRES_SURUMU = 2
 
 
 def _ilk_ana_tahmin_anahtari(m, tolerans, sadece_ayni_lig=False):
-    """Aynı maç + aynı analiz ayarını tek anahtarda tutar.
-
-    Hassasiyet veya aynı-lig ayarı bilinçli olarak değiştirilirse bu, gerçek oran
-    hareketi sayılmaz; yeni ayar kendi ilk tahminini oluşturur.
-    """
+    """Aynı maç + aynı analiz ayarını tek anahtarda tutar."""
     match = str(m.get("match_id") or mac_key(m))
     return f"{match}|tol={float(tolerans):.2f}|lig={int(bool(sadece_ayni_lig))}"
 
@@ -6011,13 +6010,8 @@ def ilk_ana_tahminleri_yaz(harita):
     return kayitlari_degistir("ilk_ana_tahminler", lambda _: kayitlar, ILK_ANA_TAHMIN_PATH)
 
 
-def ana_tahmin_stres_testi(gecmis_df, m_row, tolerans, sadece_ayni_lig, min_ornek, beklenen_label):
-    """Mevcut 1-X-2 oranlarını küçük miktarda oynatıp ana tahmin yönünü sınar.
-
-    API çağrısı yapmaz. H/D/A oranlarının her birini ayrı ayrı ±0.02 oynatır.
-    Tek bir senaryoda bile ana tahmin değişir veya yeterli örnek kalmazsa maç
-    'değişmeye müsait' kabul edilir.
-    """
+def ana_tahmin_stres_testi(gecmis_df, m_row, tolerans, sadece_ayni_lig, min_ornek, beklenen_label, stres_adimi):
+    """H/D/A oranlarını ayrı ayrı ±stres_adimi oynatıp ana yönün korunmasını sınar."""
     beklenen = str(beklenen_label or "").strip()
     if not beklenen or beklenen in {"Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"}:
         return False, ["geçersiz ana tahmin"]
@@ -6030,7 +6024,7 @@ def ana_tahmin_stres_testi(gecmis_df, m_row, tolerans, sadece_ayni_lig, min_orne
     degisenler = []
     for alan in ("h", "b", "a"):
         for yon in (-1, 1):
-            yeni_deger = baz[alan] + yon * ANA_TAHMIN_STRES_ADIMI
+            yeni_deger = baz[alan] + yon * float(stres_adimi)
             if not math.isfinite(yeni_deger) or yeni_deger <= 1.01:
                 continue
             hedef = m_row.copy() if hasattr(m_row, "copy") else dict(m_row)
@@ -6057,7 +6051,7 @@ def ana_tahmin_stres_testi(gecmis_df, m_row, tolerans, sadece_ayni_lig, min_orne
 
 
 def ilk_ana_tahmin_filtresi_uygula(registry, m, t, gecmis_df, tolerans, sadece_ayni_lig, min_ornek):
-    """İlk görülen ana tahmini kilitler ve değişmeye müsait maçları kalıcı eler."""
+    """İlk ana tahmini kilitler: ±0.01 eleme, ±0.02 küçük puan cezası, gerçek yön değişimi kalıcı eleme."""
     label = str(t.get("ana_label", "") or "").strip()
     if not label or label in {"Belirsiz Maç", "Tahmin Zayıf", "İY 0.5 Üst"}:
         return False, "geçersiz ana tahmin"
@@ -6067,22 +6061,31 @@ def ilk_ana_tahmin_filtresi_uygula(registry, m, t, gecmis_df, tolerans, sadece_a
     anahtar = _ilk_ana_tahmin_anahtari(m, tolerans, sadece_ayni_lig)
     kayit = dict(registry.get(anahtar, {}) or {})
 
-    # Daha önce bu maç/ayar değişken bulunduysa tekrar listeye dönmesin.
+    # Önceki ±0.02-doğrudan-eleme sürümünün yalnız stres kaynaklı kilidini kaldır.
+    # Gerçek ana tahmin değişimiyle elenen kayıtlar korunur.
+    if (
+        kayit.get("elendi")
+        and int(kayit.get("stres_surumu", 1) or 1) < ANA_TAHMIN_STRES_SURUMU
+        and str(kayit.get("elenme_nedeni", "")).startswith("Küçük oran değişiminde")
+    ):
+        kayit["elendi"] = False
+        kayit.pop("elenme_nedeni", None)
+
     if kayit.get("elendi"):
         return False, str(kayit.get("elenme_nedeni", "Ana tahmin daha önce değişken bulundu."))
 
-    # İlk görülen tahmin daha sonra gerçekten değiştiyse maç kalıcı olarak elenir.
+    # Gerçek sonraki analiz ilk ana tahminden farklıysa kalıcı ele.
     if kayit.get("ilk_tahmin") and str(kayit.get("ilk_tahmin")) != label:
         kayit.update(
-            son_tahmin=label, elendi=True,
+            son_tahmin=label,
+            elendi=True,
             elenme_nedeni=f"İlk tahmin {kayit.get('ilk_tahmin')} → {label} değişti",
             son_kontrol=kayit_zamani_iso(),
+            stres_surumu=ANA_TAHMIN_STRES_SURUMU,
         )
         registry[anahtar] = kayit
         return False, kayit["elenme_nedeni"]
 
-    # İlk kez görülüyorsa önce etiketi/oranları sabitle; stres testinde elenirse de
-    # bu ilk tahmin korunur ve sonraki analizde başka tahminle tekrar listeye giremez.
     if not kayit:
         kayit = {
             "anahtar": anahtar,
@@ -6102,27 +6105,61 @@ def ilk_ana_tahmin_filtresi_uygula(registry, m, t, gecmis_df, tolerans, sadece_a
             "elendi": False,
         }
 
-    stabil, nedenler = ana_tahmin_stres_testi(
-        gecmis_df, m, tolerans, sadece_ayni_lig, min_ornek, label
+    # 1) Çok küçük harekette bile yön değişiyorsa listeye hiç alma.
+    stabil_001, nedenler_001 = ana_tahmin_stres_testi(
+        gecmis_df, m, tolerans, sadece_ayni_lig, min_ornek, label,
+        ANA_TAHMIN_STRES_ELEME_ADIMI,
     )
-    kayit["son_tahmin"] = label
-    kayit["son_kontrol"] = kayit_zamani_iso()
-    kayit["stres_adimi"] = ANA_TAHMIN_STRES_ADIMI
-    kayit["stres_stabil"] = bool(stabil)
-    kayit["stres_nedenleri"] = list(nedenler)
-    if not stabil:
-        kayit["elendi"] = True
-        kayit["elenme_nedeni"] = "Küçük oran değişiminde ana tahmin değişiyor / örnek yetersizleşiyor"
-    registry[anahtar] = kayit
+    kayit["stres_001_stabil"] = bool(stabil_001)
+    kayit["stres_001_nedenleri"] = list(nedenler_001)
 
-    if not stabil:
+    if not stabil_001:
+        kayit.update(
+            son_tahmin=label,
+            son_kontrol=kayit_zamani_iso(),
+            stres_surumu=ANA_TAHMIN_STRES_SURUMU,
+            elendi=True,
+            elenme_nedeni="±0.01 oran stresinde ana tahmin değişiyor / örnek yetersizleşiyor",
+        )
+        registry[anahtar] = kayit
         return False, kayit["elenme_nedeni"]
+
+    # 2) ±0.01 sağlam ama ±0.02'de kırılıyorsa göster; yalnız sıralama puanına küçük ceza ver.
+    stabil_002, nedenler_002 = ana_tahmin_stres_testi(
+        gecmis_df, m, tolerans, sadece_ayni_lig, min_ornek, label,
+        ANA_TAHMIN_STRES_UYARI_ADIMI,
+    )
+    kayit.update(
+        son_tahmin=label,
+        son_kontrol=kayit_zamani_iso(),
+        stres_surumu=ANA_TAHMIN_STRES_SURUMU,
+        stres_002_stabil=bool(stabil_002),
+        stres_002_nedenleri=list(nedenler_002),
+        elendi=False,
+    )
+    registry[anahtar] = kayit
 
     t["ilk_ana_tahmin"] = kayit.get("ilk_tahmin", label)
     t["ilk_ana_tahmin_stabil"] = True
-    t["ilk_ana_tahmin_stres_adimi"] = ANA_TAHMIN_STRES_ADIMI
-    return True, ""
+    t["ilk_ana_tahmin_stres_001"] = True
+    t["ilk_ana_tahmin_stres_002"] = bool(stabil_002)
 
+    if not stabil_002:
+        ceza = float(ANA_TAHMIN_STRES_PUAN_CEZASI)
+        for alan in ("score", "playable_score", "birlesik_puan"):
+            if alan in t and t.get(alan) is not None:
+                try:
+                    t[alan] = max(0.0, float(t[alan]) - ceza)
+                except (TypeError, ValueError):
+                    pass
+        t["stres_kirilgan"] = True
+        t["stres_puan_cezasi"] = ceza
+        t["stres_nedenleri"] = list(nedenler_002)
+    else:
+        t["stres_kirilgan"] = False
+        t["stres_puan_cezasi"] = 0.0
+
+    return True, ""
 
 def _en_iyi_alternatif(ana_label, kayitlar):
     """Aynı maçın kayıtlarından farklı market ailesindeki en güçlü %60+ alternatifi bulur."""
