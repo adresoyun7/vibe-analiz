@@ -9281,6 +9281,142 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     satir[f'{k}. Kolon'] = kolonlar[k].get(r['no'], '—')
                 gor.append(satir)
             st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
+
+            # ----------------------------------------------------------
+            # ALTERNATİF 2 · Bütçeye göre tek sistem kuponu
+            # Mevcut dinamik kolon sistemi korunur. Bu ikinci seçenek, kullanıcının
+            # bütçesini tek bir Spor Toto sistem kuponuna 1/X/2 kapsamı olarak dağıtır.
+            # ----------------------------------------------------------
+            st.markdown("#### Alternatif 2 · 💰 Bütçeye göre tek sistem kuponu")
+            st.caption(
+                "15 maç tek kuponda kalır. Model güçlü maçları tek bırakır; bütçe elverdikçe "
+                "belirsiz maçlarda ikili/üçlü işaretleme yapar. X, Spor Toto kuponundaki 0 (beraberlik) anlamındadır."
+            )
+
+            butce_c1, butce_c2 = st.columns(2)
+            with butce_c1:
+                spor_toto_butce = st.number_input(
+                    "Kupon bütçesi (TL)", min_value=1.0, value=1000.0, step=50.0,
+                    key="spor_toto_butce",
+                    help="Tek sistem kuponu bu tutarı aşmayacak şekilde oluşturulur.",
+                )
+            with butce_c2:
+                spor_toto_kolon_bedeli = st.number_input(
+                    "1 kolon bedeli (TL)", min_value=0.01, value=10.0, step=1.0,
+                    key="spor_toto_kolon_bedeli",
+                    help="Resmî güncel kolon bedelini buraya yaz. Böylece bütçe hesabı sabit bir fiyata bağlı kalmaz.",
+                )
+
+            def _spor_toto_butce_sistem_kuponu(maclar, butce, kolon_bedeli):
+                """Bütçeyi aşmadan tek sistem kuponunda kapsanan ortak olasılığı maksimize et.
+
+                Her maç için üç durum vardır: en olası tek sonuç, en olası iki sonuç veya
+                1/X/2'nin tamamı. Sistem kolon adedi seçim adetlerinin çarpımıdır.
+                Dinamik programlama ile 2^a * 3^b kolon sınırı altında en yüksek ortak
+                kapsama (olasılık kütlesi çarpımı) seçilir.
+                """
+                try:
+                    butce = max(0.0, float(butce))
+                    kolon_bedeli = max(0.01, float(kolon_bedeli))
+                except (TypeError, ValueError):
+                    return None
+
+                # Spor Toto oyun planındaki bilet başına 2.500 kolon sınırını da koru.
+                max_kolon = min(2500, int(math.floor((butce + 1e-9) / kolon_bedeli)))
+                if max_kolon < 1:
+                    return None
+
+                hazir = []
+                for r in maclar:
+                    dag = r.get('spor_toto_dagilim') or {}
+                    probs = {taraf: max(0.0, float(dag.get(taraf, 0) or 0)) for taraf in ('1', 'X', '2')}
+                    toplam = sum(probs.values())
+                    if toplam <= 0:
+                        ana = str(r.get('secim', '1'))
+                        probs = {taraf: (100.0 if taraf == ana else 0.0) for taraf in ('1', 'X', '2')}
+                        toplam = 100.0
+                    probs = {k: v / toplam for k, v in probs.items()}
+                    sirali = sorted(probs, key=lambda taraf: (probs[taraf], taraf == str(r.get('secim', ''))), reverse=True)
+                    secenekler = []
+                    for adet in (1, 2, 3):
+                        secimler = tuple(sirali[:adet])
+                        kapsam = max(1e-12, sum(probs[x] for x in secimler))
+                        secenekler.append((adet, secimler, math.log(kapsam), kapsam))
+                    hazir.append((r, secenekler))
+
+                # state: kolon_adedi -> (log ortak kapsama, [maç seçimleri])
+                dp = {1: (0.0, [])}
+                for r, secenekler in hazir:
+                    yeni = {}
+                    for mevcut_kolon, (skor, plan) in dp.items():
+                        for adet, secimler, log_kapsam, kapsam in secenekler:
+                            kolon = mevcut_kolon * adet
+                            if kolon > max_kolon:
+                                continue
+                            aday = (skor + log_kapsam, plan + [(r, secimler, kapsam)])
+                            onceki = yeni.get(kolon)
+                            if onceki is None or aday[0] > onceki[0] + 1e-12:
+                                yeni[kolon] = aday
+                    dp = yeni
+                    if not dp:
+                        return None
+
+                # Salt kapsama maksimumu bütçeyi gereksiz doldurabilir. Aynı/neredeyse aynı
+                # kapsamada daha az kolon tercih edilir; aksi halde en yüksek kapsama kazanır.
+                en_iyi_kolon, (en_iyi_skor, en_iyi_plan) = max(
+                    dp.items(), key=lambda item: (item[1][0], -item[0])
+                )
+                return {
+                    'kolon': int(en_iyi_kolon),
+                    'maliyet': float(en_iyi_kolon) * kolon_bedeli,
+                    'plan': en_iyi_plan,
+                    'ortak_kapsam': math.exp(en_iyi_skor),
+                    'max_kolon': max_kolon,
+                }
+
+            if st.button(
+                "💰 BÜTÇEYE GÖRE TEK KUPON OLUŞTUR",
+                type="primary", use_container_width=True, key="spor_toto_butce_kupon_btn"
+            ):
+                st.session_state['spor_toto_butce_kupon'] = _spor_toto_butce_sistem_kuponu(
+                    tamam, spor_toto_butce, spor_toto_kolon_bedeli
+                )
+                st.session_state['spor_toto_butce_kupon_butce'] = float(spor_toto_butce)
+                st.session_state['spor_toto_butce_kupon_bedel'] = float(spor_toto_kolon_bedeli)
+
+            butce_kupon = st.session_state.get('spor_toto_butce_kupon')
+            if butce_kupon:
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Sistem kolon", f"{butce_kupon['kolon']:,}".replace(',', '.'))
+                k2.metric("Kupon maliyeti", f"{butce_kupon['maliyet']:.2f} TL")
+                kalan = max(0.0, float(st.session_state.get('spor_toto_butce_kupon_butce', 0)) - butce_kupon['maliyet'])
+                k3.metric("Bütçede kalan", f"{kalan:.2f} TL")
+
+                butce_satirlari = []
+                ikili = uclu = 0
+                for r, secimler, kapsam in butce_kupon['plan']:
+                    if len(secimler) == 2:
+                        ikili += 1
+                    elif len(secimler) == 3:
+                        uclu += 1
+                    dag = r.get('spor_toto_dagilim') or {}
+                    butce_satirlari.append({
+                        '#': r.get('no'),
+                        'Maç': f"{r.get('ev')} - {r.get('dep')}",
+                        'İşaretle': ' / '.join('0' if x == 'X' else x for x in secimler),
+                        'Tür': 'Tek' if len(secimler) == 1 else ('İkili' if len(secimler) == 2 else 'Üçlü'),
+                        'Kapsanan olasılık': f"%{kapsam * 100:.1f}",
+                        '1 / 0 / 2': f"%{float(dag.get('1',0)):.1f} / %{float(dag.get('X',0)):.1f} / %{float(dag.get('2',0)):.1f}",
+                    })
+                st.dataframe(pd.DataFrame(butce_satirlari), use_container_width=True, hide_index=True)
+                st.caption(
+                    f"Tek sistem kuponu: {ikili} ikili + {uclu} üçlü maç · "
+                    f"kolon hesabı seçim adetlerinin çarpımıdır · bütçe tavanı "
+                    f"{float(st.session_state.get('spor_toto_butce_kupon_butce', 0)):.2f} TL. "
+                    "Bu, yukarıdaki dinamik çok-kolon önerisinin alternatifidir; onu değiştirmez."
+                )
+            elif float(spor_toto_butce) < float(spor_toto_kolon_bedeli):
+                st.warning("Bütçe, 1 kolon bedelinden düşük. En az bir kolon bedeli kadar bütçe gir.")
     legal_footer()
     st.stop()
 
