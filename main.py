@@ -12148,7 +12148,7 @@ else:
             "Gösterilecek minimum oran",
             min_value=1.00,
             max_value=20.00,
-            value=1.50,
+            value=1.00,
             step=0.05,
             format="%.2f",
             key="mac_analizi_min_oran",
@@ -12168,7 +12168,7 @@ else:
         try:
             min_odd = float(gosterilecek_min_oran)
         except (TypeError, ValueError):
-            min_odd = 1.50
+            min_odd = 1.00
 
         ana_odd = t0.get("ana_odd")
         try:
