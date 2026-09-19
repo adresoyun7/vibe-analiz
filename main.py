@@ -12812,42 +12812,84 @@ else:
             st.rerun()
 
         if tum_adaylari_goster_btn:
-            profil_aday_listeleri = {}
-            for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
-                kupon_kaynagi = gunun_en_iyi_10_uret(
-                    st.session_state.get("last_gecmis_df"),
-                    st.session_state.get("last_bulten_df"),
-                    min_ornek=min_ornek,
-                    limit=500,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    kupon_modu=True,
-                    kupon_profili=profil_adi,
-                    tum_marketler=True,
-                )
-                kullanilan = set()
-                tum_secimler = []
-                while True:
-                    parca = gunun_kuponunu_olustur(
-                        kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
-                        aday_listesi_modu=True,
+            # Aynı bülten + geçmiş + analiz ayarlarında aday havuzunu tekrar hesaplama.
+            # Bu yalnızca sonucu yeniden kullanır; 0.00-0.10 hassasiyet hesaplarının
+            # birbirinden bağımsız çalışma biçimini değiştirmez.
+            _gdf = st.session_state.get("last_gecmis_df")
+            _bdf = st.session_state.get("last_bulten_df")
+
+            def _aday_cache_df_ozeti(df, kolonlar=None):
+                if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                    return "bos"
+                use = df
+                if kolonlar:
+                    mevcut = [c for c in kolonlar if c in df.columns]
+                    if mevcut:
+                        use = df[mevcut]
+                try:
+                    hv = pd.util.hash_pandas_object(use, index=True).values.tobytes()
+                    return hashlib.sha1(hv).hexdigest()
+                except Exception:
+                    return f"{len(df)}:{tuple(df.columns)}"
+
+            _aday_cache_key = (
+                MODEL_VERSION, int(min_ornek), bool(sadece_ayni_lig),
+                _aday_cache_df_ozeti(
+                    _bdf,
+                    ["sport_key", "ev", "dep", "zaman", "h", "b", "a",
+                     "odds_phase", "odds_updated_at", "o25_over", "o25_under",
+                     "btts_yes", "btts_no"],
+                ),
+                _aday_cache_df_ozeti(
+                    _gdf,
+                    ["Date", "league_code", "HomeTeam", "AwayTeam", "FTHG", "FTAG",
+                     "FTR", "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"],
+                ),
+            )
+
+            _aday_cache = st.session_state.get("tum_profil_aday_cache")
+            if isinstance(_aday_cache, dict) and _aday_cache.get("key") == _aday_cache_key:
+                profil_aday_listeleri = _aday_cache.get("data", {})
+                st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
+                st.toast("⚡ Kayıtlı aday havuzu anında yüklendi.")
+            else:
+                profil_aday_listeleri = {}
+                for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
+                    kupon_kaynagi = gunun_en_iyi_10_uret(
+                        _gdf,
+                        _bdf,
+                        min_ornek=min_ornek,
+                        limit=None,  # Tüm uygun adaylar; 10/50/500 gibi yapay üst sınır yok.
+                        sadece_ayni_lig=sadece_ayni_lig,
+                        kupon_modu=True,
+                        kupon_profili=profil_adi,
+                        tum_marketler=True,
                     )
-                    if not parca:
-                        break
-                    yeni = False
-                    for secim in parca:
-                        key = (
-                            f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
-                            secim.get("tahmin", ""),
+                    kullanilan = set()
+                    tum_secimler = []
+                    while True:
+                        parca = gunun_kuponunu_olustur(
+                            kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
+                            aday_listesi_modu=True,
                         )
-                        if key in kullanilan:
-                            continue
-                        kullanilan.add(key)
-                        tum_secimler.append(secim)
-                        yeni = True
-                    if not yeni:
-                        break
-                profil_aday_listeleri[profil_adi] = tum_secimler
-            st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
+                        if not parca:
+                            break
+                        yeni = False
+                        for secim in parca:
+                            key = (
+                                f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
+                                secim.get("tahmin", ""),
+                            )
+                            if key in kullanilan:
+                                continue
+                            kullanilan.add(key)
+                            tum_secimler.append(secim)
+                            yeni = True
+                        if not yeni:
+                            break
+                    profil_aday_listeleri[profil_adi] = tum_secimler
+                st.session_state["tum_profil_aday_cache"] = {"key": _aday_cache_key, "data": profil_aday_listeleri}
+                st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
 
         profil_aday_listeleri = st.session_state.get("tum_profil_aday_listeleri")
         if isinstance(profil_aday_listeleri, dict):
