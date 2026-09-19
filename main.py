@@ -2216,6 +2216,24 @@ def odds_lig_kodu_coz(key, kod):
 
 
 
+def odds_get_429_guvenli(url, *, params, timeout=12, max_retry=4):
+    """The Odds API 429 frekans limitinde üstel bekleme ile aynı isteği tekrarlar."""
+    response = None
+    for attempt in range(max_retry + 1):
+        response = requests.get(url, params=params, timeout=timeout)
+        if response.status_code != 429:
+            return response
+        if attempt >= max_retry:
+            return response
+        retry_after = response.headers.get("Retry-After")
+        try:
+            wait = float(retry_after) if retry_after is not None else min(8.0, 1.0 * (2 ** attempt))
+        except (TypeError, ValueError):
+            wait = min(8.0, 1.0 * (2 ** attempt))
+        time.sleep(max(0.5, wait))
+    return response
+
+
 def bulten_cek(key, kodlar, t):
     st.session_state["odds_api_last_error"] = None
     secret_key = get_app_api_key()
@@ -2233,7 +2251,7 @@ def bulten_cek(key, kodlar, t):
             st.session_state["odds_api_last_error"] = f"Lig kodu çözülemedi: {secili_kod}"
             continue
         try:
-            r = requests.get(
+            r = odds_get_429_guvenli(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
                 params={
                     "apiKey": key,
@@ -2452,7 +2470,7 @@ def bulten_cek(key, kodlar, t):
         last_quota = None
         for region in ("eu", "uk"):
             try:
-                rb = requests.get(
+                rb = odds_get_429_guvenli(
                     f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds",
                     params={"apiKey": key, "regions": region, "markets": "btts", "oddsFormat": "decimal"},
                     timeout=12,
@@ -2501,8 +2519,9 @@ def bulten_cek(key, kodlar, t):
 
     btts_targets = [(idx, item) for idx, item in enumerate(res) if item.get("_btts_event_id")]
     if btts_targets:
-        # 8 işçi API'yi gereksiz yere aşırı yüklemeden büyük bülteni belirgin hızlandırır.
-        with ThreadPoolExecutor(max_workers=min(8, len(btts_targets))) as executor:
+        # Frekans limitine takılmamak için en fazla 2 eşzamanlı BTTS isteği.
+        # 429 gelirse odds_get_429_guvenli otomatik olarak 1/2/4/8 sn bekleyip tekrar dener.
+        with ThreadPoolExecutor(max_workers=min(2, len(btts_targets))) as executor:
             futures = {executor.submit(_btts_event_cek, item): idx for idx, item in btts_targets}
             for future in as_completed(futures):
                 idx = futures[future]
