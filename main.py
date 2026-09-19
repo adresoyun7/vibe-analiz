@@ -11118,6 +11118,81 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                     {"selector": "th", "props": [("background-color", "#e2e8f0"), ("color", "#0f172a"), ("font-weight", "800")]},
                 ])
             )
+        # ----------------------------------------------------------
+        # Güven Kalibrasyonu: model güveni ile gerçekleşen başarıyı karşılaştır.
+        # Bu bölüm yalnızca mevcut backtest çıktısını ölçer; tahmin motorunu değiştirmez.
+        # ----------------------------------------------------------
+        kal = bt.copy()
+        kal["Güven"] = pd.to_numeric(kal["Güven"], errors="coerce")
+        kal = kal.dropna(subset=["Güven", "Tuttu"]).copy()
+        kal = kal[(kal["Güven"] > 60) & (kal["Güven"] <= 100)]
+
+        if not kal.empty:
+            def _kal_market_ailesi(label):
+                text = str(label or "").strip()
+                if "+" in text:
+                    return "Kombo"
+                if text.startswith("KG "):
+                    return "KG"
+                if "Üst" in text or "Alt" in text:
+                    return "Alt/Üst"
+                if text in ("MS 1", "MS 2", "Beraberlik"):
+                    return "MS"
+                return "Diğer"
+
+            kal["Market"] = kal["Tahmin"].map(_kal_market_ailesi)
+            # Backtest yalnız %61+ tahminleri tuttuğu için ilk bant 61–64'tür.
+            kal["Güven Bandı"] = pd.cut(
+                kal["Güven"],
+                bins=[60, 65, 70, 75, 80, float("inf")],
+                labels=["%61–64", "%65–69", "%70–74", "%75–79", "%80+"],
+                right=False,
+            )
+
+            def _kalibrasyon_ozeti(frame, groups):
+                result = (
+                    frame.groupby(groups, observed=False)
+                    .agg(
+                        Tahmin=("Tuttu", "size"),
+                        Kazanan=("Tuttu", lambda values: int(values.fillna(False).astype("int64").sum())),
+                        Ortalama_Güven=("Güven", "mean"),
+                    )
+                    .reset_index()
+                )
+                result = result[result["Tahmin"] > 0].copy()
+                result["Gerçek Başarı %"] = result["Kazanan"] / result["Tahmin"] * 100
+                result["Kalibrasyon Farkı"] = result["Gerçek Başarı %"] - result["Ortalama_Güven"]
+                result["Ortalama Güven %"] = result["Ortalama_Güven"].round(1)
+                result["Gerçek Başarı %"] = result["Gerçek Başarı %"].round(1)
+                result["Kalibrasyon Farkı"] = result["Kalibrasyon Farkı"].round(1)
+                return result.drop(columns=["Ortalama_Güven"])
+
+            st.markdown("### 🎯 Güven Kalibrasyonu")
+            st.caption(
+                "Modelin verdiği güven yüzdesini gerçekleşen başarıyla karşılaştırır. "
+                "Kalibrasyon Farkı = Gerçek Başarı − Ortalama Güven. "
+                "Negatif değer modelin o grupta fazla iyimser, pozitif değer daha temkinli kaldığını gösterir. "
+                "Bu tablo modeli değiştirmez; yalnızca ölçüm yapar."
+            )
+
+            kal_genel = _kalibrasyon_ozeti(kal, ["Güven Bandı"])
+            st.dataframe(backtest_stili(kal_genel), use_container_width=True, hide_index=True)
+
+            kal_market = _kalibrasyon_ozeti(kal, ["Market", "Güven Bandı"])
+            kal_market = kal_market.sort_values(["Market", "Güven Bandı"])
+            with st.expander("Market × güven bandı kalibrasyonu", expanded=False):
+                st.caption(
+                    "MS, KG, Alt/Üst ve Kombo tahminlerini ayrı gösterir. "
+                    "Az tahminli satırları tek başına güçlü kanıt olarak değerlendirme."
+                )
+                st.dataframe(backtest_stili(kal_market), use_container_width=True, hide_index=True, height=420)
+
+            if "Lig" in kal.columns:
+                kal_lig = _kalibrasyon_ozeti(kal, ["Lig", "Güven Bandı"])
+                kal_lig = kal_lig.sort_values(["Lig", "Güven Bandı"])
+                with st.expander("Lig × güven bandı kalibrasyonu", expanded=False):
+                    st.dataframe(backtest_stili(kal_lig), use_container_width=True, hide_index=True, height=420)
+
         bt11 = st.session_state.get("backtest_11_df")
         if bt11 is not None and not bt11.empty:
             st.markdown("### 11 Hassasiyet Otomatik Backtest")
