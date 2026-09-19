@@ -12808,46 +12808,99 @@ else:
             st.rerun()
 
         if tum_adaylari_goster_btn:
-            profil_aday_listeleri = {}
-            for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
-                kupon_kaynagi = gunun_en_iyi_10_uret(
-                    st.session_state.get("last_gecmis_df"),
-                    st.session_state.get("last_bulten_df"),
-                    min_ornek=min_ornek,
-                    limit=500,
-                    sadece_ayni_lig=sadece_ayni_lig,
-                    kupon_modu=True,
-                    kupon_profili=profil_adi,
-                    tum_marketler=True,
-                )
-                kullanilan = set()
-                tum_secimler = []
-                while True:
-                    parca = gunun_kuponunu_olustur(
-                        kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
-                        aday_listesi_modu=True,
+            # Tüm Aday Listeleri pahalıdır: aynı bülten + aynı geçmiş + aynı ayarlarda
+            # sonucu session cache'den kullan. Analiz formülleri/tahmin mantığı değişmez.
+            _gdf = st.session_state.get("last_gecmis_df")
+            _bdf = st.session_state.get("last_bulten_df")
+
+            def _aday_df_imza(df, tercih_edilen_kolonlar=None):
+                if df is None or getattr(df, "empty", True):
+                    return (0, 0)
+                try:
+                    if tercih_edilen_kolonlar:
+                        cols = [c for c in tercih_edilen_kolonlar if c in df.columns]
+                        parca = df[cols] if cols else df
+                    else:
+                        parca = df
+                    # Satır/içerik değişirse imza da değişir; böylece oran veya geçmiş
+                    # veri değiştiğinde eski aday analizi otomatik kullanılmaz.
+                    h = pd.util.hash_pandas_object(parca, index=True).values
+                    return (len(df), int(h.sum(dtype="uint64")))
+                except Exception:
+                    return (len(df), hash((tuple(map(str, df.columns)), str(df.shape))))
+
+            _bulten_cols = [
+                "ev", "dep", "lig", "zaman", "home_team", "away_team",
+                "home_price", "draw_price", "away_price", "oran1", "oranx", "oran2",
+                "o25_over", "o25_under", "btts_yes", "btts_no",
+            ]
+            _gecmis_cols = [
+                "Date", "League", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR",
+                "B365H", "B365D", "B365A", "PSH", "PSD", "PSA",
+            ]
+            _aday_cache_key = (
+                "tum_profil_adaylari_v1",
+                _aday_df_imza(_bdf, _bulten_cols),
+                _aday_df_imza(_gdf, _gecmis_cols),
+                int(min_ornek),
+                bool(sadece_ayni_lig),
+                str(MODEL_VERSION),
+            )
+            _aday_cache = st.session_state.setdefault("tum_profil_aday_cache", {})
+
+            if _aday_cache_key in _aday_cache:
+                profil_aday_listeleri = _aday_cache[_aday_cache_key]
+                st.session_state["tum_profil_aday_cache_durum"] = "cache"
+            else:
+                profil_aday_listeleri = {}
+                for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
+                    kupon_kaynagi = gunun_en_iyi_10_uret(
+                        _gdf,
+                        _bdf,
+                        min_ornek=min_ornek,
+                        limit=500,
+                        sadece_ayni_lig=sadece_ayni_lig,
+                        kupon_modu=True,
+                        kupon_profili=profil_adi,
+                        tum_marketler=True,
                     )
-                    if not parca:
-                        break
-                    yeni = False
-                    for secim in parca:
-                        key = (
-                            f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
-                            secim.get("tahmin", ""),
+                    kullanilan = set()
+                    tum_secimler = []
+                    while True:
+                        parca = gunun_kuponunu_olustur(
+                            kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
+                            aday_listesi_modu=True,
                         )
-                        if key in kullanilan:
-                            continue
-                        kullanilan.add(key)
-                        tum_secimler.append(secim)
-                        yeni = True
-                    if not yeni:
-                        break
-                profil_aday_listeleri[profil_adi] = tum_secimler
+                        if not parca:
+                            break
+                        yeni = False
+                        for secim in parca:
+                            key = (
+                                f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
+                                secim.get("tahmin", ""),
+                            )
+                            if key in kullanilan:
+                                continue
+                            kullanilan.add(key)
+                            tum_secimler.append(secim)
+                            yeni = True
+                        if not yeni:
+                            break
+                    profil_aday_listeleri[profil_adi] = tum_secimler
+
+                # Son birkaç farklı bülteni tutmak yeterli; session'ın sınırsız büyümesini önle.
+                _aday_cache[_aday_cache_key] = profil_aday_listeleri
+                while len(_aday_cache) > 4:
+                    _aday_cache.pop(next(iter(_aday_cache)))
+                st.session_state["tum_profil_aday_cache_durum"] = "hesaplandi"
+
             st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
 
         profil_aday_listeleri = st.session_state.get("tum_profil_aday_listeleri")
         if isinstance(profil_aday_listeleri, dict):
             st.markdown("#### 📋 Tüm profil adayları")
+            if st.session_state.get("tum_profil_aday_cache_durum") == "cache":
+                st.caption("⚡ Aynı bülten ve ayarlar için kayıtlı aday analizi kullanıldı.")
             st.caption(
                 "Bunlar profil kriterlerini karşılayan tüm uygun marketlerdir. Aynı maçın birden fazla güçlü marketi burada görünebilir. "
                 "Otomatik kupon oluştururken ise aynı maçtan yine yalnızca tek seçim alınır. Detay ile maç analizini açabilir, ＋ ile Kendi Kuponum'a ekleyebilirsin."
