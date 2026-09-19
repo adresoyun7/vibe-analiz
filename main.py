@@ -9496,6 +9496,26 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             item for item in inceleme
             if mac_baslamadi_mi((item.get("m") or {}).get("zaman"), _gecmis_simdi)
         ]
+
+        # Geçmiş Örnekleri de üstteki "Minimum Örnek Sayısı" ayarına uysun.
+        # Aynı-lig toggle'ı açıksa aynı-lig havuzunun, kapalıysa tüm-lig havuzunun
+        # gerçek örnek sayısını kontrol eder. Tarihsel havuzun kendisini değiştirmez;
+        # yalnızca minimumu karşılamayan hedef maçları listeden çıkarır.
+        _gecmis_min_ornek = max(1, int(st.session_state.get("top_min_ornek", 1) or 1))
+        _gecmis_ayni_lig_aktif = bool(st.session_state.get("gecmis_sadece_ayni_lig_toggle", False))
+        def _gecmis_aktif_ornek_sayisi(item):
+            if _gecmis_ayni_lig_aktif:
+                havuz = item.get("ornekler_ayni_lig", item.get("ornekler"))
+            else:
+                havuz = item.get("ornekler_tum", item.get("ornekler"))
+            try:
+                return len(havuz) if havuz is not None else 0
+            except TypeError:
+                return 0
+        inceleme = [
+            item for item in inceleme
+            if _gecmis_aktif_ornek_sayisi(item) >= _gecmis_min_ornek
+        ]
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
     elif not inceleme:
