@@ -7497,6 +7497,7 @@ for key, default in [
     ("backtest_tahmin_uzlasi_df", None),
     ("gecmis_inceleme_list", None),
     ("gecmis_tam_ekran_sira", None),
+    ("oran_tam_ekran_sira", None),
     ("yuksek_oran_list", None),
     ("oran_filtresi_list", None),
     ("odds_league_cache", {}),
@@ -10333,6 +10334,93 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             baslik_ozeti_html = "".join(baslik_parcalar)
 
             with st.container(key=f"oran_mac_baslik_{sira}"):
+                oran_tam_ekran_aktif = st.session_state.get("oran_tam_ekran_sira") == sira
+
+                # Geçmiş Örnekleri ile aynı mantık: yalnızca bu maçın Oran Analizi kartını
+                # ekranın tamamına taşır. Analiz/veri hesaplaması değişmez.
+                st.markdown(
+                    f"""
+                    <style>
+                    .st-key-oran_mac_baslik_{sira} {{
+                        position:relative !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
+                        position:absolute !important;
+                        left:42px !important;
+                        top:14px !important;
+                        z-index:30 !important;
+                        width:30px !important;
+                        min-width:30px !important;
+                        height:30px !important;
+                        margin:0 !important;
+                        padding:0 !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) button {{
+                        width:30px !important;
+                        min-width:30px !important;
+                        height:30px !important;
+                        min-height:30px !important;
+                        padding:0 !important;
+                        border-radius:7px !important;
+                        font-size:16px !important;
+                        line-height:1 !important;
+                    }}
+                    .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] summary {{
+                        padding-left:76px !important;
+                    }}
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if st.button(
+                    "↙" if oran_tam_ekran_aktif else "⛶",
+                    key=f"oran_tam_ekran_btn_{sira}",
+                    help="Normal görünüme dön" if oran_tam_ekran_aktif else "Bu maçın Oran Analizini tam ekran aç",
+                ):
+                    st.session_state.oran_tam_ekran_sira = None if oran_tam_ekran_aktif else sira
+                    st.rerun()
+
+                if oran_tam_ekran_aktif:
+                    oran_tam_arka = '#071426' if bool(st.session_state.get('koyu_mod', False)) else '#f8fafc'
+                    st.markdown(
+                        f"""
+                        <style>
+                        .st-key-oran_mac_baslik_{sira} {{
+                            position:fixed !important;
+                            inset:0 !important;
+                            z-index:999999 !important;
+                            background:{oran_tam_arka} !important;
+                            padding:8px 12px !important;
+                            overflow-y:auto !important;
+                            overflow-x:hidden !important;
+                        }}
+                        .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] {{
+                            width:100% !important;
+                            max-width:none !important;
+                            min-height:calc(100vh - 16px) !important;
+                            overflow-y:auto !important;
+                            overflow-x:hidden !important;
+                        }}
+                        .st-key-oran_mac_baslik_{sira} [data-testid="stExpanderDetails"] {{
+                            min-height:calc(100vh - 62px) !important;
+                            overflow-y:auto !important;
+                            overflow-x:hidden !important;
+                            padding:6px 8px 10px 8px !important;
+                        }}
+                        .st-key-oran_mac_baslik_{sira} [data-testid="stDataFrame"] {{
+                            max-height:calc(100vh - 300px) !important;
+                        }}
+                        .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
+                            position:absolute !important;
+                            left:42px !important;
+                            top:14px !important;
+                        }}
+                        </style>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
                 st.markdown(
                     f"""
                     <style>
@@ -10403,7 +10491,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
 
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · {toplam_benzer} örnek",
-                    expanded=False,
+                    expanded=oran_tam_ekran_aktif,
                 ):
                     ist_map = {x.get("label"): x for x in istatistikler}
                     # Güncel gerçek bookmaker oranları bu görünümde de Maç Analizi ile aynı kaynaktan gelir.
@@ -10505,7 +10593,16 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                 tablo_veri[str(c.get('kombo_tipi', 'Kombo'))] = evet_hayir
 
                     tablo = pd.DataFrame(tablo_veri)
-                    st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+                    if oran_tam_ekran_aktif:
+                        oran_tablo_yuksekligi = min(760, 38 + max(1, len(tablo)) * 35)
+                        st.dataframe(
+                            gecmis_tablo_stili(tablo),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=oran_tablo_yuksekligi,
+                        )
+                    else:
+                        st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
