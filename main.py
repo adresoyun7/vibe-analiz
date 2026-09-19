@@ -8234,7 +8234,7 @@ with st.container(key="sticky_analysis_controls"):
         )
         st.selectbox(
             "Maç durumu",
-            options=["Canlı + Başlamamış", "Başlamamış", "Canlı", "Tümü"],
+            options=["Tümü", "Başlamamış", "Canlı"],
             index=0,
             key="mac_analizi_durum_filtresi",
             help="Sadece görünümü filtreler; mevcut analiz sonuçlarını yeniden hesaplatmaz.",
@@ -12156,10 +12156,9 @@ _filtreli_indexed_fl = [
 # Maç Analizi durum filtresi yalnızca görünümü süzer; hesaplanmış tahminleri değiştirmez.
 # Durumu kartta saklanan eski değerden değil, mevcut Türkiye saatine göre yeniden hesapla.
 if st.session_state.get("sayfa_modu") == "Maç Analizi":
-    _durum_filtresi = st.session_state.get("mac_analizi_durum_filtresi", "Canlı + Başlamamış")
+    _durum_filtresi = st.session_state.get("mac_analizi_durum_filtresi", "Tümü")
     if _durum_filtresi != "Tümü":
         _izinli_durumlar = {
-            "Canlı + Başlamamış": {"Canlı", "Başlamamış"},
             "Başlamamış": {"Başlamamış"},
             "Canlı": {"Canlı"},
         }.get(_durum_filtresi, {"Canlı", "Başlamamış"})
