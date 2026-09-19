@@ -11222,9 +11222,17 @@ if analiz_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
+        # Performans teşhisi: analiz sonucuna dokunmadan ana aşamaların süresini ölç.
+        _perf_total_t0 = time.perf_counter()
+        _perf_diag = {}
         with st.spinner("📊 Bülten hazırlanıyor (cache varsa API kullanılmaz) ve analiz ediliyor..."):
+            _perf_t0 = time.perf_counter()
             gecmis = futbol_veri_motoru(tuple(yillar))
+            _perf_diag["gecmis_veri_sn"] = time.perf_counter() - _perf_t0
+
+            _perf_t0 = time.perf_counter()
             bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            _perf_diag["bulten_api_cache_sn"] = time.perf_counter() - _perf_t0
             st.session_state["son_gecmis_satir_sayisi"] = 0 if getattr(gecmis, "empty", True) else len(gecmis)
             try:
                 st.session_state["son_gecmis_kaynak_hatalari"] = list(gecmis.attrs.get("kaynak_hatalari", []))
@@ -11248,6 +11256,7 @@ if analiz_btn:
                     st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı.")
 
         final = []
+        _perf_analiz_t0 = time.perf_counter()
         _ilk_ana_registry = ilk_ana_tahminleri_oku() if st.session_state.get("sayfa_modu") == "Maç Analizi" else {}
         _ilk_ana_registry_degisti = False
         _sayac_ilk_tahmin_kararsiz = 0
@@ -11374,6 +11383,8 @@ if analiz_btn:
         elif _ilk_ana_registry_degisti:
             ilk_ana_tahminleri_yaz(_ilk_ana_registry)
 
+        _perf_diag["mac_analizleri_sn"] = time.perf_counter() - _perf_analiz_t0
+        _perf_t0 = time.perf_counter()
         final.sort(key=lambda item: (item["t"].get("score", 0), item["t"].get("ana_p", 0),
                                      item["t"].get("stability_count", 0), mac_key(item["m"])), reverse=True)
         st.session_state.final_list = final
@@ -11398,6 +11409,11 @@ if analiz_btn:
         st.session_state.detay_item = None
         st.session_state.son_analiz = tr_simdi().strftime("%d/%m/%Y %H:%M")
         st.session_state.toplam_mac = len(final)
+        _perf_diag["son_islemler_sn"] = time.perf_counter() - _perf_t0
+        _perf_diag["toplam_sn"] = time.perf_counter() - _perf_total_t0
+        _perf_diag["bulten_mac"] = 0 if getattr(bulten, "empty", True) else len(bulten)
+        _perf_diag["analize_kalan"] = len(final)
+        st.session_state["son_performans_teshisi"] = _perf_diag
         # Analiz butonuna basılması zaten Streamlit'in normal script çalışmasını
         # başlatır. Hesap bittikten sonra ikinci bir st.rerun() yapmak gereksizdi.
         # Özellikle Oran Hassasiyeti değiştirilip yeniden analiz edildiğinde bu
@@ -12106,6 +12122,26 @@ _filtreli_indexed_fl = [
     if str((item.get("m", {}) or {}).get("sport_key", "")) in _aktif_ligler_gorunum
 ]
 fl = [item for _, item in _filtreli_indexed_fl]
+
+# Performans teşhisi: son analizde hangi ana aşamanın süreyi tükettiğini göster.
+_perf_last = st.session_state.get("son_performans_teshisi") or {}
+if _perf_last:
+    try:
+        _p_total = float(_perf_last.get("toplam_sn", 0) or 0)
+        _p_hist = float(_perf_last.get("gecmis_veri_sn", 0) or 0)
+        _p_api = float(_perf_last.get("bulten_api_cache_sn", 0) or 0)
+        _p_calc = float(_perf_last.get("mac_analizleri_sn", 0) or 0)
+        _p_post = float(_perf_last.get("son_islemler_sn", 0) or 0)
+        _p_bm = int(_perf_last.get("bulten_mac", 0) or 0)
+        _p_am = int(_perf_last.get("analize_kalan", 0) or 0)
+        st.info(
+            f"⏱️ Performans teşhisi · Toplam: {_p_total:.2f} sn · "
+            f"Geçmiş veri: {_p_hist:.2f} sn · Bülten/API-cache: {_p_api:.2f} sn · "
+            f"Maç analizleri: {_p_calc:.2f} sn · Son işlemler: {_p_post:.2f} sn · "
+            f"Bülten: {_p_bm} maç → Sonuç: {_p_am} maç"
+        )
+    except Exception:
+        pass
 
 # Son analiz teşhisi rerun sonrasında da görünür kalsın.
 if "son_bulten_mac_sayisi" in st.session_state:
