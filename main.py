@@ -8232,13 +8232,6 @@ with st.container(key="sticky_analysis_controls"):
             key="mac_analizi_stabilite_tarama",
             help="Kapalıyken Maç Analizi yalnızca seçtiğin Oran Hassasiyeti ile çalışır ve çok daha hızlıdır. Açıldığında her sonuç maçı için 0.00–0.10 arası 11 seviye ayrıca taranır.",
         )
-        st.selectbox(
-            "Maç durumu",
-            options=["Tümü", "Başlamamış", "Canlı"],
-            index=0,
-            key="mac_analizi_durum_filtresi",
-            help="Sadece görünümü filtreler; mevcut analiz sonuçlarını yeniden hesaplatmaz.",
-        )
 
     secim_ozet_tarih = tarih_secimine_gore_date(
         st.session_state.get("date_mode", "Bugün"), bugun,
@@ -8538,6 +8531,14 @@ with st.sidebar:
         oran_filter_cift_yari_15 = False
         # Kombo isteğe bağlıdır. İşaretli değilse hiçbir kombo hesabı yapılmaz.
         oran_filter_kombo = st.checkbox('Kombo', value=False, key='oran_filter_kombo')
+        # Oran Filtresi'ne özel aynı-lig seçeneği. Diğer görünümlerdeki
+        # aynı-lig ayarlarından bağımsız çalışır.
+        oran_filter_ayni_lig = st.checkbox(
+            'Sadece aynı ligler',
+            value=False,
+            key='oran_filter_ayni_lig',
+            help='Açıkken Oran Filtresi geçmiş benzer maçları yalnızca hedef maçın kendi liginden alır.',
+        )
         oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
         oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
@@ -9437,14 +9438,6 @@ if gecmis_btn:
         with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
             gi_gecmis = futbol_veri_motoru(tuple(yillar))
             gi_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
-            # Geçmiş Örnekleri ekranında hedef olarak yalnızca henüz başlamamış
-            # bülten maçlarını göster. Tarihsel/bitmiş maçlar benzer örnek
-            # havuzunda kalmaya devam eder; yalnızca hedef maç listesi süzülür.
-            if gi_bulten is not None and not gi_bulten.empty and "zaman" in gi_bulten.columns:
-                _gecmis_simdi = tr_simdi()
-                gi_bulten = gi_bulten.loc[
-                    gi_bulten["zaman"].map(lambda value: mac_baslamadi_mi(value, _gecmis_simdi))
-                ].copy()
             inceleme = []
             for _, gi_mac in gi_bulten.iterrows():
                 # Geçmiş Örnekleri için iki havuzu DAİMA ayrı sakla.
@@ -9487,15 +9480,6 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     inceleme = secili_liglere_gore_gorunum_listesi(
         st.session_state.get("gecmis_inceleme_list"), secili_kodlar
     )
-    # Önceki session/cache içinde başlamış bir hedef maç kalmışsa da gösterme.
-    # Bu filtre yalnızca incelenecek güncel maçları etkiler; kartın içindeki
-    # tarihsel benzer maç örneklerine dokunmaz.
-    if inceleme is not None:
-        _gecmis_simdi = tr_simdi()
-        inceleme = [
-            item for item in inceleme
-            if mac_baslamadi_mi((item.get("m") or {}).get("zaman"), _gecmis_simdi)
-        ]
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
     elif not inceleme:
@@ -10178,7 +10162,7 @@ if oran_filtresi_btn:
             oran_filtresi_list = []
             for _, of_mac in of_bulten.iterrows():
                 sonuc = _oran_11_uzlasi(
-                    of_gecmis, of_mac, oran_filter_min_ornek, sadece_ayni_lig,
+                    of_gecmis, of_mac, oran_filter_min_ornek, oran_filter_ayni_lig,
                     oran_filter_ms, oran_filter_kg, oran_filter_25, oran_filter_cift_yari_15,
                     oran_filter_kombo,
                 )
@@ -10313,90 +10297,6 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             baslik_ozeti_html = "".join(baslik_parcalar)
 
             with st.container(key=f"oran_mac_baslik_{sira}"):
-                # Geçmiş Örnekleri görünümündeki gibi maç bazlı tam ekran modu.
-                oran_tam_ekran_aktif = st.session_state.get("oran_tam_ekran_sira") == sira
-
-                st.markdown(
-                    f"""
-                    <style>
-                    .st-key-oran_mac_baslik_{sira} {{
-                        position:relative !important;
-                    }}
-                    .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
-                        position:absolute !important;
-                        left:42px !important;
-                        top:39px !important;
-                        z-index:20 !important;
-                        width:30px !important;
-                        min-width:30px !important;
-                        height:30px !important;
-                        margin:0 !important;
-                        padding:0 !important;
-                    }}
-                    .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) button {{
-                        width:30px !important;
-                        min-width:30px !important;
-                        height:30px !important;
-                        min-height:30px !important;
-                        padding:0 !important;
-                        border-radius:7px !important;
-                        font-size:16px !important;
-                        line-height:1 !important;
-                    }}
-                    .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] summary {{
-                        padding-left:76px !important;
-                    }}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-                if st.button(
-                    "↙" if oran_tam_ekran_aktif else "⛶",
-                    key=f"oran_tam_ekran_btn_{sira}",
-                    help="Normal görünüme dön" if oran_tam_ekran_aktif else "Oran analizini tam ekran aç",
-                ):
-                    st.session_state.oran_tam_ekran_sira = None if oran_tam_ekran_aktif else sira
-                    st.rerun()
-
-                if oran_tam_ekran_aktif:
-                    oran_tam_arka = '#071426' if bool(st.session_state.get('koyu_mod', False)) else '#f8fafc'
-                    st.markdown(
-                        f"""
-                        <style>
-                        .st-key-oran_mac_baslik_{sira} {{
-                            position:fixed !important;
-                            inset:0 !important;
-                            z-index:999999 !important;
-                            background:{oran_tam_arka} !important;
-                            padding:8px 12px !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] {{
-                            width:100% !important;
-                            max-width:none !important;
-                            height:calc(100vh - 16px) !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} [data-testid="stExpanderDetails"] {{
-                            height:calc(100vh - 62px) !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                            padding:2px 4px 4px 4px !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} [data-testid="stDataFrame"] {{
-                            max-height:calc(100vh - 170px) !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
-                            top:14px !important;
-                        }}
-                        </style>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
                 st.markdown(
                     f"""
                     <style>
@@ -10467,7 +10367,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
 
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · {toplam_benzer} örnek",
-                    expanded=oran_tam_ekran_aktif,
+                    expanded=False,
                 ):
                     ist_map = {x.get("label"): x for x in istatistikler}
                     # Güncel gerçek bookmaker oranları bu görünümde de Maç Analizi ile aynı kaynaktan gelir.
@@ -11118,81 +11018,6 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                     {"selector": "th", "props": [("background-color", "#e2e8f0"), ("color", "#0f172a"), ("font-weight", "800")]},
                 ])
             )
-        # ----------------------------------------------------------
-        # Güven Kalibrasyonu: model güveni ile gerçekleşen başarıyı karşılaştır.
-        # Bu bölüm yalnızca mevcut backtest çıktısını ölçer; tahmin motorunu değiştirmez.
-        # ----------------------------------------------------------
-        kal = bt.copy()
-        kal["Güven"] = pd.to_numeric(kal["Güven"], errors="coerce")
-        kal = kal.dropna(subset=["Güven", "Tuttu"]).copy()
-        kal = kal[(kal["Güven"] > 60) & (kal["Güven"] <= 100)]
-
-        if not kal.empty:
-            def _kal_market_ailesi(label):
-                text = str(label or "").strip()
-                if "+" in text:
-                    return "Kombo"
-                if text.startswith("KG "):
-                    return "KG"
-                if "Üst" in text or "Alt" in text:
-                    return "Alt/Üst"
-                if text in ("MS 1", "MS 2", "Beraberlik"):
-                    return "MS"
-                return "Diğer"
-
-            kal["Market"] = kal["Tahmin"].map(_kal_market_ailesi)
-            # Backtest yalnız %61+ tahminleri tuttuğu için ilk bant 61–64'tür.
-            kal["Güven Bandı"] = pd.cut(
-                kal["Güven"],
-                bins=[60, 65, 70, 75, 80, float("inf")],
-                labels=["%61–64", "%65–69", "%70–74", "%75–79", "%80+"],
-                right=False,
-            )
-
-            def _kalibrasyon_ozeti(frame, groups):
-                result = (
-                    frame.groupby(groups, observed=False)
-                    .agg(
-                        Tahmin=("Tuttu", "size"),
-                        Kazanan=("Tuttu", lambda values: int(values.fillna(False).astype("int64").sum())),
-                        Ortalama_Güven=("Güven", "mean"),
-                    )
-                    .reset_index()
-                )
-                result = result[result["Tahmin"] > 0].copy()
-                result["Gerçek Başarı %"] = result["Kazanan"] / result["Tahmin"] * 100
-                result["Kalibrasyon Farkı"] = result["Gerçek Başarı %"] - result["Ortalama_Güven"]
-                result["Ortalama Güven %"] = result["Ortalama_Güven"].round(1)
-                result["Gerçek Başarı %"] = result["Gerçek Başarı %"].round(1)
-                result["Kalibrasyon Farkı"] = result["Kalibrasyon Farkı"].round(1)
-                return result.drop(columns=["Ortalama_Güven"])
-
-            st.markdown("### 🎯 Güven Kalibrasyonu")
-            st.caption(
-                "Modelin verdiği güven yüzdesini gerçekleşen başarıyla karşılaştırır. "
-                "Kalibrasyon Farkı = Gerçek Başarı − Ortalama Güven. "
-                "Negatif değer modelin o grupta fazla iyimser, pozitif değer daha temkinli kaldığını gösterir. "
-                "Bu tablo modeli değiştirmez; yalnızca ölçüm yapar."
-            )
-
-            kal_genel = _kalibrasyon_ozeti(kal, ["Güven Bandı"])
-            st.dataframe(backtest_stili(kal_genel), use_container_width=True, hide_index=True)
-
-            kal_market = _kalibrasyon_ozeti(kal, ["Market", "Güven Bandı"])
-            kal_market = kal_market.sort_values(["Market", "Güven Bandı"])
-            with st.expander("Market × güven bandı kalibrasyonu", expanded=False):
-                st.caption(
-                    "MS, KG, Alt/Üst ve Kombo tahminlerini ayrı gösterir. "
-                    "Az tahminli satırları tek başına güçlü kanıt olarak değerlendirme."
-                )
-                st.dataframe(backtest_stili(kal_market), use_container_width=True, hide_index=True, height=420)
-
-            if "Lig" in kal.columns:
-                kal_lig = _kalibrasyon_ozeti(kal, ["Lig", "Güven Bandı"])
-                kal_lig = kal_lig.sort_values(["Lig", "Güven Bandı"])
-                with st.expander("Lig × güven bandı kalibrasyonu", expanded=False):
-                    st.dataframe(backtest_stili(kal_lig), use_container_width=True, hide_index=True, height=420)
-
         bt11 = st.session_state.get("backtest_11_df")
         if bt11 is not None and not bt11.empty:
             st.markdown("### 11 Hassasiyet Otomatik Backtest")
@@ -12244,21 +12069,6 @@ _filtreli_indexed_fl = [
     (idx, item) for idx, item in enumerate(_ham_fl)
     if str((item.get("m", {}) or {}).get("sport_key", "")) in _aktif_ligler_gorunum
 ]
-
-# Maç Analizi durum filtresi yalnızca görünümü süzer; hesaplanmış tahminleri değiştirmez.
-# Durumu kartta saklanan eski değerden değil, mevcut Türkiye saatine göre yeniden hesapla.
-if st.session_state.get("sayfa_modu") == "Maç Analizi":
-    _durum_filtresi = st.session_state.get("mac_analizi_durum_filtresi", "Tümü")
-    if _durum_filtresi != "Tümü":
-        _izinli_durumlar = {
-            "Başlamamış": {"Başlamamış"},
-            "Canlı": {"Canlı"},
-        }.get(_durum_filtresi, {"Canlı", "Başlamamış"})
-        _filtreli_indexed_fl = [
-            (idx, item) for idx, item in _filtreli_indexed_fl
-            if mac_canli_durumu((item.get("m", {}) or {}).get("zaman")) in _izinli_durumlar
-        ]
-
 fl = [item for _, item in _filtreli_indexed_fl]
 
 # Son analiz teşhisi rerun sonrasında da görünür kalsın.
@@ -12926,84 +12736,42 @@ else:
             st.rerun()
 
         if tum_adaylari_goster_btn:
-            # Aynı bülten + geçmiş + analiz ayarlarında aday havuzunu tekrar hesaplama.
-            # Bu yalnızca sonucu yeniden kullanır; 0.00-0.10 hassasiyet hesaplarının
-            # birbirinden bağımsız çalışma biçimini değiştirmez.
-            _gdf = st.session_state.get("last_gecmis_df")
-            _bdf = st.session_state.get("last_bulten_df")
-
-            def _aday_cache_df_ozeti(df, kolonlar=None):
-                if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                    return "bos"
-                use = df
-                if kolonlar:
-                    mevcut = [c for c in kolonlar if c in df.columns]
-                    if mevcut:
-                        use = df[mevcut]
-                try:
-                    hv = pd.util.hash_pandas_object(use, index=True).values.tobytes()
-                    return hashlib.sha1(hv).hexdigest()
-                except Exception:
-                    return f"{len(df)}:{tuple(df.columns)}"
-
-            _aday_cache_key = (
-                MODEL_VERSION, int(min_ornek), bool(sadece_ayni_lig),
-                _aday_cache_df_ozeti(
-                    _bdf,
-                    ["sport_key", "ev", "dep", "zaman", "h", "b", "a",
-                     "odds_phase", "odds_updated_at", "o25_over", "o25_under",
-                     "btts_yes", "btts_no"],
-                ),
-                _aday_cache_df_ozeti(
-                    _gdf,
-                    ["Date", "league_code", "HomeTeam", "AwayTeam", "FTHG", "FTAG",
-                     "FTR", "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"],
-                ),
-            )
-
-            _aday_cache = st.session_state.get("tum_profil_aday_cache")
-            if isinstance(_aday_cache, dict) and _aday_cache.get("key") == _aday_cache_key:
-                profil_aday_listeleri = _aday_cache.get("data", {})
-                st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
-                st.toast("⚡ Kayıtlı aday havuzu anında yüklendi.")
-            else:
-                profil_aday_listeleri = {}
-                for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
-                    kupon_kaynagi = gunun_en_iyi_10_uret(
-                        _gdf,
-                        _bdf,
-                        min_ornek=min_ornek,
-                        limit=None,  # Tüm uygun adaylar; 10/50/500 gibi yapay üst sınır yok.
-                        sadece_ayni_lig=sadece_ayni_lig,
-                        kupon_modu=True,
-                        kupon_profili=profil_adi,
-                        tum_marketler=True,
+            profil_aday_listeleri = {}
+            for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
+                kupon_kaynagi = gunun_en_iyi_10_uret(
+                    st.session_state.get("last_gecmis_df"),
+                    st.session_state.get("last_bulten_df"),
+                    min_ornek=min_ornek,
+                    limit=500,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    kupon_modu=True,
+                    kupon_profili=profil_adi,
+                    tum_marketler=True,
+                )
+                kullanilan = set()
+                tum_secimler = []
+                while True:
+                    parca = gunun_kuponunu_olustur(
+                        kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
+                        aday_listesi_modu=True,
                     )
-                    kullanilan = set()
-                    tum_secimler = []
-                    while True:
-                        parca = gunun_kuponunu_olustur(
-                            kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
-                            aday_listesi_modu=True,
+                    if not parca:
+                        break
+                    yeni = False
+                    for secim in parca:
+                        key = (
+                            f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
+                            secim.get("tahmin", ""),
                         )
-                        if not parca:
-                            break
-                        yeni = False
-                        for secim in parca:
-                            key = (
-                                f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
-                                secim.get("tahmin", ""),
-                            )
-                            if key in kullanilan:
-                                continue
-                            kullanilan.add(key)
-                            tum_secimler.append(secim)
-                            yeni = True
-                        if not yeni:
-                            break
-                    profil_aday_listeleri[profil_adi] = tum_secimler
-                st.session_state["tum_profil_aday_cache"] = {"key": _aday_cache_key, "data": profil_aday_listeleri}
-                st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
+                        if key in kullanilan:
+                            continue
+                        kullanilan.add(key)
+                        tum_secimler.append(secim)
+                        yeni = True
+                    if not yeni:
+                        break
+                profil_aday_listeleri[profil_adi] = tum_secimler
+            st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
 
         profil_aday_listeleri = st.session_state.get("tum_profil_aday_listeleri")
         if isinstance(profil_aday_listeleri, dict):
