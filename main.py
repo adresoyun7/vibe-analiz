@@ -23,12 +23,11 @@ import logging
 import sqlite3
 import tempfile
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.19.speed1"
+MODEL_VERSION = "2026.09.13.2"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -892,7 +891,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 94
+APP_SCHEMA_VERSION = 93
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     korunan = {key: st.session_state[key] for key in ("user_api_key", "user_api_football_key", "koyu_mod") if key in st.session_state}
     st.session_state.clear()
@@ -2216,24 +2215,6 @@ def odds_lig_kodu_coz(key, kod):
 
 
 
-def odds_get_429_guvenli(url, *, params, timeout=12, max_retry=4):
-    """The Odds API 429 frekans limitinde üstel bekleme ile aynı isteği tekrarlar."""
-    response = None
-    for attempt in range(max_retry + 1):
-        response = requests.get(url, params=params, timeout=timeout)
-        if response.status_code != 429:
-            return response
-        if attempt >= max_retry:
-            return response
-        retry_after = response.headers.get("Retry-After")
-        try:
-            wait = float(retry_after) if retry_after is not None else min(8.0, 1.0 * (2 ** attempt))
-        except (TypeError, ValueError):
-            wait = min(8.0, 1.0 * (2 ** attempt))
-        time.sleep(max(0.5, wait))
-    return response
-
-
 def bulten_cek(key, kodlar, t):
     st.session_state["odds_api_last_error"] = None
     secret_key = get_app_api_key()
@@ -2251,7 +2232,7 @@ def bulten_cek(key, kodlar, t):
             st.session_state["odds_api_last_error"] = f"Lig kodu çözülemedi: {secili_kod}"
             continue
         try:
-            r = odds_get_429_guvenli(
+            r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{k}/odds/",
                 params={
                     "apiKey": key,
@@ -2375,11 +2356,82 @@ def bulten_cek(key, kodlar, t):
                         totals_bk_key = str(bk.get("key", ""))
                         break
 
-                # KG Var/Yok (BTTS) oranları yüksek maç sayılı günlerde en pahalı
-                # ağ adımıdır (event başına ayrı istek). Ana bülten döngüsünü
-                # bloklamamak için aşağıda toplu/paralel olarak doldurulur.
-                # Analiz mantığı değişmez; yalnız aynı gerçek API verisinin alınma
-                # zamanı paralelleştirilir.
+                # KG Var/Yok (BTTS) ek markettir ve The Odds API'de event bazlı
+                # endpointten alınır. Ek market kapsamı bookmaker/region bazında değişir.
+                # Önce EU denenir; gerçek Yes/No çifti bulunamazsa UK bookmaker'larına
+                # fallback yapılır. Tahmini oran üretilmez, yalnız gerçek API fiyatı kullanılır.
+                try:
+                    event_id = str(m.get("id", "") or "").strip()
+                    if event_id:
+                        for _btts_region in ("eu", "uk"):
+                            rb = requests.get(
+                                f"https://api.the-odds-api.com/v4/sports/{k}/events/{event_id}/odds",
+                                params={
+                                    "apiKey": key,
+                                    "regions": _btts_region,
+                                    "markets": "btts",
+                                    "oddsFormat": "decimal",
+                                },
+                                timeout=12,
+                            )
+                            try:
+                                st.session_state["odds_api_quota"] = {
+                                    "remaining": rb.headers.get("x-requests-remaining"),
+                                    "used": rb.headers.get("x-requests-used"),
+                                    "last": rb.headers.get("x-requests-last"),
+                                    "updated_at": time.time(),
+                                }
+                            except Exception:
+                                pass
+
+                            if rb.status_code == 200:
+                                event_data = rb.json()
+                                event_bookies = event_data.get("bookmakers", []) if isinstance(event_data, dict) else []
+                                event_bookies = sorted(
+                                    event_bookies,
+                                    key=lambda book: (str(book.get("key", "")) != secilen_bk_key, bk_priority(book)),
+                                )
+                                for ebk in event_bookies:
+                                    ebmk = {str(mk.get("key", "")): mk for mk in ebk.get("markets", [])}.get("btts")
+                                    if not ebmk:
+                                        continue
+                                    names = {}
+                                    for ox in ebmk.get("outcomes", []) or []:
+                                        try:
+                                            px = float(ox.get("price"))
+                                        except (TypeError, ValueError):
+                                            continue
+                                        if not math.isfinite(px) or px <= 1:
+                                            continue
+                                        outcome_name = str(ox.get("name", "")).strip().lower()
+                                        # Resmî API Yes/No döndürür; olası bookmaker isimlerini
+                                        # de toleranslı biçimde normalize et.
+                                        if outcome_name in ("yes", "y", "both teams to score - yes", "btts yes"):
+                                            names["yes"] = px
+                                        elif outcome_name in ("no", "n", "both teams to score - no", "btts no"):
+                                            names["no"] = px
+                                    if "yes" in names and "no" in names:
+                                        # Standartlaştırılmış outcome'ları sakla; aşağıdaki parser
+                                        # Yes/No isimlerinden değerleri doğrudan okuyabilsin.
+                                        btts_market = {
+                                            **ebmk,
+                                            "outcomes": [
+                                                {"name": "Yes", "price": names["yes"]},
+                                                {"name": "No", "price": names["no"]},
+                                            ],
+                                        }
+                                        btts_updated_at = ebmk.get("last_update") or ebk.get("last_update")
+                                        btts_bk_key = str(ebk.get("key", ""))
+                                        break
+                                if btts_market:
+                                    break
+                            elif rb.status_code not in (404, 422):
+                                LOGGER.debug(
+                                    "BTTS odds alınamadı %s (%s): HTTP %s",
+                                    event_id, _btts_region, rb.status_code,
+                                )
+                except Exception as btts_exc:
+                    LOGGER.debug("BTTS odds çağrısı başarısız: %s", type(btts_exc).__name__)
 
                 outcomes = market.get("outcomes", [])
                 h = next((x["price"] for x in outcomes if x["name"] == home), None)
@@ -2444,109 +2496,13 @@ def bulten_cek(key, kodlar, t):
                     "btts_bookmaker_key": btts_bk_key,
                     "btts_yes": btts_yes,
                     "btts_no": btts_no,
-                    "_btts_event_id": str(m.get("id", "") or "").strip(),
-                    "_btts_sport_key": k,
-                    "_btts_preferred_bk": secilen_bk_key,
                 })
         except Exception as exc:
             st.session_state["odds_api_last_error"] = f"{k}: {type(exc).__name__}: {exc}"
             continue
 
-    # BTTS event çağrılarını paralel yap. Önceki sürüm her maç için EU/UK
-    # isteklerini sırayla bekliyordu; büyük bültenlerde ilk yüklemenin ana
-    # gecikme kaynağı buydu. Sonuç/market seçimi aynıdır.
-    def _btts_event_cek(item):
-        event_id = str(item.get("_btts_event_id", "") or "").strip()
-        sport_key = str(item.get("_btts_sport_key", "") or "").strip()
-        preferred_bk = str(item.get("_btts_preferred_bk", "") or "").strip()
-        if not event_id or not sport_key:
-            return None
-
-        def _priority(book):
-            bk_key = str(book.get("key", ""))
-            preferred = ("williamhill", "pinnacle", "bwin", "betvictor", "bet365")
-            return (preferred.index(bk_key) if bk_key in preferred else len(preferred), bk_key)
-
-        last_quota = None
-        for region in ("eu", "uk"):
-            try:
-                rb = odds_get_429_guvenli(
-                    f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds",
-                    params={"apiKey": key, "regions": region, "markets": "btts", "oddsFormat": "decimal"},
-                    timeout=12,
-                )
-                last_quota = {
-                    "remaining": rb.headers.get("x-requests-remaining"),
-                    "used": rb.headers.get("x-requests-used"),
-                    "last": rb.headers.get("x-requests-last"),
-                    "updated_at": time.time(),
-                }
-                if rb.status_code != 200:
-                    continue
-                event_data = rb.json()
-                event_bookies = event_data.get("bookmakers", []) if isinstance(event_data, dict) else []
-                event_bookies = sorted(
-                    event_bookies,
-                    key=lambda book: (str(book.get("key", "")) != preferred_bk, _priority(book)),
-                )
-                for ebk in event_bookies:
-                    ebmk = {str(mk.get("key", "")): mk for mk in ebk.get("markets", [])}.get("btts")
-                    if not ebmk:
-                        continue
-                    names = {}
-                    for ox in ebmk.get("outcomes", []) or []:
-                        try:
-                            px = float(ox.get("price"))
-                        except (TypeError, ValueError):
-                            continue
-                        if not math.isfinite(px) or px <= 1:
-                            continue
-                        outcome_name = str(ox.get("name", "")).strip().lower()
-                        if outcome_name in ("yes", "y", "both teams to score - yes", "btts yes"):
-                            names["yes"] = px
-                        elif outcome_name in ("no", "n", "both teams to score - no", "btts no"):
-                            names["no"] = px
-                    if "yes" in names and "no" in names:
-                        return {
-                            "yes": names["yes"], "no": names["no"],
-                            "updated_at": ebmk.get("last_update") or ebk.get("last_update"),
-                            "bookmaker_key": str(ebk.get("key", "")),
-                            "quota": last_quota,
-                        }
-            except Exception:
-                continue
-        return {"quota": last_quota} if last_quota else None
-
-    btts_targets = [(idx, item) for idx, item in enumerate(res) if item.get("_btts_event_id")]
-    if btts_targets:
-        # Frekans limitine takılmamak için en fazla 2 eşzamanlı BTTS isteği.
-        # 429 gelirse odds_get_429_guvenli otomatik olarak 1/2/4/8 sn bekleyip tekrar dener.
-        with ThreadPoolExecutor(max_workers=min(2, len(btts_targets))) as executor:
-            futures = {executor.submit(_btts_event_cek, item): idx for idx, item in btts_targets}
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    found = future.result()
-                except Exception:
-                    found = None
-                if not found:
-                    continue
-                if found.get("yes") is not None and found.get("no") is not None:
-                    res[idx]["btts_yes"] = found["yes"]
-                    res[idx]["btts_no"] = found["no"]
-                    res[idx]["btts_updated_at"] = found.get("updated_at")
-                    res[idx]["btts_bookmaker_key"] = found.get("bookmaker_key", "")
-                if found.get("quota"):
-                    st.session_state["odds_api_quota"] = found["quota"]
-
     if not res:
         return pd.DataFrame()
-
-    # Yalnız ağ zenginleştirmesi için kullanılan geçici alanları DataFrame'e taşıma.
-    for item in res:
-        item.pop("_btts_event_id", None)
-        item.pop("_btts_sport_key", None)
-        item.pop("_btts_preferred_bk", None)
 
     df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
     df = df.sort_values("zaman").reset_index(drop=True)
@@ -7497,7 +7453,6 @@ for key, default in [
     ("backtest_tahmin_uzlasi_df", None),
     ("gecmis_inceleme_list", None),
     ("gecmis_tam_ekran_sira", None),
-    ("oran_tam_ekran_sira", None),
     ("yuksek_oran_list", None),
     ("oran_filtresi_list", None),
     ("odds_league_cache", {}),
@@ -10334,93 +10289,6 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
             baslik_ozeti_html = "".join(baslik_parcalar)
 
             with st.container(key=f"oran_mac_baslik_{sira}"):
-                oran_tam_ekran_aktif = st.session_state.get("oran_tam_ekran_sira") == sira
-
-                # Geçmiş Örnekleri ile aynı mantık: yalnızca bu maçın Oran Analizi kartını
-                # ekranın tamamına taşır. Analiz/veri hesaplaması değişmez.
-                st.markdown(
-                    f"""
-                    <style>
-                    .st-key-oran_mac_baslik_{sira} {{
-                        position:relative !important;
-                    }}
-                    .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
-                        position:absolute !important;
-                        left:42px !important;
-                        top:14px !important;
-                        z-index:30 !important;
-                        width:30px !important;
-                        min-width:30px !important;
-                        height:30px !important;
-                        margin:0 !important;
-                        padding:0 !important;
-                    }}
-                    .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) button {{
-                        width:30px !important;
-                        min-width:30px !important;
-                        height:30px !important;
-                        min-height:30px !important;
-                        padding:0 !important;
-                        border-radius:7px !important;
-                        font-size:16px !important;
-                        line-height:1 !important;
-                    }}
-                    .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] summary {{
-                        padding-left:76px !important;
-                    }}
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-                if st.button(
-                    "↙" if oran_tam_ekran_aktif else "⛶",
-                    key=f"oran_tam_ekran_btn_{sira}",
-                    help="Normal görünüme dön" if oran_tam_ekran_aktif else "Bu maçın Oran Analizini tam ekran aç",
-                ):
-                    st.session_state.oran_tam_ekran_sira = None if oran_tam_ekran_aktif else sira
-                    st.rerun()
-
-                if oran_tam_ekran_aktif:
-                    oran_tam_arka = '#071426' if bool(st.session_state.get('koyu_mod', False)) else '#f8fafc'
-                    st.markdown(
-                        f"""
-                        <style>
-                        .st-key-oran_mac_baslik_{sira} {{
-                            position:fixed !important;
-                            inset:0 !important;
-                            z-index:999999 !important;
-                            background:{oran_tam_arka} !important;
-                            padding:8px 12px !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} [data-testid="stExpander"] {{
-                            width:100% !important;
-                            max-width:none !important;
-                            min-height:calc(100vh - 16px) !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} [data-testid="stExpanderDetails"] {{
-                            min-height:calc(100vh - 62px) !important;
-                            overflow-y:auto !important;
-                            overflow-x:hidden !important;
-                            padding:6px 8px 10px 8px !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} [data-testid="stDataFrame"] {{
-                            max-height:calc(100vh - 300px) !important;
-                        }}
-                        .st-key-oran_mac_baslik_{sira} div[data-testid="stElementContainer"]:has([data-testid="stBaseButton-secondary"]) {{
-                            position:absolute !important;
-                            left:42px !important;
-                            top:14px !important;
-                        }}
-                        </style>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
                 st.markdown(
                     f"""
                     <style>
@@ -10491,7 +10359,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
 
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat} · {toplam_benzer} örnek",
-                    expanded=oran_tam_ekran_aktif,
+                    expanded=False,
                 ):
                     ist_map = {x.get("label"): x for x in istatistikler}
                     # Güncel gerçek bookmaker oranları bu görünümde de Maç Analizi ile aynı kaynaktan gelir.
@@ -10593,16 +10461,7 @@ elif st.session_state.get('sayfa_modu') == 'Oran Filtresi':
                                 tablo_veri[str(c.get('kombo_tipi', 'Kombo'))] = evet_hayir
 
                     tablo = pd.DataFrame(tablo_veri)
-                    if oran_tam_ekran_aktif:
-                        oran_tablo_yuksekligi = min(760, 38 + max(1, len(tablo)) * 35)
-                        st.dataframe(
-                            gecmis_tablo_stili(tablo),
-                            use_container_width=True,
-                            hide_index=True,
-                            height=oran_tablo_yuksekligi,
-                        )
-                    else:
-                        st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
+                    st.dataframe(gecmis_tablo_stili(tablo), use_container_width=True, hide_index=True)
     legal_footer()
     st.stop()
 
@@ -11319,17 +11178,9 @@ if analiz_btn:
     if not API_KEY or not secili_kodlar:
         st.error("⚠️ API Key ve en az bir lig seçin.")
     else:
-        # Performans teşhisi: analiz sonucuna dokunmadan ana aşamaların süresini ölç.
-        _perf_total_t0 = time.perf_counter()
-        _perf_diag = {}
         with st.spinner("📊 Bülten hazırlanıyor (cache varsa API kullanılmaz) ve analiz ediliyor..."):
-            _perf_t0 = time.perf_counter()
             gecmis = futbol_veri_motoru(tuple(yillar))
-            _perf_diag["gecmis_veri_sn"] = time.perf_counter() - _perf_t0
-
-            _perf_t0 = time.perf_counter()
             bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
-            _perf_diag["bulten_api_cache_sn"] = time.perf_counter() - _perf_t0
             st.session_state["son_gecmis_satir_sayisi"] = 0 if getattr(gecmis, "empty", True) else len(gecmis)
             try:
                 st.session_state["son_gecmis_kaynak_hatalari"] = list(gecmis.attrs.get("kaynak_hatalari", []))
@@ -11353,7 +11204,6 @@ if analiz_btn:
                     st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı.")
 
         final = []
-        _perf_analiz_t0 = time.perf_counter()
         _ilk_ana_registry = ilk_ana_tahminleri_oku() if st.session_state.get("sayfa_modu") == "Maç Analizi" else {}
         _ilk_ana_registry_degisti = False
         _sayac_ilk_tahmin_kararsiz = 0
@@ -11480,8 +11330,6 @@ if analiz_btn:
         elif _ilk_ana_registry_degisti:
             ilk_ana_tahminleri_yaz(_ilk_ana_registry)
 
-        _perf_diag["mac_analizleri_sn"] = time.perf_counter() - _perf_analiz_t0
-        _perf_t0 = time.perf_counter()
         final.sort(key=lambda item: (item["t"].get("score", 0), item["t"].get("ana_p", 0),
                                      item["t"].get("stability_count", 0), mac_key(item["m"])), reverse=True)
         st.session_state.final_list = final
@@ -11506,11 +11354,6 @@ if analiz_btn:
         st.session_state.detay_item = None
         st.session_state.son_analiz = tr_simdi().strftime("%d/%m/%Y %H:%M")
         st.session_state.toplam_mac = len(final)
-        _perf_diag["son_islemler_sn"] = time.perf_counter() - _perf_t0
-        _perf_diag["toplam_sn"] = time.perf_counter() - _perf_total_t0
-        _perf_diag["bulten_mac"] = 0 if getattr(bulten, "empty", True) else len(bulten)
-        _perf_diag["analize_kalan"] = len(final)
-        st.session_state["son_performans_teshisi"] = _perf_diag
         # Analiz butonuna basılması zaten Streamlit'in normal script çalışmasını
         # başlatır. Hesap bittikten sonra ikinci bir st.rerun() yapmak gereksizdi.
         # Özellikle Oran Hassasiyeti değiştirilip yeniden analiz edildiğinde bu
@@ -12220,26 +12063,6 @@ _filtreli_indexed_fl = [
 ]
 fl = [item for _, item in _filtreli_indexed_fl]
 
-# Performans teşhisi: son analizde hangi ana aşamanın süreyi tükettiğini göster.
-_perf_last = st.session_state.get("son_performans_teshisi") or {}
-if _perf_last:
-    try:
-        _p_total = float(_perf_last.get("toplam_sn", 0) or 0)
-        _p_hist = float(_perf_last.get("gecmis_veri_sn", 0) or 0)
-        _p_api = float(_perf_last.get("bulten_api_cache_sn", 0) or 0)
-        _p_calc = float(_perf_last.get("mac_analizleri_sn", 0) or 0)
-        _p_post = float(_perf_last.get("son_islemler_sn", 0) or 0)
-        _p_bm = int(_perf_last.get("bulten_mac", 0) or 0)
-        _p_am = int(_perf_last.get("analize_kalan", 0) or 0)
-        st.info(
-            f"⏱️ Performans teşhisi · Toplam: {_p_total:.2f} sn · "
-            f"Geçmiş veri: {_p_hist:.2f} sn · Bülten/API-cache: {_p_api:.2f} sn · "
-            f"Maç analizleri: {_p_calc:.2f} sn · Son işlemler: {_p_post:.2f} sn · "
-            f"Bülten: {_p_bm} maç → Sonuç: {_p_am} maç"
-        )
-    except Exception:
-        pass
-
 # Son analiz teşhisi rerun sonrasında da görünür kalsın.
 if "son_bulten_mac_sayisi" in st.session_state:
     _bc = int(st.session_state.get("son_bulten_mac_sayisi", 0) or 0)
@@ -12905,99 +12728,46 @@ else:
             st.rerun()
 
         if tum_adaylari_goster_btn:
-            # Tüm Aday Listeleri pahalıdır: aynı bülten + aynı geçmiş + aynı ayarlarda
-            # sonucu session cache'den kullan. Analiz formülleri/tahmin mantığı değişmez.
-            _gdf = st.session_state.get("last_gecmis_df")
-            _bdf = st.session_state.get("last_bulten_df")
-
-            def _aday_df_imza(df, tercih_edilen_kolonlar=None):
-                if df is None or getattr(df, "empty", True):
-                    return (0, 0)
-                try:
-                    if tercih_edilen_kolonlar:
-                        cols = [c for c in tercih_edilen_kolonlar if c in df.columns]
-                        parca = df[cols] if cols else df
-                    else:
-                        parca = df
-                    # Satır/içerik değişirse imza da değişir; böylece oran veya geçmiş
-                    # veri değiştiğinde eski aday analizi otomatik kullanılmaz.
-                    h = pd.util.hash_pandas_object(parca, index=True).values
-                    return (len(df), int(h.sum(dtype="uint64")))
-                except Exception:
-                    return (len(df), hash((tuple(map(str, df.columns)), str(df.shape))))
-
-            _bulten_cols = [
-                "ev", "dep", "lig", "zaman", "home_team", "away_team",
-                "home_price", "draw_price", "away_price", "oran1", "oranx", "oran2",
-                "o25_over", "o25_under", "btts_yes", "btts_no",
-            ]
-            _gecmis_cols = [
-                "Date", "League", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR",
-                "B365H", "B365D", "B365A", "PSH", "PSD", "PSA",
-            ]
-            _aday_cache_key = (
-                "tum_profil_adaylari_v1",
-                _aday_df_imza(_bdf, _bulten_cols),
-                _aday_df_imza(_gdf, _gecmis_cols),
-                int(min_ornek),
-                bool(sadece_ayni_lig),
-                str(MODEL_VERSION),
-            )
-            _aday_cache = st.session_state.setdefault("tum_profil_aday_cache", {})
-
-            if _aday_cache_key in _aday_cache:
-                profil_aday_listeleri = _aday_cache[_aday_cache_key]
-                st.session_state["tum_profil_aday_cache_durum"] = "cache"
-            else:
-                profil_aday_listeleri = {}
-                for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
-                    kupon_kaynagi = gunun_en_iyi_10_uret(
-                        _gdf,
-                        _bdf,
-                        min_ornek=min_ornek,
-                        limit=500,
-                        sadece_ayni_lig=sadece_ayni_lig,
-                        kupon_modu=True,
-                        kupon_profili=profil_adi,
-                        tum_marketler=True,
+            profil_aday_listeleri = {}
+            for profil_adi in ["Temkinli", "Dengeli", "Yüksek Oran"]:
+                kupon_kaynagi = gunun_en_iyi_10_uret(
+                    st.session_state.get("last_gecmis_df"),
+                    st.session_state.get("last_bulten_df"),
+                    min_ornek=min_ornek,
+                    limit=500,
+                    sadece_ayni_lig=sadece_ayni_lig,
+                    kupon_modu=True,
+                    kupon_profili=profil_adi,
+                    tum_marketler=True,
+                )
+                kullanilan = set()
+                tum_secimler = []
+                while True:
+                    parca = gunun_kuponunu_olustur(
+                        kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
+                        aday_listesi_modu=True,
                     )
-                    kullanilan = set()
-                    tum_secimler = []
-                    while True:
-                        parca = gunun_kuponunu_olustur(
-                            kupon_kaynagi, profil_adi, haric_secimler=kullanilan,
-                            aday_listesi_modu=True,
+                    if not parca:
+                        break
+                    yeni = False
+                    for secim in parca:
+                        key = (
+                            f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
+                            secim.get("tahmin", ""),
                         )
-                        if not parca:
-                            break
-                        yeni = False
-                        for secim in parca:
-                            key = (
-                                f"{secim.get('ev','')}|{secim.get('dep','')}|{str(secim.get('zaman_iso',''))[:16]}",
-                                secim.get("tahmin", ""),
-                            )
-                            if key in kullanilan:
-                                continue
-                            kullanilan.add(key)
-                            tum_secimler.append(secim)
-                            yeni = True
-                        if not yeni:
-                            break
-                    profil_aday_listeleri[profil_adi] = tum_secimler
-
-                # Son birkaç farklı bülteni tutmak yeterli; session'ın sınırsız büyümesini önle.
-                _aday_cache[_aday_cache_key] = profil_aday_listeleri
-                while len(_aday_cache) > 4:
-                    _aday_cache.pop(next(iter(_aday_cache)))
-                st.session_state["tum_profil_aday_cache_durum"] = "hesaplandi"
-
+                        if key in kullanilan:
+                            continue
+                        kullanilan.add(key)
+                        tum_secimler.append(secim)
+                        yeni = True
+                    if not yeni:
+                        break
+                profil_aday_listeleri[profil_adi] = tum_secimler
             st.session_state["tum_profil_aday_listeleri"] = profil_aday_listeleri
 
         profil_aday_listeleri = st.session_state.get("tum_profil_aday_listeleri")
         if isinstance(profil_aday_listeleri, dict):
             st.markdown("#### 📋 Tüm profil adayları")
-            if st.session_state.get("tum_profil_aday_cache_durum") == "cache":
-                st.caption("⚡ Aynı bülten ve ayarlar için kayıtlı aday analizi kullanıldı.")
             st.caption(
                 "Bunlar profil kriterlerini karşılayan tüm uygun marketlerdir. Aynı maçın birden fazla güçlü marketi burada görünebilir. "
                 "Otomatik kupon oluştururken ise aynı maçtan yine yalnızca tek seçim alınır. Detay ile maç analizini açabilir, ＋ ile Kendi Kuponum'a ekleyebilirsin."
