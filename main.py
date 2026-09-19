@@ -9437,6 +9437,14 @@ if gecmis_btn:
         with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
             gi_gecmis = futbol_veri_motoru(tuple(yillar))
             gi_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            # Geçmiş Örnekleri ekranında hedef olarak yalnızca henüz başlamamış
+            # bülten maçlarını göster. Tarihsel/bitmiş maçlar benzer örnek
+            # havuzunda kalmaya devam eder; yalnızca hedef maç listesi süzülür.
+            if gi_bulten is not None and not gi_bulten.empty and "zaman" in gi_bulten.columns:
+                _gecmis_simdi = tr_simdi()
+                gi_bulten = gi_bulten.loc[
+                    gi_bulten["zaman"].map(lambda value: mac_baslamadi_mi(value, _gecmis_simdi))
+                ].copy()
             inceleme = []
             for _, gi_mac in gi_bulten.iterrows():
                 # Geçmiş Örnekleri için iki havuzu DAİMA ayrı sakla.
@@ -9479,6 +9487,15 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     inceleme = secili_liglere_gore_gorunum_listesi(
         st.session_state.get("gecmis_inceleme_list"), secili_kodlar
     )
+    # Önceki session/cache içinde başlamış bir hedef maç kalmışsa da gösterme.
+    # Bu filtre yalnızca incelenecek güncel maçları etkiler; kartın içindeki
+    # tarihsel benzer maç örneklerine dokunmaz.
+    if inceleme is not None:
+        _gecmis_simdi = tr_simdi()
+        inceleme = [
+            item for item in inceleme
+            if mac_baslamadi_mi((item.get("m") or {}).get("zaman"), _gecmis_simdi)
+        ]
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
     elif not inceleme:
