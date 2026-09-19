@@ -8232,6 +8232,13 @@ with st.container(key="sticky_analysis_controls"):
             key="mac_analizi_stabilite_tarama",
             help="Kapalıyken Maç Analizi yalnızca seçtiğin Oran Hassasiyeti ile çalışır ve çok daha hızlıdır. Açıldığında her sonuç maçı için 0.00–0.10 arası 11 seviye ayrıca taranır.",
         )
+        st.selectbox(
+            "Maç durumu",
+            options=["Canlı + Başlamamış", "Başlamamış", "Canlı", "Tümü"],
+            index=0,
+            key="mac_analizi_durum_filtresi",
+            help="Sadece görünümü filtreler; mevcut analiz sonuçlarını yeniden hesaplatmaz.",
+        )
 
     secim_ozet_tarih = tarih_secimine_gore_date(
         st.session_state.get("date_mode", "Bugün"), bugun,
@@ -12145,6 +12152,22 @@ _filtreli_indexed_fl = [
     (idx, item) for idx, item in enumerate(_ham_fl)
     if str((item.get("m", {}) or {}).get("sport_key", "")) in _aktif_ligler_gorunum
 ]
+
+# Maç Analizi durum filtresi yalnızca görünümü süzer; hesaplanmış tahminleri değiştirmez.
+# Durumu kartta saklanan eski değerden değil, mevcut Türkiye saatine göre yeniden hesapla.
+if st.session_state.get("sayfa_modu") == "Maç Analizi":
+    _durum_filtresi = st.session_state.get("mac_analizi_durum_filtresi", "Canlı + Başlamamış")
+    if _durum_filtresi != "Tümü":
+        _izinli_durumlar = {
+            "Canlı + Başlamamış": {"Canlı", "Başlamamış"},
+            "Başlamamış": {"Başlamamış"},
+            "Canlı": {"Canlı"},
+        }.get(_durum_filtresi, {"Canlı", "Başlamamış"})
+        _filtreli_indexed_fl = [
+            (idx, item) for idx, item in _filtreli_indexed_fl
+            if mac_canli_durumu((item.get("m", {}) or {}).get("zaman")) in _izinli_durumlar
+        ]
+
 fl = [item for _, item in _filtreli_indexed_fl]
 
 # Son analiz teşhisi rerun sonrasında da görünür kalsın.
