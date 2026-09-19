@@ -23,11 +23,12 @@ import logging
 import sqlite3
 import tempfile
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.09.13.2"
+MODEL_VERSION = "2026.09.19.speed1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -891,7 +892,7 @@ def legal_footer():
 
 
 
-APP_SCHEMA_VERSION = 93
+APP_SCHEMA_VERSION = 94
 if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
     korunan = {key: st.session_state[key] for key in ("user_api_key", "user_api_football_key", "koyu_mod") if key in st.session_state}
     st.session_state.clear()
@@ -2356,82 +2357,11 @@ def bulten_cek(key, kodlar, t):
                         totals_bk_key = str(bk.get("key", ""))
                         break
 
-                # KG Var/Yok (BTTS) ek markettir ve The Odds API'de event bazlı
-                # endpointten alınır. Ek market kapsamı bookmaker/region bazında değişir.
-                # Önce EU denenir; gerçek Yes/No çifti bulunamazsa UK bookmaker'larına
-                # fallback yapılır. Tahmini oran üretilmez, yalnız gerçek API fiyatı kullanılır.
-                try:
-                    event_id = str(m.get("id", "") or "").strip()
-                    if event_id:
-                        for _btts_region in ("eu", "uk"):
-                            rb = requests.get(
-                                f"https://api.the-odds-api.com/v4/sports/{k}/events/{event_id}/odds",
-                                params={
-                                    "apiKey": key,
-                                    "regions": _btts_region,
-                                    "markets": "btts",
-                                    "oddsFormat": "decimal",
-                                },
-                                timeout=12,
-                            )
-                            try:
-                                st.session_state["odds_api_quota"] = {
-                                    "remaining": rb.headers.get("x-requests-remaining"),
-                                    "used": rb.headers.get("x-requests-used"),
-                                    "last": rb.headers.get("x-requests-last"),
-                                    "updated_at": time.time(),
-                                }
-                            except Exception:
-                                pass
-
-                            if rb.status_code == 200:
-                                event_data = rb.json()
-                                event_bookies = event_data.get("bookmakers", []) if isinstance(event_data, dict) else []
-                                event_bookies = sorted(
-                                    event_bookies,
-                                    key=lambda book: (str(book.get("key", "")) != secilen_bk_key, bk_priority(book)),
-                                )
-                                for ebk in event_bookies:
-                                    ebmk = {str(mk.get("key", "")): mk for mk in ebk.get("markets", [])}.get("btts")
-                                    if not ebmk:
-                                        continue
-                                    names = {}
-                                    for ox in ebmk.get("outcomes", []) or []:
-                                        try:
-                                            px = float(ox.get("price"))
-                                        except (TypeError, ValueError):
-                                            continue
-                                        if not math.isfinite(px) or px <= 1:
-                                            continue
-                                        outcome_name = str(ox.get("name", "")).strip().lower()
-                                        # Resmî API Yes/No döndürür; olası bookmaker isimlerini
-                                        # de toleranslı biçimde normalize et.
-                                        if outcome_name in ("yes", "y", "both teams to score - yes", "btts yes"):
-                                            names["yes"] = px
-                                        elif outcome_name in ("no", "n", "both teams to score - no", "btts no"):
-                                            names["no"] = px
-                                    if "yes" in names and "no" in names:
-                                        # Standartlaştırılmış outcome'ları sakla; aşağıdaki parser
-                                        # Yes/No isimlerinden değerleri doğrudan okuyabilsin.
-                                        btts_market = {
-                                            **ebmk,
-                                            "outcomes": [
-                                                {"name": "Yes", "price": names["yes"]},
-                                                {"name": "No", "price": names["no"]},
-                                            ],
-                                        }
-                                        btts_updated_at = ebmk.get("last_update") or ebk.get("last_update")
-                                        btts_bk_key = str(ebk.get("key", ""))
-                                        break
-                                if btts_market:
-                                    break
-                            elif rb.status_code not in (404, 422):
-                                LOGGER.debug(
-                                    "BTTS odds alınamadı %s (%s): HTTP %s",
-                                    event_id, _btts_region, rb.status_code,
-                                )
-                except Exception as btts_exc:
-                    LOGGER.debug("BTTS odds çağrısı başarısız: %s", type(btts_exc).__name__)
+                # KG Var/Yok (BTTS) oranları yüksek maç sayılı günlerde en pahalı
+                # ağ adımıdır (event başına ayrı istek). Ana bülten döngüsünü
+                # bloklamamak için aşağıda toplu/paralel olarak doldurulur.
+                # Analiz mantığı değişmez; yalnız aynı gerçek API verisinin alınma
+                # zamanı paralelleştirilir.
 
                 outcomes = market.get("outcomes", [])
                 h = next((x["price"] for x in outcomes if x["name"] == home), None)
@@ -2496,13 +2426,108 @@ def bulten_cek(key, kodlar, t):
                     "btts_bookmaker_key": btts_bk_key,
                     "btts_yes": btts_yes,
                     "btts_no": btts_no,
+                    "_btts_event_id": str(m.get("id", "") or "").strip(),
+                    "_btts_sport_key": k,
+                    "_btts_preferred_bk": secilen_bk_key,
                 })
         except Exception as exc:
             st.session_state["odds_api_last_error"] = f"{k}: {type(exc).__name__}: {exc}"
             continue
 
+    # BTTS event çağrılarını paralel yap. Önceki sürüm her maç için EU/UK
+    # isteklerini sırayla bekliyordu; büyük bültenlerde ilk yüklemenin ana
+    # gecikme kaynağı buydu. Sonuç/market seçimi aynıdır.
+    def _btts_event_cek(item):
+        event_id = str(item.get("_btts_event_id", "") or "").strip()
+        sport_key = str(item.get("_btts_sport_key", "") or "").strip()
+        preferred_bk = str(item.get("_btts_preferred_bk", "") or "").strip()
+        if not event_id or not sport_key:
+            return None
+
+        def _priority(book):
+            bk_key = str(book.get("key", ""))
+            preferred = ("williamhill", "pinnacle", "bwin", "betvictor", "bet365")
+            return (preferred.index(bk_key) if bk_key in preferred else len(preferred), bk_key)
+
+        last_quota = None
+        for region in ("eu", "uk"):
+            try:
+                rb = requests.get(
+                    f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds",
+                    params={"apiKey": key, "regions": region, "markets": "btts", "oddsFormat": "decimal"},
+                    timeout=12,
+                )
+                last_quota = {
+                    "remaining": rb.headers.get("x-requests-remaining"),
+                    "used": rb.headers.get("x-requests-used"),
+                    "last": rb.headers.get("x-requests-last"),
+                    "updated_at": time.time(),
+                }
+                if rb.status_code != 200:
+                    continue
+                event_data = rb.json()
+                event_bookies = event_data.get("bookmakers", []) if isinstance(event_data, dict) else []
+                event_bookies = sorted(
+                    event_bookies,
+                    key=lambda book: (str(book.get("key", "")) != preferred_bk, _priority(book)),
+                )
+                for ebk in event_bookies:
+                    ebmk = {str(mk.get("key", "")): mk for mk in ebk.get("markets", [])}.get("btts")
+                    if not ebmk:
+                        continue
+                    names = {}
+                    for ox in ebmk.get("outcomes", []) or []:
+                        try:
+                            px = float(ox.get("price"))
+                        except (TypeError, ValueError):
+                            continue
+                        if not math.isfinite(px) or px <= 1:
+                            continue
+                        outcome_name = str(ox.get("name", "")).strip().lower()
+                        if outcome_name in ("yes", "y", "both teams to score - yes", "btts yes"):
+                            names["yes"] = px
+                        elif outcome_name in ("no", "n", "both teams to score - no", "btts no"):
+                            names["no"] = px
+                    if "yes" in names and "no" in names:
+                        return {
+                            "yes": names["yes"], "no": names["no"],
+                            "updated_at": ebmk.get("last_update") or ebk.get("last_update"),
+                            "bookmaker_key": str(ebk.get("key", "")),
+                            "quota": last_quota,
+                        }
+            except Exception:
+                continue
+        return {"quota": last_quota} if last_quota else None
+
+    btts_targets = [(idx, item) for idx, item in enumerate(res) if item.get("_btts_event_id")]
+    if btts_targets:
+        # 8 işçi API'yi gereksiz yere aşırı yüklemeden büyük bülteni belirgin hızlandırır.
+        with ThreadPoolExecutor(max_workers=min(8, len(btts_targets))) as executor:
+            futures = {executor.submit(_btts_event_cek, item): idx for idx, item in btts_targets}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    found = future.result()
+                except Exception:
+                    found = None
+                if not found:
+                    continue
+                if found.get("yes") is not None and found.get("no") is not None:
+                    res[idx]["btts_yes"] = found["yes"]
+                    res[idx]["btts_no"] = found["no"]
+                    res[idx]["btts_updated_at"] = found.get("updated_at")
+                    res[idx]["btts_bookmaker_key"] = found.get("bookmaker_key", "")
+                if found.get("quota"):
+                    st.session_state["odds_api_quota"] = found["quota"]
+
     if not res:
         return pd.DataFrame()
+
+    # Yalnız ağ zenginleştirmesi için kullanılan geçici alanları DataFrame'e taşıma.
+    for item in res:
+        item.pop("_btts_event_id", None)
+        item.pop("_btts_sport_key", None)
+        item.pop("_btts_preferred_bk", None)
 
     df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
     df = df.sort_values("zaman").reset_index(drop=True)
