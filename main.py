@@ -12317,7 +12317,7 @@ else:
     with sir_col:
         siralama_secimi = st.selectbox(
             "Sırala",
-            ["Güven", "Başlama Saati (Yakın → Uzak)", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
+            ["Güven", "🛡️ Sağlamdan Riskliye", "Başlama Saati (Yakın → Uzak)", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
             index=0,
             key="mac_analizi_siralama",
             on_change=_mac_analizi_oran_filtresi_degisti,
@@ -12453,6 +12453,16 @@ else:
             return (
                 float(t.get("combo_p", 0) or 0),
                 float(t.get("ana_p", 0) or 0),
+            )
+        if siralama_secimi == "🛡️ Sağlamdan Riskliye":
+            # Mevcut birleşik kalite puanını kullanır: güven ana unsur,
+            # kararlılık katkısı ve az örnek cezası zaten playable_score içinde.
+            # Eşitlikte güven ve kararlılık daha yüksek olan maç öne gelir.
+            return (
+                float(t.get("playable_score", t.get("score", t.get("ana_p", 0))) or 0),
+                float(t.get("ana_p", 0) or 0),
+                float(t.get("stability_effective_count", t.get("stability_count", 0)) or 0),
+                int(t.get("ornek", 0) or 0),
             )
         return (
             float(t.get("ana_p", 0) or 0),
