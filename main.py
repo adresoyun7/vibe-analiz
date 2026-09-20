@@ -11231,6 +11231,21 @@ if analiz_btn:
                     bulten["zaman"].apply(mac_canli_durumu).eq(_durum_secimi)
                 ].copy()
 
+            # Maç Analizi: en yakın başlayacak maçtan en geç başlayacak maça doğru sırala.
+            # Tarihi çözülemeyen kayıtlar en sona bırakılır. Bu yalnızca görünüm/işleme
+            # sırasını değiştirir; tahmin ve hassasiyet hesaplarına dokunmaz.
+            bulten["_mac_siralama_zamani"] = bulten["zaman"].apply(parse_mac_datetime)
+            bulten = (
+                bulten.sort_values(
+                    "_mac_siralama_zamani",
+                    ascending=True,
+                    na_position="last",
+                    kind="stable",
+                )
+                .drop(columns=["_mac_siralama_zamani"])
+                .reset_index(drop=True)
+            )
+
         final = []
         _ilk_ana_registry = ilk_ana_tahminleri_oku() if st.session_state.get("sayfa_modu") == "Maç Analizi" else {}
         _ilk_ana_registry_degisti = False
