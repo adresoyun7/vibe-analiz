@@ -7464,6 +7464,7 @@ for key, default in [
 FUTBOL_LIGLERI = {
     "ULUSLARARASI": {
         "Dünya Kupası": "soccer_fifa_world_cup",
+        "UEFA Uluslar Ligi": "soccer_uefa_nations_league",
     },
     "AVRUPA KUPALARI": {
         "Şampiyonlar Ligi": "soccer_uefa_champs_league",
@@ -7572,6 +7573,7 @@ ODDS_TO_HISTORY = {
 
 LEAGUE_EMOJIS = {
     "Dünya Kupası": "🌍",
+    "UEFA Uluslar Ligi": "🇪🇺",
     "Şampiyonlar Ligi": "🏆",
     "Avrupa Ligi": "🟠",
     "Konferans Ligi": "🟢",
@@ -7687,6 +7689,7 @@ GECMISI_BULUNAN_LIGLER = [
 KARLI_LIG_PRESETLERI = {
     # Avrupa ana ligleri, mevcut alt ligleri ve UEFA kupaları.
     "cekirdek_value": [
+        "soccer_uefa_nations_league",
         "soccer_uefa_champs_league",
         "soccer_uefa_europa_league",
         "soccer_uefa_europa_conference_league",
