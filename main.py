@@ -8226,6 +8226,14 @@ with st.container(key="sticky_analysis_controls"):
     # Maç Analizi varsayılan olarak yalnızca seçili hassasiyetle tek hesap yapar.
     # İstenirse 0.00–0.10 arasındaki 11 hassasiyet ayrıca taranıp kartlarda gösterilir.
     if st.session_state.get("sayfa_modu") == "Maç Analizi":
+        mac_analizi_durum_filtresi = st.segmented_control(
+            "Maç durumu",
+            options=["Tümü", "Başlamamış", "Canlı"],
+            default="Tümü",
+            key="mac_analizi_durum_filtresi",
+            on_change=clear_detail_on_filter_change,
+            help="Başlamamış yalnızca henüz başlamayan maçları, Canlı yalnızca şu anda oynanan maçları gösterir. Tümü durum filtresi uygulamaz.",
+        ) or "Tümü"
         st.checkbox(
             "🎯 11 hassasiyet taramasını göster (0.00–0.10)",
             value=False,
@@ -11210,6 +11218,18 @@ if analiz_btn:
                     st.error(f"⚠️ The Odds API yanıtı alınamadı: {son_hata}")
                 else:
                     st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı.")
+
+        # Maç Analizi durum filtresini ağır hesaplardan ÖNCE uygula.
+        # Böylece Başlamamış/Canlı seçildiğinde gereksiz maçlar analiz edilmez.
+        if (
+            st.session_state.get("sayfa_modu") == "Maç Analizi"
+            and not getattr(bulten, "empty", True)
+        ):
+            _durum_secimi = st.session_state.get("mac_analizi_durum_filtresi", "Tümü") or "Tümü"
+            if _durum_secimi in ("Başlamamış", "Canlı"):
+                bulten = bulten[
+                    bulten["zaman"].apply(mac_canli_durumu).eq(_durum_secimi)
+                ].copy()
 
         final = []
         _ilk_ana_registry = ilk_ana_tahminleri_oku() if st.session_state.get("sayfa_modu") == "Maç Analizi" else {}
