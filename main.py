@@ -8226,14 +8226,6 @@ with st.container(key="sticky_analysis_controls"):
     # Maç Analizi varsayılan olarak yalnızca seçili hassasiyetle tek hesap yapar.
     # İstenirse 0.00–0.10 arasındaki 11 hassasiyet ayrıca taranıp kartlarda gösterilir.
     if st.session_state.get("sayfa_modu") == "Maç Analizi":
-        mac_analizi_durum_filtresi = st.segmented_control(
-            "Maç durumu",
-            options=["Tümü", "Başlamamış", "Canlı"],
-            default="Tümü",
-            key="mac_analizi_durum_filtresi",
-            on_change=clear_detail_on_filter_change,
-            help="Başlamamış yalnızca henüz başlamayan maçları, Canlı yalnızca şu anda oynanan maçları gösterir. Tümü durum filtresi uygulamaz.",
-        ) or "Tümü"
         st.checkbox(
             "🎯 11 hassasiyet taramasını göster (0.00–0.10)",
             value=False,
@@ -8539,14 +8531,6 @@ with st.sidebar:
         oran_filter_cift_yari_15 = False
         # Kombo isteğe bağlıdır. İşaretli değilse hiçbir kombo hesabı yapılmaz.
         oran_filter_kombo = st.checkbox('Kombo', value=False, key='oran_filter_kombo')
-        # Oran Filtresi'ne özel aynı-lig seçeneği. Diğer görünümlerdeki
-        # aynı-lig ayarlarından bağımsız çalışır.
-        oran_filter_ayni_lig = st.checkbox(
-            'Sadece aynı ligler',
-            value=False,
-            key='oran_filter_ayni_lig',
-            help='Açıkken Oran Filtresi geçmiş benzer maçları yalnızca hedef maçın kendi liginden alır.',
-        )
         oran_filter_min_ornek = st.selectbox('Minimum benzer maç', [1, 2, 3, 5, 10, 15, 20], index=2, key='oran_filter_min_ornek')
         oran_filtresi_btn = False
     elif st.session_state.get('sayfa_modu') == 'Yüksek Oran Filtresi':
@@ -10170,7 +10154,7 @@ if oran_filtresi_btn:
             oran_filtresi_list = []
             for _, of_mac in of_bulten.iterrows():
                 sonuc = _oran_11_uzlasi(
-                    of_gecmis, of_mac, oran_filter_min_ornek, oran_filter_ayni_lig,
+                    of_gecmis, of_mac, oran_filter_min_ornek, sadece_ayni_lig,
                     oran_filter_ms, oran_filter_kg, oran_filter_25, oran_filter_cift_yari_15,
                     oran_filter_kombo,
                 )
@@ -11219,33 +11203,6 @@ if analiz_btn:
                 else:
                     st.warning("⚠️ Seçilen tarih ve liglerde aktif maç bulunamadı.")
 
-        # Maç Analizi durum filtresini ağır hesaplardan ÖNCE uygula.
-        # Böylece Başlamamış/Canlı seçildiğinde gereksiz maçlar analiz edilmez.
-        if (
-            st.session_state.get("sayfa_modu") == "Maç Analizi"
-            and not getattr(bulten, "empty", True)
-        ):
-            _durum_secimi = st.session_state.get("mac_analizi_durum_filtresi", "Tümü") or "Tümü"
-            if _durum_secimi in ("Başlamamış", "Canlı"):
-                bulten = bulten[
-                    bulten["zaman"].apply(mac_canli_durumu).eq(_durum_secimi)
-                ].copy()
-
-            # Maç Analizi: en yakın başlayacak maçtan en geç başlayacak maça doğru sırala.
-            # Tarihi çözülemeyen kayıtlar en sona bırakılır. Bu yalnızca görünüm/işleme
-            # sırasını değiştirir; tahmin ve hassasiyet hesaplarına dokunmaz.
-            bulten["_mac_siralama_zamani"] = bulten["zaman"].apply(parse_mac_datetime)
-            bulten = (
-                bulten.sort_values(
-                    "_mac_siralama_zamani",
-                    ascending=True,
-                    na_position="last",
-                    kind="stable",
-                )
-                .drop(columns=["_mac_siralama_zamani"])
-                .reset_index(drop=True)
-            )
-
         final = []
         _ilk_ana_registry = ilk_ana_tahminleri_oku() if st.session_state.get("sayfa_modu") == "Maç Analizi" else {}
         _ilk_ana_registry_degisti = False
@@ -11726,6 +11683,115 @@ def baglam_analizi_goster(item):
     else:
         st.caption("💹 2.5 piyasa: seçilen market 2.5 Alt/Üst olmadığı için bu doğrulama uygulanmıyor.")
 
+def takim_modeli_hesapla(gecmis_df, m, genel_limit=10, saha_limit=5):
+    """Oran modelinden bağımsız takım performansı doğrulaması.
+
+    Ana tahmini veya güven yüzdesini DEĞİŞTİRMEZ. Hedef maçtan önceki takım
+    maçlarından genel + iç/dış saha KG ve 2.5 profili üretir. Yüzdeler
+    kalibre edilmiş olasılık değil, geçmiş frekanslardan türetilen destek skorudur.
+    """
+    bos = {"aktif": False, "neden": "Yeterli takım geçmişi yok"}
+    if gecmis_df is None or getattr(gecmis_df, "empty", True):
+        return bos
+    try:
+        kaynak = tarih_oncesi_gecmis(gecmis_df, m.get("zaman", m.get("Date")))
+        if kaynak is None or kaynak.empty:
+            return bos
+        code = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")))
+        if code and "league_code" in kaynak.columns:
+            lig = kaynak[kaynak["league_code"].eq(code)]
+            if not lig.empty:
+                kaynak = lig
+
+        ev_ad, dep_ad = m.get("ev", ""), m.get("dep", "")
+        ev = takim_form_ozeti(kaynak, ev_ad, m.get("zaman"), limit=genel_limit)
+        dep = takim_form_ozeti(kaynak, dep_ad, m.get("zaman"), limit=genel_limit)
+        if ev.get("mac", 0) < 3 or dep.get("mac", 0) < 3:
+            return {**bos, "neden": "İki takım için de en az 3 geçmiş maç gerekli", "ev": ev, "dep": dep}
+
+        adaylar = pd.unique(pd.concat([
+            kaynak.get("HomeTeam", pd.Series(dtype=str)).astype(str),
+            kaynak.get("AwayTeam", pd.Series(dtype=str)).astype(str),
+        ], ignore_index=True)).tolist()
+        ev_es = takim_adi_eslestir(ev_ad, adaylar)
+        dep_es = takim_adi_eslestir(dep_ad, adaylar)
+        ev_all = takim_son_maclari(kaynak, ev_es, m.get("zaman"), limit=50)
+        dep_all = takim_son_maclari(kaynak, dep_es, m.get("zaman"), limit=50)
+        ev_saha_df = takim_maclarini_sahaya_gore_filtrele(ev_all, ev_ad, "Sadece iç saha").head(saha_limit)
+        dep_saha_df = takim_maclarini_sahaya_gore_filtrele(dep_all, dep_ad, "Sadece deplasman").head(saha_limit)
+        ev_saha = _saha_form_ozeti(ev_saha_df, ev_ad)
+        dep_saha = _saha_form_ozeti(dep_saha_df, dep_ad)
+        saha_aktif = ev_saha.get("mac", 0) >= 3 and dep_saha.get("mac", 0) >= 3
+
+        genel_kg = (float(ev["btts"]) + float(dep["btts"])) / 2
+        genel_u25 = (float(ev["over25"]) + float(dep["over25"])) / 2
+        if saha_aktif:
+            saha_kg = (float(ev_saha["btts"]) + float(dep_saha["btts"])) / 2
+            saha_u25 = (float(ev_saha["over25"]) + float(dep_saha["over25"])) / 2
+            kg = .60 * genel_kg + .40 * saha_kg
+            u25 = .60 * genel_u25 + .40 * saha_u25
+        else:
+            saha_kg = saha_u25 = None
+            kg, u25 = genel_kg, genel_u25
+
+        def pct(x): return round(max(0.0, min(1.0, float(x))) * 100, 1)
+        return {
+            "aktif": True, "ev": ev, "dep": dep,
+            "ev_saha": ev_saha, "dep_saha": dep_saha, "saha_aktif": saha_aktif,
+            "kg_var": pct(kg), "kg_yok": pct(1-kg),
+            "ust25": pct(u25), "alt25": pct(1-u25),
+            "genel_kg": pct(genel_kg), "genel_u25": pct(genel_u25),
+            "saha_kg": pct(saha_kg) if saha_kg is not None else None,
+            "saha_u25": pct(saha_u25) if saha_u25 is not None else None,
+        }
+    except Exception as exc:
+        return {**bos, "neden": f"Takım modeli hesaplanamadı: {exc}"}
+
+
+def takim_modeli_ana_tahmin_uyumu(model, label):
+    """Ana oran tahminiyle takım modelinin yönünü yalnızca etiketler."""
+    if not model or not model.get("aktif"):
+        return "veri_yok", "⚪ Veri yetersiz", None
+    label = str(label or "")
+    alan = None
+    if "KG Var" in label: alan = "kg_var"
+    elif "KG Yok" in label: alan = "kg_yok"
+    elif "2.5 Üst" in label: alan = "ust25"
+    elif "2.5 Alt" in label: alan = "alt25"
+    if not alan:
+        return "notr", "⚪ Bu market için doğrulama yok", None
+    skor = float(model.get(alan, 50.0))
+    if skor >= 58:
+        return "destek", "🟢 Takım modeli destekliyor", skor
+    if skor <= 42:
+        return "celiski", "🔴 Takım modeli çelişiyor", skor
+    return "notr", "🟡 Takım modeli nötr", skor
+
+
+def takim_modeli_goster(gecmis_df, m, t):
+    model = takim_modeli_hesapla(gecmis_df, m)
+    label = str(t.get("ana_label", "") or "")
+    durum, durum_yazi, ana_skor = takim_modeli_ana_tahmin_uyumu(model, label)
+    st.markdown("### 🧠 Takım Modeli · Oranlardan bağımsız doğrulama")
+    if not model.get("aktif"):
+        st.caption("Takım modeli: " + str(model.get("neden", "Yeterli veri yok")))
+        return
+    c1, c2, c3 = st.columns(3, gap="small")
+    with c1:
+        st.metric("KG Var desteği", f"%{model['kg_var']:.1f}", help="Son takım maçlarındaki KG sıklığı; kalibre edilmiş kazanma olasılığı değildir.")
+    with c2:
+        st.metric("2.5 Üst desteği", f"%{model['ust25']:.1f}", help="Son takım maçlarındaki 2.5 Üst sıklığı; kalibre edilmiş kazanma olasılığı değildir.")
+    with c3:
+        st.metric("Ana tahmin uyumu", durum_yazi, delta=(f"%{ana_skor:.1f} destek" if ana_skor is not None else None), delta_color="off")
+    ev, dep = model.get("ev", {}), model.get("dep", {})
+    saha_txt = "İç/dış saha verisi dahil" if model.get("saha_aktif") else "İç/dış saha örneği yetersiz; genel form kullanıldı"
+    st.caption(
+        f"{m.get('ev','')}: son {int(ev.get('mac',0))} maç · KG %{float(ev.get('btts',0))*100:.0f} · 2.5 Üst %{float(ev.get('over25',0))*100:.0f} · "
+        f"{m.get('dep','')}: son {int(dep.get('mac',0))} maç · KG %{float(dep.get('btts',0))*100:.0f} · 2.5 Üst %{float(dep.get('over25',0))*100:.0f} · {saha_txt}."
+    )
+    st.caption("ℹ️ v1 yalnızca bağımsız doğrulama katmanıdır; mevcut oran modeli, % güven ve 0.00–0.10 hassasiyet hesaplarını değiştirmez.")
+
+
 def detay_ana_icerik():
     item = secili_detay_itemi()
     m, t, b_det = item["m"], item["t"], item["b"]
@@ -11963,6 +12029,11 @@ def detay_ana_icerik():
         </div>
         """, unsafe_allow_html=True)
 
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Oran modelinden bağımsız Takım Modeli v1. Ana güvene müdahale etmez.
+    _tm_gecmis = st.session_state.get("last_gecmis_df")
+    takim_modeli_goster(_tm_gecmis, m, t)
     st.markdown("<br>", unsafe_allow_html=True)
 
     # Ek marketler detay ekranında kullanıcı isterse yüklenir.
@@ -12317,7 +12388,7 @@ else:
     with sir_col:
         siralama_secimi = st.selectbox(
             "Sırala",
-            ["Güven", "🛡️ Sağlamdan Riskliye", "Başlama Saati (Yakın → Uzak)", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
+            ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
             index=0,
             key="mac_analizi_siralama",
             on_change=_mac_analizi_oran_filtresi_degisti,
@@ -12454,38 +12525,12 @@ else:
                 float(t.get("combo_p", 0) or 0),
                 float(t.get("ana_p", 0) or 0),
             )
-        if siralama_secimi == "🛡️ Sağlamdan Riskliye":
-            # Mevcut birleşik kalite puanını kullanır: güven ana unsur,
-            # kararlılık katkısı ve az örnek cezası zaten playable_score içinde.
-            # Eşitlikte güven ve kararlılık daha yüksek olan maç öne gelir.
-            return (
-                float(t.get("playable_score", t.get("score", t.get("ana_p", 0))) or 0),
-                float(t.get("ana_p", 0) or 0),
-                float(t.get("stability_effective_count", t.get("stability_count", 0)) or 0),
-                int(t.get("ornek", 0) or 0),
-            )
         return (
             float(t.get("ana_p", 0) or 0),
             float(t.get("playable_score", 0) or 0),
         )
 
-    if siralama_secimi == "Başlama Saati (Yakın → Uzak)":
-        # En yakın başlayacak maç üstte, en geç başlayacak maç altta.
-        # Tarihi çözülemeyen kayıtlar listenin en sonuna gider.
-        def _baslama_saati_anahtari(pair):
-            dt = parse_mac_datetime(pair[1]["m"].get("zaman"))
-            if pd.isna(dt):
-                return (1, pd.Timestamp.max)
-            try:
-                dt = pd.Timestamp(dt)
-                if dt.tzinfo is not None:
-                    dt = dt.tz_localize(None)
-            except Exception:
-                return (1, pd.Timestamp.max)
-            return (0, dt)
-
-        goster = sorted(goster, key=_baslama_saati_anahtari)
-    elif siralama_secimi == "Lig":
+    if siralama_secimi == "Lig":
         # Aynı ligden bulunan geçmiş örnek sayısı en yüksek olan maç üstte.
         # Eşitlikte toplam örnek, ardından güven oranı kullanılır.
         goster = sorted(
