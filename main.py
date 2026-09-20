@@ -12317,7 +12317,7 @@ else:
     with sir_col:
         siralama_secimi = st.selectbox(
             "Sırala",
-            ["Güven", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
+            ["Güven", "Başlama Saati (Yakın → Uzak)", "Oran", "2.5 Alt / Üst", "KG", "Kombo", "Lig"],
             index=0,
             key="mac_analizi_siralama",
             on_change=_mac_analizi_oran_filtresi_degisti,
@@ -12459,7 +12459,23 @@ else:
             float(t.get("playable_score", 0) or 0),
         )
 
-    if siralama_secimi == "Lig":
+    if siralama_secimi == "Başlama Saati (Yakın → Uzak)":
+        # En yakın başlayacak maç üstte, en geç başlayacak maç altta.
+        # Tarihi çözülemeyen kayıtlar listenin en sonuna gider.
+        def _baslama_saati_anahtari(pair):
+            dt = parse_mac_datetime(pair[1]["m"].get("zaman"))
+            if pd.isna(dt):
+                return (1, pd.Timestamp.max)
+            try:
+                dt = pd.Timestamp(dt)
+                if dt.tzinfo is not None:
+                    dt = dt.tz_localize(None)
+            except Exception:
+                return (1, pd.Timestamp.max)
+            return (0, dt)
+
+        goster = sorted(goster, key=_baslama_saati_anahtari)
+    elif siralama_secimi == "Lig":
         # Aynı ligden bulunan geçmiş örnek sayısı en yüksek olan maç üstte.
         # Eşitlikte toplam örnek, ardından güven oranı kullanılır.
         goster = sorted(
