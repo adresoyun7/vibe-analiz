@@ -933,50 +933,156 @@ def basket_backtest(df,min_games=6,limit=10,max_test=300):
     return pd.DataFrame(rows)
 
 
+def basket_odds_market_ozeti(event):
+    """Bookmaker'lar arasından medyan h2h/spread/total çizgisini çıkarır."""
+    home=str(event.get("home_team", "")); away=str(event.get("away_team", ""))
+    h2h_h=[]; h2h_a=[]; spreads_h=[]; totals=[]
+    for book in event.get("bookmakers", []) or []:
+        for market in book.get("markets", []) or []:
+            key=market.get("key")
+            outs=market.get("outcomes", []) or []
+            if key=="h2h":
+                for o in outs:
+                    try: price=float(o.get("price"))
+                    except (TypeError,ValueError): continue
+                    if o.get("name")==home: h2h_h.append(price)
+                    elif o.get("name")==away: h2h_a.append(price)
+            elif key=="spreads":
+                for o in outs:
+                    if o.get("name")==home:
+                        try: spreads_h.append(float(o.get("point")))
+                        except (TypeError,ValueError): pass
+            elif key=="totals":
+                for o in outs:
+                    if str(o.get("name","")).lower()=="over":
+                        try: totals.append(float(o.get("point")))
+                        except (TypeError,ValueError): pass
+    med=lambda a: float(pd.Series(a).median()) if a else None
+    return {"home_odds":med(h2h_h),"away_odds":med(h2h_a),"spread_line":med(spreads_h),"total_line":med(totals)}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def basket_odds_canli(api_key, sport_key, region="eu"):
+    """The Odds API'den güncel basketbol bülteni. 15 dk cache ile kredi tüketimini sınırlar."""
+    if not api_key or not sport_key: return [], "API key yok", {}
+    try:
+        r=requests.get(
+            f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/",
+            params={"apiKey":api_key,"regions":region,"markets":"h2h,spreads,totals","oddsFormat":"decimal","dateFormat":"iso"},
+            timeout=18,
+        )
+        quota={"remaining":r.headers.get("x-requests-remaining"),"used":r.headers.get("x-requests-used"),"last":r.headers.get("x-requests-last")}
+        if r.status_code!=200: return [], f"Odds API {r.status_code}: {r.text[:180]}", quota
+        return r.json() if isinstance(r.json(),list) else [], "", quota
+    except Exception as exc:
+        return [], f"{type(exc).__name__}: {exc}", {}
+
+
+def basket_isim_eslestir(api_name, teams):
+    """Önce birebir, sonra normalize edilmiş isimle geçmiş CSV takımını bulur."""
+    if api_name in teams: return api_name
+    def norm(x): return re.sub(r"[^a-z0-9]", "", str(x).lower())
+    n=norm(api_name); exact=[t for t in teams if norm(t)==n]
+    if exact: return exact[0]
+    return None
+
+
+def basket_guncel_adaylar(df, events, limit=10):
+    rows=[]; teams=sorted(set(df.HomeTeam).union(df.AwayTeam)); cutoff=df.Date.max()+pd.Timedelta(days=1)
+    for e in events:
+        ev_api=str(e.get("home_team", "")); dep_api=str(e.get("away_team", ""))
+        ev=basket_isim_eslestir(ev_api,teams); dep=basket_isim_eslestir(dep_api,teams)
+        mk=basket_odds_market_ozeti(e)
+        if not ev or not dep:
+            rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Durum":"Geçmiş takım adı eşleşmedi"})
+            continue
+        r=basket_model_tahmini(df,ev,dep,cutoff,limit,0,0,mk["total_line"],mk["spread_line"])
+        if not r: continue
+        picks=[("MS",r["winner"],r["confidence"])]
+        if r.get("total_pick"): picks.append(("A/U",f'{r["total_line"]:g} {r["total_pick"]}',r["total_p"]))
+        if r.get("spread_pick"): picks.append(("Handikap",r["spread_pick"],r["spread_p"]))
+        best=max(picks,key=lambda x:x[2])
+        rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":best[0],"Ana Tahmin":best[1],"Güven":best[2],
+                     "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
+                     "Ev Handikap":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],"Durum":"Hazır"})
+    return pd.DataFrame(rows)
+
+
 def basketbol_sayfasi():
-    st.markdown("## 🏀 Basketbol Motoru · 1.0")
-    st.caption("Form + rakip gücü + ev/deplasman + Pace/ORtg/DRtg + sakatlık düzeltmesi + MS/Toplam/Handikap + 1Y/çeyrek + backtest")
+    st.markdown("## 🏀 Basketbol Motoru · 1.1")
+    st.caption("Otomatik bülten + Form + rakip gücü + ev/deplasman + Pace/ORtg/DRtg + MS/Toplam/Handikap + backtest")
+
+    api_key=get_app_api_key()
+    c1,c2,c3=st.columns([2,1,1])
+    league=c1.selectbox("Basketbol ligi",["NBA","WNBA","EuroLeague","NCAA"],key="basket_league")
+    sport_map={"NBA":"basketball_nba","WNBA":"basketball_wnba","EuroLeague":"basketball_euroleague","NCAA":"basketball_ncaab"}
+    region=c2.selectbox("Odds bölgesi",["eu","us","uk"],key="basket_region")
+    form_n=c3.selectbox("Form",[5,8,10,12],index=2,key="basket_form_n_global")
+    if not api_key: st.warning("Otomatik bülten için soldaki ODDS API KEY alanına anahtarını gir. Geçmiş CSV ile manuel analiz yine çalışır.")
+
+    events=[]; err=""; quota={}
+    if api_key:
+        events,err,quota=basket_odds_canli(api_key,sport_map[league],region)
+        if err: st.warning(err)
+        else:
+            qtxt=f' · kalan kredi {quota.get("remaining")}' if quota.get("remaining") else ""
+            st.success(f"{league}: {len(events)} güncel/canlı maç alındı{qtxt}")
+
     uploaded=st.file_uploader("Basketbol geçmiş CSV'si",type=["csv"],key="basket_history_csv")
-    st.caption("Minimum: Date, HomeTeam, AwayTeam, HomeScore, AwayScore. Pace/reyting için Home/Away FGA, ORB, TO, FTA; market için TotalLine/SpreadLine; yarı/çeyrek için HomeH1/AwayH1 veya Q1-Q4 opsiyonel.")
+    st.caption("Geçmiş model için minimum: Date, HomeTeam, AwayTeam, HomeScore, AwayScore. FGA/ORB/TO/FTA varsa gerçek Pace + ORtg/DRtg otomatik devreye girer.")
     if uploaded is None:
-        st.info("CSV yüklediğinde motor otomatik olarak mevcut veri seviyesini algılar. Box-score yoksa skor-form modeli çalışır; varsa gerçek Pace + ORtg/DRtg devreye girer.")
+        if events:
+            simple=[]
+            for e in events:
+                mk=basket_odds_market_ozeti(e)
+                simple.append({"Başlangıç":e.get("commence_time"),"Maç":f'{e.get("home_team")} - {e.get("away_team")}',"Toplam":mk["total_line"],"Ev Handikap":mk["spread_line"],"Ev MS":mk["home_odds"],"Dep MS":mk["away_odds"]})
+            st.dataframe(pd.DataFrame(simple),use_container_width=True,hide_index=True)
+            st.info("Bülten otomatik geldi. Tahmin üretebilmek için takım geçmişi gerekiyor; CSV yüklediğinde bu maçlar otomatik modele bağlanacak.")
+        else: st.info("Geçmiş CSV yükle veya Odds API key ile güncel bülteni aç.")
         return
     try: raw=pd.read_csv(uploaded)
     except Exception as exc: st.error(f"CSV okunamadı: {type(exc).__name__}"); return
     df=basket_veri_hazirla(raw)
     if df.empty: st.error("Zorunlu sütunlar bulunamadı veya veri okunamadı."); return
-    teams=sorted(set(df.HomeTeam).union(df.AwayTeam)); tabs=st.tabs(["🎯 Maç Analizi","📋 Aday Listesi","🧪 Backtest"])
+
+    tabs=st.tabs(["🔥 Güncel Adaylar","🎯 Maç Analizi","🧪 Backtest"])
     with tabs[0]:
-        c1,c2,c3=st.columns([2,2,1]); ev=c1.selectbox("Ev sahibi",teams,key="basket_home"); dep=c2.selectbox("Deplasman",[x for x in teams if x!=ev],key="basket_away"); limit=c3.selectbox("Form",[5,8,10,12],index=2,key="basket_form_n")
+        if not events: st.warning("Güncel adaylar için Odds API bülteni gerekli.")
+        else:
+            aday=basket_guncel_adaylar(df,events,form_n)
+            if aday.empty: st.warning("Modelleyebilecek güncel maç bulunamadı.")
+            else:
+                ready=aday[aday["Durum"].eq("Hazır")].copy() if "Durum" in aday else aday
+                if not ready.empty:
+                    ready=ready.sort_values("Güven",ascending=False)
+                    st.metric("Model hazır maç",len(ready))
+                    st.dataframe(ready,use_container_width=True,hide_index=True)
+                bad=aday[~aday["Durum"].eq("Hazır")] if "Durum" in aday else pd.DataFrame()
+                if not bad.empty:
+                    with st.expander(f"Takım adı eşleşmeyen {len(bad)} maç"): st.dataframe(bad[["Maç","Durum"]],use_container_width=True,hide_index=True)
+
+    with tabs[1]:
+        teams=sorted(set(df.HomeTeam).union(df.AwayTeam))
+        a,b=st.columns(2); ev=a.selectbox("Ev sahibi",teams,key="basket_home"); dep=b.selectbox("Deplasman",[x for x in teams if x!=ev],key="basket_away")
         l1,l2,l3,l4=st.columns(4)
         total_line=l1.number_input("Toplam çizgisi",min_value=0.,value=0.,step=.5,key="basket_total_line"); spread=l2.number_input("Ev handikapı",value=0.,step=.5,key="basket_spread_line")
-        injh=l3.number_input("Ev sakatlık etkisi",value=0.,step=.5,help="Beklenen takım skoruna puan etkisi. Örn. -3.0",key="basket_injh")
-        inja=l4.number_input("Dep sakatlık etkisi",value=0.,step=.5,key="basket_inja")
-        cutoff=df.Date.max()+pd.Timedelta(days=1); r=basket_model_tahmini(df,ev,dep,cutoff,limit,injh,inja,total_line if total_line>0 else None,spread)
-        if not r: st.warning("Yeterli geçmiş yok."); return
-        a,b,c,d=st.columns(4); a.metric("Beklenen skor",f'{r["home_score"]:.1f} - {r["away_score"]:.1f}'); b.metric("Toplam",f'{r["total"]:.1f}'); c.metric("MS",f'{r["winner"]} %{r["confidence"]}'); d.metric("Pace",r["pace"] if r["pace"] is not None else "Box-score yok")
-        if not r["real_efficiency"]: st.warning("Bu CSV'de possession için gerekli box-score alanları yok. Pace/ORtg/DRtg tahmin edilmedi; form/skor motoru aktif.")
-        m1,m2=st.columns(2)
-        if r.get("total_pick"): m1.success(f'Alt/Üst: **{r["total_line"]:g} {r["total_pick"]}** · model %{r["total_p"]} · fark {r["total_diff"]:+.1f}')
-        if r.get("spread_pick"): m2.success(f'Handikap: **{r["spread_pick"]}** · model %{r["spread_p"]} · çizgi farkı {r["spread_diff"]:+.1f}')
-        hp,ap=r["home_profile"],r["away_profile"]
-        table=[]
-        for name,p in ((ev,hp),(dep,ap)):
-            table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1),"Pace":round(p["pace"],1) if math.isfinite(float(p["pace"])) else None,"ORtg":round(p["ortg"],1) if math.isfinite(float(p["ortg"])) else None,"DRtg":round(p["drtg"],1) if math.isfinite(float(p["drtg"])) else None})
-        st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
-        if "h1_total" in r: st.info(f'İlk yarı model skoru: {r["h1_home"]:.1f} - {r["h1_away"]:.1f} · toplam {r["h1_total"]:.1f}')
-        if r["quarters"]: st.dataframe(pd.DataFrame(r["quarters"],columns=["Çeyrek",ev,dep]),use_container_width=True,hide_index=True)
-    with tabs[1]:
-        st.caption("CSV'deki son tarihe göre tüm takımların olası eşleşmelerini değil, veri içindeki en son maçları modelleyerek aday performans görünümü verir.")
-        bt=basket_backtest(df,min_games=5,limit=10,max_test=min(150,len(df)))
-        if bt.empty: st.warning("Aday listesi için yeterli geçmiş yok.")
+        injh=l3.number_input("Ev sakatlık etkisi",value=0.,step=.5,key="basket_injh"); inja=l4.number_input("Dep sakatlık etkisi",value=0.,step=.5,key="basket_inja")
+        cutoff=df.Date.max()+pd.Timedelta(days=1); r=basket_model_tahmini(df,ev,dep,cutoff,form_n,injh,inja,total_line if total_line>0 else None,spread)
+        if not r: st.warning("Yeterli geçmiş yok.")
         else:
-            recent=bt.sort_values(["Güven","Tarih"],ascending=[False,False]).head(50)
-            st.dataframe(recent,use_container_width=True,hide_index=True)
+            x1,x2,x3,x4=st.columns(4); x1.metric("Beklenen skor",f'{r["home_score"]:.1f} - {r["away_score"]:.1f}'); x2.metric("Toplam",f'{r["total"]:.1f}'); x3.metric("MS",f'{r["winner"]} %{r["confidence"]}'); x4.metric("Pace",r["pace"] if r["pace"] is not None else "Box-score yok")
+            if not r["real_efficiency"]: st.warning("Box-score alanları yok: Pace/ORtg/DRtg yerine skor-form modeli kullanılıyor.")
+            if r.get("total_pick"): st.success(f'Alt/Üst: {r["total_line"]:g} {r["total_pick"]} · %{r["total_p"]} · model farkı {r["total_diff"]:+.1f}')
+            if r.get("spread_pick"): st.success(f'Handikap: {r["spread_pick"]} · %{r["spread_p"]} · model farkı {r["spread_diff"]:+.1f}')
+            table=[]
+            for name,p in ((ev,r["home_profile"]),(dep,r["away_profile"])):
+                table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1),"Pace":round(p["pace"],1) if math.isfinite(float(p["pace"])) else None,"ORtg":round(p["ortg"],1) if math.isfinite(float(p["ortg"])) else None,"DRtg":round(p["drtg"],1) if math.isfinite(float(p["drtg"])) else None})
+            st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
+
     with tabs[2]:
         max_test=st.slider("Test maçı",50,min(1000,max(50,len(df))),min(300,max(50,len(df))),50,key="basket_bt_n") if len(df)>=50 else len(df)
         if st.button("Basketbol backtest çalıştır",type="primary",key="basket_bt_btn"):
-            with st.spinner("Basketbol motoru geçmiş maçlarda test ediliyor..."): bt=basket_backtest(df,6,10,max_test)
+            with st.spinner("Basketbol motoru geçmiş maçlarda test ediliyor..."): bt=basket_backtest(df,6,form_n,max_test)
             if bt.empty: st.warning("Backtest için yeterli geçmiş oluşmadı.")
             else:
                 x1,x2,x3=st.columns(3); x1.metric("MS başarı",f'%{bt["MS Tuttu"].mean()*100:.1f}'); x2.metric("Skor MAE",f'{bt["Skor MAE"].mean():.2f}'); x3.metric("Tahmin",len(bt))
