@@ -9108,11 +9108,17 @@ spor_modu = st.radio(
     key="spor_modu",
 )
 
-# Basketbolda futbol sidebar'ını tamamen gizle. Basketbol kontrolleri ana ekranda kalır.
+# Basketbolda futbol sidebar'ını tamamen gizle ve basketbol sayfasını ANA İÇERİKTE render et.
+# ÖNEMLİ: basketbol_sayfasi() with st.sidebar bloğunun içinde çağrılmamalı;
+# aksi halde sidebar CSS ile gizlenince basketbol ekranı da görünmez olur.
 if spor_modu == "🏀 Basketbol":
     st.markdown("<style>section[data-testid='stSidebar']{display:none !important;}</style>", unsafe_allow_html=True)
+    uygula_tema_css(bool(st.session_state.get("koyu_mod", False)))
+    basketbol_sayfasi()
+    legal_footer()
+    st.stop()
 
-# FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
+# FİLTRELER ARTIK SOL SIDEBAR İÇİNDE (yalnızca futbol modu buraya ulaşır)
 with st.sidebar:
     with st.container(key="koyu_mod_toggle"):
         koyu_mod = st.toggle("🌙 Koyu Mod", key="koyu_mod")
@@ -9221,11 +9227,8 @@ with st.sidebar:
     if st.session_state.pop("sonuc_reset_hedef_mac_analizi", False):
         st.session_state["sayfa_modu"] = "Maç Analizi"
 
-    # Spor seçimi sayfanın en üstünde yapılır. Basketbolda futbol menüleri oluşturulmaz.
-    if spor_modu == "🏀 Basketbol":
-        basketbol_sayfasi()
-        legal_footer()
-        st.stop()
+    # Basketbol modu yukarıda ana içerikte işlenip st.stop() ile ayrılır.
+    # Bu sidebar bloğu yalnızca futbol görünümünü oluşturur.
 
     # Futbol görünümü yalnızca Futbol seçiliyken oluşturulur.
     sayfa_modu = st.radio(
