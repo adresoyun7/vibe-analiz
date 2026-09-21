@@ -1010,188 +1010,199 @@ def basket_guncel_adaylar(df, events, limit=10):
 
 
 
-def get_balldontlie_key():
-    """Basketbol geçmiş verisi için BALLDONTLIE anahtarı."""
-    user_key = str(st.session_state.get("user_balldontlie_key", "")).strip()
-    if user_key:
-        return user_key
-    for secret_name in ("BALLDONTLIE_API_KEY", "BDL_API_KEY", "BALLDONTLIE_KEY"):
-        val = str(get_secret_value(secret_name, "") or "").strip()
-        if val:
-            return val
-    return ""
-
+# === YapAiKupon basketbol otomatik geçmiş sağlayıcıları ===
+# NBA: NBA Stats (anahtar gerektirmez)
+# EuroLeague: EuroLeague resmi public feed (anahtar gerektirmez)
+# Güncel bülten/oran: The Odds API (uygulamadaki mevcut ODDS API KEY)
 
 def _basket_norm_name(x):
     return re.sub(r"[^a-z0-9]", "", str(x or "").lower())
 
 
-def _bdl_base_for_league(league):
-    return {
-        "NBA": "https://api.balldontlie.io/v1",
-        "WNBA": "https://api.balldontlie.io/wnba/v1",
-        "NCAA": "https://api.balldontlie.io/ncaab/v1",
-    }.get(str(league))
-
-
-def _bdl_get(url, key, params=None, timeout=25):
-    r = requests.get(url, headers={"Authorization": key}, params=params or {}, timeout=timeout)
+def _basket_http_json(url, params=None, headers=None, timeout=25):
+    base_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://www.nba.com",
+        "Referer": "https://www.nba.com/",
+        "Connection": "keep-alive",
+    }
+    if headers:
+        base_headers.update(headers)
+    r = requests.get(url, params=params or {}, headers=base_headers, timeout=timeout)
     if r.status_code != 200:
-        msg = r.text[:220].replace("\n", " ")
-        raise RuntimeError(f"BALLDONTLIE {r.status_code}: {msg}")
+        raise RuntimeError(f"HTTP {r.status_code} · {url.split('/')[2]}")
     return r.json()
 
 
-def basket_bdl_takimlar(league, key):
-    base = _bdl_base_for_league(league)
-    if not base:
-        return []
-    payload = _bdl_get(f"{base}/teams", key)
-    return payload.get("data", []) if isinstance(payload, dict) else []
+def _nba_season_label(start_year):
+    return f"{int(start_year)}-{str(int(start_year)+1)[-2:]}"
 
 
-def basket_bdl_takim_eslestir(api_name, teams):
-    """Odds API takım adını BALLDONTLIE takım kaydıyla eşleştirir."""
-    n = _basket_norm_name(api_name)
-    best = None
-    for t in teams:
-        names = [t.get("full_name"), t.get("name"),
-                 f'{t.get("city", "")} {t.get("name", "")}'.strip(),
-                 f'{t.get("college", "")} {t.get("name", "")}'.strip()]
-        norms = [_basket_norm_name(x) for x in names if x]
-        if n in norms:
-            return t
-        # Son çare: uzun isimlerden biri diğerini içeriyorsa kabul et.
-        for z in norms:
-            if len(n) >= 7 and len(z) >= 7 and (n in z or z in n):
-                best = best or t
-    return best
+def _nba_relevant_seasons(days=500):
+    now = pd.Timestamp.now(tz="UTC")
+    # NBA sezonu sonbaharda başlar. Eylülde önceki sezon hâlâ son tamamlanmış sezondur.
+    current_start = now.year if now.month >= 10 else now.year - 1
+    count = max(2, int(days // 300) + 1)
+    return [_nba_season_label(current_start-i) for i in range(count)]
 
 
-def basket_bdl_gecmis_cek(league, events, key, days=420, max_pages=20):
-    """NBA/WNBA/NCAAB geçmiş maçlarını otomatik indirip model şemasına çevirir.
+def _nba_league_game_log(season):
+    url = "https://stats.nba.com/stats/leaguegamelog"
+    params = {
+        "Counter": "0", "DateFrom": "", "DateTo": "", "Direction": "DESC",
+        "LeagueID": "00", "PlayerOrTeam": "T", "Season": season,
+        "SeasonType": "Regular Season", "Sorter": "DATE",
+    }
+    p = _basket_http_json(url, params=params, timeout=30)
+    rs = (p.get("resultSets") or p.get("resultSet") or [])
+    if isinstance(rs, dict): rs = [rs]
+    if not rs: return pd.DataFrame()
+    block = rs[0]
+    return pd.DataFrame(block.get("rowSet", []), columns=block.get("headers", []))
 
-    Sadece tamamlanmış maçlar kullanılır. Böylece CSV yükleme zorunluluğu kalkar.
-    """
-    base = _bdl_base_for_league(league)
-    if not base:
-        return pd.DataFrame(), f"{league} için otomatik geçmiş sağlayıcısı henüz bağlı değil."
-    if not key:
-        return pd.DataFrame(), "BALLDONTLIE API key gerekli."
-    teams = basket_bdl_takimlar(league, key)
-    if not teams:
-        return pd.DataFrame(), "Takım listesi alınamadı."
-    wanted_names = sorted({str(e.get("home_team", "")) for e in events} | {str(e.get("away_team", "")) for e in events})
-    matched = [basket_bdl_takim_eslestir(n, teams) for n in wanted_names if n]
-    matched = [t for t in matched if t and t.get("id") is not None]
-    team_ids = sorted({int(t["id"]) for t in matched})
-    if not team_ids:
-        return pd.DataFrame(), "Bültendeki takım adları geçmiş veri sağlayıcısıyla eşleşmedi."
 
-    end = pd.Timestamp.now(tz="UTC").date()
-    start = end - pd.Timedelta(days=int(days))
-    params = [("start_date", str(start)), ("end_date", str(end)), ("per_page", 100)]
-    for tid in team_ids:
-        params.append(("team_ids[]", tid))
-
-    all_games = []
-    cursor = None
-    for _ in range(int(max_pages)):
-        pp = list(params)
-        if cursor is not None:
-            pp.append(("cursor", cursor))
-        payload = _bdl_get(f"{base}/games", key, pp)
-        data = payload.get("data", []) if isinstance(payload, dict) else []
-        all_games.extend(data)
-        meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
-        nxt = meta.get("next_cursor")
-        if not nxt or not data:
-            break
-        cursor = nxt
-
-    rows = []
-    for g in all_games:
-        status = str(g.get("status_state") or g.get("status") or "").lower()
-        hs, aas = g.get("home_team_score"), g.get("visitor_team_score")
-        if hs is None or aas is None:
+def basket_nba_gecmis_cek(events, days=500):
+    frames=[]
+    for season in _nba_relevant_seasons(days):
+        try:
+            x=_nba_league_game_log(season)
+            if not x.empty: frames.append(x)
+        except Exception:
             continue
-        # BDL'de tamamlanan maç status_state=final; eski kayıtlarda status=Final olabilir.
-        if status and ("final" not in status) and status not in ("post", "completed"):
-            continue
-        ht = g.get("home_team") or {}
-        at = g.get("visitor_team") or g.get("away_team") or {}
-        hname = ht.get("full_name") or " ".join(x for x in [ht.get("city"), ht.get("name")] if x)
-        aname = at.get("full_name") or " ".join(x for x in [at.get("city"), at.get("name")] if x)
-        if not hname or not aname:
-            continue
-        row = {
-            "Date": g.get("date") or g.get("datetime"),
-            "League": league,
-            "HomeTeam": hname,
-            "AwayTeam": aname,
-            "HomeScore": hs,
-            "AwayScore": aas,
-        }
-        # 2023+ NBA/WNBA cevaplarında çeyrek skorları varsa yarı/çeyrek modelini de besle.
-        for q in range(1, 5):
-            hv, av = g.get(f"home_q{q}"), g.get(f"visitor_q{q}")
-            if hv is not None: row[f"HomeQ{q}"] = hv
-            if av is not None: row[f"AwayQ{q}"] = av
-        if all(row.get(f"HomeQ{q}") is not None for q in (1,2)):
-            row["HomeH1"] = float(row["HomeQ1"]) + float(row["HomeQ2"])
-        if all(row.get(f"AwayQ{q}") is not None for q in (1,2)):
-            row["AwayH1"] = float(row["AwayQ1"]) + float(row["AwayQ2"])
+    if not frames:
+        return pd.DataFrame(), "NBA Stats geçmiş maç verisi alınamadı. NBA Stats geçici olarak isteği engelliyor olabilir."
+    raw=pd.concat(frames,ignore_index=True)
+    if "GAME_ID" not in raw or "TEAM_NAME" not in raw:
+        return pd.DataFrame(), "NBA Stats cevabında beklenen maç alanları bulunamadı."
+    rows=[]
+    for gid,g in raw.groupby("GAME_ID",sort=False):
+        if len(g)<2: continue
+        home=g[g.get("MATCHUP",pd.Series(index=g.index,dtype=str)).astype(str).str.contains("vs.",regex=False)]
+        away=g[g.get("MATCHUP",pd.Series(index=g.index,dtype=str)).astype(str).str.contains("@",regex=False)]
+        if home.empty or away.empty: continue
+        h=home.iloc[0]; a=away.iloc[0]
+        try: hs=float(h.get("PTS")); aas=float(a.get("PTS"))
+        except Exception: continue
+        row={"Date":h.get("GAME_DATE"),"League":"NBA","HomeTeam":h.get("TEAM_NAME"),"AwayTeam":a.get("TEAM_NAME"),"HomeScore":hs,"AwayScore":aas}
+        # Possession tahmini: FGA + .44*FTA - OREB + TOV. Böylece Pace/ORtg/DRtg gerçek box-score alanlarından hesaplanabilir.
+        try:
+            hp=float(h.get("FGA",0))+.44*float(h.get("FTA",0))-float(h.get("OREB",0))+float(h.get("TOV",0))
+            ap=float(a.get("FGA",0))+.44*float(a.get("FTA",0))-float(a.get("OREB",0))+float(a.get("TOV",0))
+            poss=(hp+ap)/2.0
+            if poss>0:
+                row.update({"HomePoss":poss,"AwayPoss":poss,"HomeORtg":100*hs/poss,"AwayORtg":100*aas/poss})
+        except Exception: pass
         rows.append(row)
-    df = basket_veri_hazirla(pd.DataFrame(rows)) if rows else pd.DataFrame()
-    if df.empty:
-        return df, "Tamamlanmış geçmiş maç bulunamadı."
-    return df, ""
+    df=basket_veri_hazirla(pd.DataFrame(rows)) if rows else pd.DataFrame()
+    if df.empty: return df,"NBA geçmiş maçları dönüştürülemedi."
+    cutoff=pd.Timestamp.now(tz="UTC").tz_localize(None)-pd.Timedelta(days=int(days))
+    df=df[df["Date"]>=cutoff].copy()
+    return df,""
 
 
-def basket_otomatik_gecmis(league, events, key, refresh=False):
-    """30 dk session cache. Sağlayıcı hataları Streamlit uygulamasını düşürmez."""
-    cache_key = f"basket_auto_history_{league}"
-    ts_key = cache_key + "_ts"
-    now = time.time()
-    old = st.session_state.get(cache_key)
-    old_ts = float(st.session_state.get(ts_key, 0) or 0)
-    if (not refresh) and isinstance(old, pd.DataFrame) and not old.empty and now-old_ts < 1800:
-        return old.copy(), ""
+def _eu_season_codes():
+    now=pd.Timestamp.now(tz="UTC")
+    start=now.year if now.month>=8 else now.year-1
+    return [f"E{start}",f"E{start-1}"]
+
+
+def _deep_get(d,*paths):
+    for path in paths:
+        cur=d
+        ok=True
+        for k in path:
+            if not isinstance(cur,dict) or k not in cur:
+                ok=False; break
+            cur=cur[k]
+        if ok and cur not in (None,""): return cur
+    return None
+
+
+def _eu_team_name(obj, side):
+    side_obj=obj.get(side) if isinstance(obj,dict) else None
+    if isinstance(side_obj,dict):
+        v=_deep_get(side_obj,("club","name"),("club","clubName"),("team","name"),("name",),("clubName",),("teamName",))
+        if v: return str(v)
+    aliases={"local":["localClub","homeClub","homeTeam"],"road":["roadClub","awayClub","awayTeam"]}[side]
+    for k in aliases:
+        v=obj.get(k) if isinstance(obj,dict) else None
+        if isinstance(v,dict):
+            z=v.get("name") or v.get("clubName") or v.get("teamName")
+            if z:return str(z)
+        elif v:return str(v)
+    return ""
+
+
+def _eu_score(obj,side):
+    candidates={"local":["localScore","homeScore","scoreLocal","scoreHome"],"road":["roadScore","awayScore","scoreRoad","scoreAway"]}[side]
+    for k in candidates:
+        v=obj.get(k) if isinstance(obj,dict) else None
+        if isinstance(v,dict): v=v.get("score") or v.get("points")
+        try:
+            if v is not None:return float(v)
+        except Exception: pass
+    sobj=obj.get(side) if isinstance(obj,dict) else None
+    if isinstance(sobj,dict):
+        for k in ("score","points","totalPoints"):
+            try:
+                if sobj.get(k) is not None:return float(sobj.get(k))
+            except Exception: pass
+    return None
+
+
+def basket_euroleague_gecmis_cek(events, days=500):
+    rows=[]
+    for season in _eu_season_codes():
+        url=f"https://api-live.euroleague.net/v2/competitions/E/seasons/{season}/games"
+        try:
+            payload=_basket_http_json(url,headers={"Origin":"https://www.euroleaguebasketball.net","Referer":"https://www.euroleaguebasketball.net/"},timeout=25)
+        except Exception:
+            continue
+        games=payload.get("data",[]) if isinstance(payload,dict) else payload if isinstance(payload,list) else []
+        for g in games:
+            if not isinstance(g,dict):continue
+            hn=_eu_team_name(g,"local"); an=_eu_team_name(g,"road")
+            hs=_eu_score(g,"local"); aas=_eu_score(g,"road")
+            if not hn or not an or hs is None or aas is None:continue
+            dt=_deep_get(g,("date",),("startDate",),("startTime",),("utcDate",),("gameDate",))
+            rows.append({"Date":dt,"League":"EuroLeague","HomeTeam":hn,"AwayTeam":an,"HomeScore":hs,"AwayScore":aas,"_season":season,"_gamecode":g.get("gameCode") or g.get("code")})
+    df=basket_veri_hazirla(pd.DataFrame(rows)) if rows else pd.DataFrame()
+    if df.empty:return df,"EuroLeague resmi feed'inden tamamlanmış geçmiş maç alınamadı."
+    cutoff=pd.Timestamp.now(tz="UTC").tz_localize(None)-pd.Timedelta(days=int(days))
+    df=df[df["Date"]>=cutoff].copy()
+    return df,""
+
+
+def basket_otomatik_gecmis(league, events, key=None, refresh=False):
+    """Anahtarsız geçmiş sağlayıcı. NBA=NBA Stats, EuroLeague=resmi EuroLeague feed."""
+    cache_key=f"basket_auto_history_{league}"
+    ts_key=cache_key+"_ts"; now=time.time()
+    old=st.session_state.get(cache_key); old_ts=float(st.session_state.get(ts_key,0) or 0)
+    if (not refresh) and isinstance(old,pd.DataFrame) and not old.empty and now-old_ts<1800:
+        return old.copy(),""
     try:
-        df, err = basket_bdl_gecmis_cek(league, events, key)
-    except requests.exceptions.Timeout:
-        return pd.DataFrame(), "BALLDONTLIE zaman aşımına uğradı. Biraz sonra tekrar dene."
-    except requests.exceptions.RequestException as exc:
-        return pd.DataFrame(), f"Basketbol geçmiş servisine bağlanılamadı: {type(exc).__name__}."
-    except RuntimeError as exc:
-        raw = str(exc)
-        if "BALLDONTLIE 401" in raw:
-            msg = "BALLDONTLIE 401: API key geçersiz veya hesabının paketi bu endpoint'e erişemiyor. Key'i kontrol et."
-        elif "BALLDONTLIE 403" in raw:
-            msg = "BALLDONTLIE 403: hesabının bu basketbol verisine erişim yetkisi yok."
-        elif "BALLDONTLIE 429" in raw:
-            msg = "BALLDONTLIE 429: istek limiti doldu. Kısa süre sonra tekrar dene."
-        elif "BALLDONTLIE 404" in raw:
-            msg = f"{league} geçmiş veri endpoint'i BALLDONTLIE üzerinde bulunamadı/erişilemiyor."
+        if league=="NBA": df,err=basket_nba_gecmis_cek(events)
+        elif league=="EuroLeague": df,err=basket_euroleague_gecmis_cek(events)
         else:
-            # HTML/anahtar gibi hassas cevabı kullanıcıya dökmeyelim; yalnız HTTP kodunu göster.
-            import re as _re
-            m = _re.search(r"BALLDONTLIE\s+(\d{3})", raw)
-            msg = f"BALLDONTLIE geçmiş veri hatası ({m.group(1) if m else 'bilinmeyen'}). Uygulama çalışmaya devam ediyor."
-        return pd.DataFrame(), msg
+            return pd.DataFrame(),f"{league} için anahtarsız geçmiş sağlayıcısı henüz bağlı değil. Şimdilik NBA ve EuroLeague tam otomatik."
+    except requests.exceptions.Timeout:
+        return pd.DataFrame(),f"{league} geçmiş veri servisi zaman aşımına uğradı."
+    except requests.exceptions.RequestException as exc:
+        return pd.DataFrame(),f"{league} geçmiş veri servisine bağlanılamadı: {type(exc).__name__}."
     except Exception as exc:
-        return pd.DataFrame(), f"Basketbol geçmişi alınırken beklenmeyen hata oluştu: {type(exc).__name__}."
+        return pd.DataFrame(),f"{league} geçmişi hazırlanırken hata oluştu: {type(exc).__name__}."
     if not df.empty:
-        st.session_state[cache_key] = df.copy()
-        st.session_state[ts_key] = now
-    return df, err
+        st.session_state[cache_key]=df.copy(); st.session_state[ts_key]=now
+    return df,err
+
 
 def basketbol_sayfasi():
     st.markdown("## 🏀 Basketbol Motoru · Otomatik")
-    st.caption("Bülten ve takım geçmişi otomatik · Form + rakip gücü + ev/deplasman + MS/Toplam/Handikap + backtest")
+    st.caption("Bülten/oran: The Odds API · Geçmiş: NBA Stats / EuroLeague resmi feed · CSV ve ikinci API key yok")
 
     api_key = get_app_api_key()
-    bdl_key = get_balldontlie_key()
     c1,c2,c3 = st.columns([2,1,1])
     league = c1.selectbox("Basketbol ligi", ["NBA","WNBA","NCAA","EuroLeague"], key="basket_league")
     sport_map={"NBA":"basketball_nba","WNBA":"basketball_wnba","EuroLeague":"basketball_euroleague","NCAA":"basketball_ncaab"}
@@ -1200,10 +1211,10 @@ def basketbol_sayfasi():
 
     if not api_key:
         st.warning("Güncel bülten için sol menüde ODDS API KEY gerekli.")
-    if league == "EuroLeague":
-        st.info("EuroLeague bülteni alınabilir; otomatik geçmiş sağlayıcısını ayrıca bağlamamız gerekiyor. NBA/WNBA/NCAA tam otomatik çalışır.")
-    elif not bdl_key:
-        st.warning("CSV artık kullanılmıyor. Otomatik takım geçmişi için sol menüde BALLDONTLIE API KEY gir.")
+    if league in ("NBA", "EuroLeague"):
+        st.caption("Geçmiş veri anahtarsız otomatik: NBA → NBA Stats · EuroLeague → resmi EuroLeague feed")
+    else:
+        st.info(f"{league} bülteni/oranları The Odds API'den gelir; geçmiş model sağlayıcısı bu sürümde NBA ve EuroLeague için aktiftir.")
 
     events=[]; err=""; quota={}
     if api_key:
@@ -1225,13 +1236,11 @@ def basketbol_sayfasi():
         if analiz:
             if not events:
                 st.warning("Analiz için güncel basketbol bülteni bulunamadı.")
-            elif league == "EuroLeague":
-                st.warning("EuroLeague geçmiş veri bağlantısı henüz yok; bu ligde tahmin üretmiyorum.")
-            elif not bdl_key:
-                st.warning("Sol menü > API Key bölümüne BALLDONTLIE API KEY gir. Sonrasında CSV olmadan analiz başlayacak.")
+            elif league not in ("NBA", "EuroLeague"):
+                st.warning(f"{league} için geçmiş sağlayıcı henüz bağlı değil. NBA veya EuroLeague seç.")
             else:
                 with st.spinner("Takım geçmişi otomatik alınıyor ve basketbol maçları analiz ediliyor..."):
-                    df, hist_err = basket_otomatik_gecmis(league, events, bdl_key, refresh=True)
+                    df, hist_err = basket_otomatik_gecmis(league, events, refresh=True)
                     if hist_err:
                         st.error(hist_err)
                     elif df.empty:
@@ -1258,9 +1267,9 @@ def basketbol_sayfasi():
         return
 
     # Maç analizi/backtest için cache yoksa bir kez otomatik yükle.
-    if (not isinstance(df,pd.DataFrame) or df.empty) and events and bdl_key and league != "EuroLeague":
+    if (not isinstance(df,pd.DataFrame) or df.empty) and events and league in ("NBA", "EuroLeague"):
         with st.spinner("Basketbol geçmişi hazırlanıyor..."):
-            df, hist_err = basket_otomatik_gecmis(league, events, bdl_key, refresh=False)
+            df, hist_err = basket_otomatik_gecmis(league, events, refresh=False)
         if hist_err: st.warning(hist_err)
     if not isinstance(df,pd.DataFrame) or df.empty:
         st.info("Önce Aday Listesi'nde 🚀 Analizi Başlat'a bas. Geçmiş veri otomatik hazırlanacak.")
@@ -9055,24 +9064,8 @@ with st.sidebar:
             st.caption("API-Football fallback kapalı")
 
 
-        st.markdown("##### 🏀 BALLDONTLIE · basketbol geçmişi")
-        bdl_current = st.session_state.get("user_balldontlie_key", "")
-        bdl_input = st.text_input(
-            "BALLDONTLIE API KEY",
-            value=bdl_current,
-            placeholder="NBA / WNBA / NCAA geçmişi için...",
-            type="password",
-            key="balldontlie_key_sidebar_clean",
-        )
-        bd1, bd2 = st.columns(2)
-        with bd1:
-            if st.button("BDL Kaydet", use_container_width=True, key="save_balldontlie_key_sidebar_clean"):
-                st.session_state["user_balldontlie_key"] = bdl_input.strip()
-                st.rerun()
-        with bd2:
-            if st.button("BDL Temizle", use_container_width=True, key="clear_balldontlie_key_sidebar_clean"):
-                st.session_state.pop("user_balldontlie_key", None)
-                st.rerun()
+        st.caption("🏀 Basketbol geçmişi: NBA Stats / EuroLeague resmi feed · ek API key gerekmez")
+
         if get_balldontlie_key():
             st.caption("✅ Basketbol otomatik geçmiş aktif")
         else:
