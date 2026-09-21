@@ -9065,11 +9065,7 @@ with st.sidebar:
 
 
         st.caption("🏀 Basketbol geçmişi: NBA Stats / EuroLeague resmi feed · ek API key gerekmez")
-
-        if get_balldontlie_key():
-            st.caption("✅ Basketbol otomatik geçmiş aktif")
-        else:
-            st.caption("Basketbol geçmişi için BDL key gerekli")
+        st.caption("✅ Basketbol otomatik geçmiş aktif · BALLDONTLIE kullanılmıyor")
 
     # API TASARRUF PANELİ: analiz butonları cache'teki aynı bülteni kullanır.
     cache_hazir, cache_toplam = odds_cache_bilgi(secili_kodlar, secili_tarih)
