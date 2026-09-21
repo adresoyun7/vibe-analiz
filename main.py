@@ -1149,7 +1149,7 @@ def basket_bdl_gecmis_cek(league, events, key, days=420, max_pages=20):
 
 
 def basket_otomatik_gecmis(league, events, key, refresh=False):
-    """30 dk session cache; Analizi Başlat gereksiz tekrar istek atmaz."""
+    """30 dk session cache. Sağlayıcı hataları Streamlit uygulamasını düşürmez."""
     cache_key = f"basket_auto_history_{league}"
     ts_key = cache_key + "_ts"
     now = time.time()
@@ -1157,7 +1157,30 @@ def basket_otomatik_gecmis(league, events, key, refresh=False):
     old_ts = float(st.session_state.get(ts_key, 0) or 0)
     if (not refresh) and isinstance(old, pd.DataFrame) and not old.empty and now-old_ts < 1800:
         return old.copy(), ""
-    df, err = basket_bdl_gecmis_cek(league, events, key)
+    try:
+        df, err = basket_bdl_gecmis_cek(league, events, key)
+    except requests.exceptions.Timeout:
+        return pd.DataFrame(), "BALLDONTLIE zaman aşımına uğradı. Biraz sonra tekrar dene."
+    except requests.exceptions.RequestException as exc:
+        return pd.DataFrame(), f"Basketbol geçmiş servisine bağlanılamadı: {type(exc).__name__}."
+    except RuntimeError as exc:
+        raw = str(exc)
+        if "BALLDONTLIE 401" in raw:
+            msg = "BALLDONTLIE 401: API key geçersiz veya hesabının paketi bu endpoint'e erişemiyor. Key'i kontrol et."
+        elif "BALLDONTLIE 403" in raw:
+            msg = "BALLDONTLIE 403: hesabının bu basketbol verisine erişim yetkisi yok."
+        elif "BALLDONTLIE 429" in raw:
+            msg = "BALLDONTLIE 429: istek limiti doldu. Kısa süre sonra tekrar dene."
+        elif "BALLDONTLIE 404" in raw:
+            msg = f"{league} geçmiş veri endpoint'i BALLDONTLIE üzerinde bulunamadı/erişilemiyor."
+        else:
+            # HTML/anahtar gibi hassas cevabı kullanıcıya dökmeyelim; yalnız HTTP kodunu göster.
+            import re as _re
+            m = _re.search(r"BALLDONTLIE\s+(\d{3})", raw)
+            msg = f"BALLDONTLIE geçmiş veri hatası ({m.group(1) if m else 'bilinmeyen'}). Uygulama çalışmaya devam ediyor."
+        return pd.DataFrame(), msg
+    except Exception as exc:
+        return pd.DataFrame(), f"Basketbol geçmişi alınırken beklenmeyen hata oluştu: {type(exc).__name__}."
     if not df.empty:
         st.session_state[cache_key] = df.copy()
         st.session_state[ts_key] = now
