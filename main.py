@@ -1028,6 +1028,13 @@ def basketbol_sayfasi():
             qtxt=f' · kalan kredi {quota.get("remaining")}' if quota.get("remaining") else ""
             st.success(f"{league}: {len(events)} güncel/canlı maç alındı{qtxt}")
 
+    basket_view = st.radio(
+        "Basketbol görünümü",
+        ["🔥 Aday Listesi", "🎯 Maç Analizi", "🧪 Backtest"],
+        horizontal=True,
+        key="basket_view",
+    )
+
     uploaded=st.file_uploader("Basketbol geçmiş CSV'si",type=["csv"],key="basket_history_csv")
     st.caption("Geçmiş model için minimum: Date, HomeTeam, AwayTeam, HomeScore, AwayScore. FGA/ORB/TO/FTA varsa gerçek Pace + ORtg/DRtg otomatik devreye girer.")
     if uploaded is None:
@@ -1045,23 +1052,32 @@ def basketbol_sayfasi():
     df=basket_veri_hazirla(raw)
     if df.empty: st.error("Zorunlu sütunlar bulunamadı veya veri okunamadı."); return
 
-    tabs=st.tabs(["🔥 Güncel Adaylar","🎯 Maç Analizi","🧪 Backtest"])
-    with tabs[0]:
-        if not events: st.warning("Güncel adaylar için Odds API bülteni gerekli.")
-        else:
-            aday=basket_guncel_adaylar(df,events,form_n)
-            if aday.empty: st.warning("Modelleyebilecek güncel maç bulunamadı.")
+    if basket_view == "🔥 Aday Listesi":
+        st.markdown("### 🔥 Basketbol Aday Listesi")
+        st.caption("Lig ve form ayarını seçtikten sonra Analizi Başlat'a bas. Bülten + yüklenen geçmiş veri birlikte modellenir.")
+        analiz = st.button("🚀 Analizi Başlat", type="primary", use_container_width=True, key="basket_analiz_baslat")
+        if analiz:
+            if not events:
+                st.warning("Güncel adaylar için Odds API bülteni gerekli.")
             else:
-                ready=aday[aday["Durum"].eq("Hazır")].copy() if "Durum" in aday else aday
-                if not ready.empty:
-                    ready=ready.sort_values("Güven",ascending=False)
-                    st.metric("Model hazır maç",len(ready))
-                    st.dataframe(ready,use_container_width=True,hide_index=True)
-                bad=aday[~aday["Durum"].eq("Hazır")] if "Durum" in aday else pd.DataFrame()
-                if not bad.empty:
-                    with st.expander(f"Takım adı eşleşmeyen {len(bad)} maç"): st.dataframe(bad[["Maç","Durum"]],use_container_width=True,hide_index=True)
+                with st.spinner("Basketbol maçları analiz ediliyor..."):
+                    aday=basket_guncel_adaylar(df,events,form_n)
+                st.session_state["basket_son_adaylar"] = aday
+        aday = st.session_state.get("basket_son_adaylar", pd.DataFrame())
+        if isinstance(aday,pd.DataFrame) and not aday.empty:
+            ready=aday[aday["Durum"].eq("Hazır")].copy() if "Durum" in aday else aday
+            if not ready.empty:
+                ready=ready.sort_values("Güven",ascending=False)
+                st.metric("Model hazır maç",len(ready))
+                st.dataframe(ready,use_container_width=True,hide_index=True)
+            bad=aday[~aday["Durum"].eq("Hazır")] if "Durum" in aday else pd.DataFrame()
+            if not bad.empty:
+                with st.expander(f"Takım adı eşleşmeyen {len(bad)} maç"): st.dataframe(bad[["Maç","Durum"]],use_container_width=True,hide_index=True)
+        elif not analiz:
+            st.info("Analiz henüz başlatılmadı.")
+        return
 
-    with tabs[1]:
+    if basket_view == "🎯 Maç Analizi":
         teams=sorted(set(df.HomeTeam).union(df.AwayTeam))
         a,b=st.columns(2); ev=a.selectbox("Ev sahibi",teams,key="basket_home"); dep=b.selectbox("Deplasman",[x for x in teams if x!=ev],key="basket_away")
         l1,l2,l3,l4=st.columns(4)
@@ -1079,7 +1095,9 @@ def basketbol_sayfasi():
                 table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1),"Pace":round(p["pace"],1) if math.isfinite(float(p["pace"])) else None,"ORtg":round(p["ortg"],1) if math.isfinite(float(p["ortg"])) else None,"DRtg":round(p["drtg"],1) if math.isfinite(float(p["drtg"])) else None})
             st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
 
-    with tabs[2]:
+        return
+
+    if basket_view == "🧪 Backtest":
         max_test=st.slider("Test maçı",50,min(1000,max(50,len(df))),min(300,max(50,len(df))),50,key="basket_bt_n") if len(df)>=50 else len(df)
         if st.button("Basketbol backtest çalıştır",type="primary",key="basket_bt_btn"):
             with st.spinner("Basketbol motoru geçmiş maçlarda test ediliyor..."): bt=basket_backtest(df,6,form_n,max_test)
@@ -8871,18 +8889,27 @@ with st.sidebar:
     if st.session_state.pop("sonuc_reset_hedef_mac_analizi", False):
         st.session_state["sayfa_modu"] = "Maç Analizi"
 
+    # Ana spor ayrımı: Basketbol seçildiğinde futbol menüleri hiç oluşturulmaz.
+    spor_modu = st.radio(
+        "Spor",
+        ["⚽ Futbol", "🏀 Basketbol"],
+        horizontal=True,
+        key="spor_modu",
+    )
+
+    if spor_modu == "🏀 Basketbol":
+        basketbol_sayfasi()
+        legal_footer()
+        st.stop()
+
+    # Futbol görünümü yalnızca Futbol seçiliyken oluşturulur.
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "🏀 Basketbol", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
-
-    if st.session_state.get("sayfa_modu") == "🏀 Basketbol":
-        basketbol_sayfasi()
-        legal_footer()
-        st.stop()
 
     if st.session_state.get("sayfa_modu") == "Top 50 Market":
         st.markdown("### Market Filtreleri")
