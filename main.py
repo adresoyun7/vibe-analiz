@@ -978,13 +978,105 @@ def basket_odds_canli(api_key, sport_key, region="eu"):
         return [], f"{type(exc).__name__}: {exc}", {}
 
 
+def _basket_team_key(name):
+    """Odds API / resmi feed takım adlarını sponsor, şehir ve aksan farklarına rağmen ortak anahtara indirger."""
+    raw = str(name or "").strip().lower()
+    raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    raw = raw.replace("ı", "i")
+    clean = re.sub(r"[^a-z0-9]+", " ", raw).strip()
+
+    # EuroLeague'de Odds API ile resmi feed arasında en sık görülen isim/sponsor farkları.
+    aliases = {
+        "hapoel tel aviv": "hapoel_tel_aviv",
+        "hapoel ibi tel aviv": "hapoel_tel_aviv",
+        "fc bayern munchen": "bayern_munich",
+        "fc bayern munich": "bayern_munich",
+        "bayern munich": "bayern_munich",
+        "kk crvena zvezda": "crvena_zvezda",
+        "crvena zvezda": "crvena_zvezda",
+        "crvena zvezda meridianbet belgrade": "crvena_zvezda",
+        "zalgiris": "zalgiris_kaunas",
+        "zalgiris kaunas": "zalgiris_kaunas",
+        "panathinaikos": "panathinaikos",
+        "panathinaikos aktor athens": "panathinaikos",
+        "paris basketball": "paris_basketball",
+        "fc barcelona basquet": "barcelona",
+        "fc barcelona basket": "barcelona",
+        "fc barcelona": "barcelona",
+        "barcelona": "barcelona",
+        "anadolu efes": "anadolu_efes",
+        "anadolu efes istanbul": "anadolu_efes",
+        "saski baskonia": "baskonia",
+        "baskonia": "baskonia",
+        "baskonia vitoria gasteiz": "baskonia",
+        "olympiacos": "olympiacos",
+        "olympiacos piraeus": "olympiacos",
+        "asvel lyon villeurbanne": "asvel",
+        "ldlc asvel villeurbanne": "asvel",
+        "asvel villeurbanne": "asvel",
+        "maccabi tel aviv": "maccabi_tel_aviv",
+        "maccabi playtika tel aviv": "maccabi_tel_aviv",
+        "besiktas j k": "besiktas",
+        "besiktas jk": "besiktas",
+        "besiktas": "besiktas",
+        "valencia basket": "valencia",
+        "valencia basket club": "valencia",
+        "fenerbahce sk": "fenerbahce",
+        "fenerbahce": "fenerbahce",
+        "fenerbahce beko istanbul": "fenerbahce",
+        "virtus segafredo bologna": "virtus_bologna",
+        "virtus bologna": "virtus_bologna",
+        "kk partizan nis": "partizan",
+        "partizan nis": "partizan",
+        "partizan mozart bet belgrade": "partizan",
+        "partizan mozzart bet belgrade": "partizan",
+        "partizan belgrade": "partizan",
+        "pallacanestro olimpia milano": "olimpia_milano",
+        "ea7 emporio armani milan": "olimpia_milano",
+        "olimpia milano": "olimpia_milano",
+        "olimpia milan": "olimpia_milano",
+    }
+    if clean in aliases:
+        return aliases[clean]
+
+    # Sponsor ekleri değişebildiği için karakter dizisinin içinde güçlü kulüp çekirdeği varsa onu kullan.
+    cores = [
+        ("crvena zvezda", "crvena_zvezda"), ("zalgiris", "zalgiris_kaunas"),
+        ("panathinaikos", "panathinaikos"), ("paris basketball", "paris_basketball"),
+        ("anadolu efes", "anadolu_efes"), ("baskonia", "baskonia"),
+        ("olympiacos", "olympiacos"), ("asvel", "asvel"),
+        ("maccabi", "maccabi_tel_aviv"), ("besiktas", "besiktas"),
+        ("valencia", "valencia"), ("fenerbahce", "fenerbahce"),
+        ("virtus", "virtus_bologna"), ("partizan", "partizan"),
+        ("olimpia", "olimpia_milano"), ("emporio armani", "olimpia_milano"),
+        ("barcelona", "barcelona"), ("bayern", "bayern_munich"),
+        ("hapoel", "hapoel_tel_aviv"),
+    ]
+    for needle, key in cores:
+        if needle in clean:
+            return key
+    return re.sub(r"\s+", "_", clean)
+
+
 def basket_isim_eslestir(api_name, teams):
-    """Önce birebir, sonra normalize edilmiş isimle geçmiş CSV takımını bulur."""
-    if api_name in teams: return api_name
-    def norm(x): return re.sub(r"[^a-z0-9]", "", str(x).lower())
-    n=norm(api_name); exact=[t for t in teams if norm(t)==n]
-    if exact: return exact[0]
-    return None
+    """Odds API adını geçmiş verideki takıma alias + normalize + kontrollü fuzzy eşleştirme ile bağlar."""
+    if api_name in teams:
+        return api_name
+    target = _basket_team_key(api_name)
+    keyed = {}
+    for t in teams:
+        keyed.setdefault(_basket_team_key(t), []).append(t)
+    if target in keyed:
+        return keyed[target][0]
+
+    # Son güvenlik ağı: yalnızca çok yüksek benzerlikte otomatik eşleştir; yanlış takıma bağlamaktan kaçın.
+    best_team, best_score = None, 0.0
+    target_text = target.replace("_", " ")
+    for t in teams:
+        score = SequenceMatcher(None, target_text, _basket_team_key(t).replace("_", " ")).ratio()
+        if score > best_score:
+            best_team, best_score = t, score
+    return best_team if best_score >= 0.86 else None
 
 
 def basket_guncel_adaylar(df, events, limit=10):
@@ -1202,6 +1294,22 @@ def basketbol_sayfasi():
     st.markdown("## 🏀 Basketbol Motoru · Otomatik")
     st.caption("Bülten/oran: The Odds API · Geçmiş: NBA Stats / EuroLeague resmi feed · CSV ve ikinci API key yok")
 
+    # Basketbolda API anahtarı dahil tüm kontroller ana ekrandadır.
+    with st.expander("🔑 Basketbol API Ayarı", expanded=not bool(get_app_api_key())):
+        current_key = st.session_state.get("user_api_key", "")
+        basket_key_input = st.text_input("ODDS API KEY", value=current_key, type="password", key="basket_api_key_main")
+        bk1, bk2 = st.columns(2)
+        with bk1:
+            if st.button("Kaydet", use_container_width=True, key="basket_api_save_main"):
+                st.session_state["user_api_key"] = basket_key_input.strip()
+                st.rerun()
+        with bk2:
+            if st.button("Temizle", use_container_width=True, key="basket_api_clear_main"):
+                st.session_state.pop("user_api_key", None)
+                st.rerun()
+        if get_app_api_key():
+            st.caption("✅ Odds API key aktif")
+
     api_key = get_app_api_key()
     c1,c2,c3 = st.columns([2,1,1])
     league = c1.selectbox("Basketbol ligi", ["NBA","WNBA","NCAA","EuroLeague"], key="basket_league")
@@ -1210,7 +1318,7 @@ def basketbol_sayfasi():
     form_n=c3.selectbox("Form",[5,8,10,12],index=2,key="basket_form_n_global")
 
     if not api_key:
-        st.warning("Güncel bülten için sol menüde ODDS API KEY gerekli.")
+        st.warning("Güncel bülten için ODDS API KEY gerekli. Basketbol ekranındaki API Key alanından girebilirsin.")
     if league in ("NBA", "EuroLeague"):
         st.caption("Geçmiş veri anahtarsız otomatik: NBA → NBA Stats · EuroLeague → resmi EuroLeague feed")
     else:
@@ -8992,6 +9100,18 @@ def uygula_tema_css(koyu_mod: bool):
     st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
 
 
+# ANA SPOR SEÇİMİ: futbol/basketbol ayrımı ana içerikte, sidebar'da değil.
+spor_modu = st.radio(
+    "Spor",
+    ["⚽ Futbol", "🏀 Basketbol"],
+    horizontal=True,
+    key="spor_modu",
+)
+
+# Basketbolda futbol sidebar'ını tamamen gizle. Basketbol kontrolleri ana ekranda kalır.
+if spor_modu == "🏀 Basketbol":
+    st.markdown("<style>section[data-testid='stSidebar']{display:none !important;}</style>", unsafe_allow_html=True)
+
 # FİLTRELER ARTIK SOL SIDEBAR İÇİNDE
 with st.sidebar:
     with st.container(key="koyu_mod_toggle"):
@@ -9101,14 +9221,7 @@ with st.sidebar:
     if st.session_state.pop("sonuc_reset_hedef_mac_analizi", False):
         st.session_state["sayfa_modu"] = "Maç Analizi"
 
-    # Ana spor ayrımı: Basketbol seçildiğinde futbol menüleri hiç oluşturulmaz.
-    spor_modu = st.radio(
-        "Spor",
-        ["⚽ Futbol", "🏀 Basketbol"],
-        horizontal=True,
-        key="spor_modu",
-    )
-
+    # Spor seçimi sayfanın en üstünde yapılır. Basketbolda futbol menüleri oluşturulmaz.
     if spor_modu == "🏀 Basketbol":
         basketbol_sayfasi()
         legal_footer()
