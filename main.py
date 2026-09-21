@@ -7464,7 +7464,13 @@ for key, default in [
 FUTBOL_LIGLERI = {
     "ULUSLARARASI": {
         "Dünya Kupası": "soccer_fifa_world_cup",
+        "Dünya Kupası Elemeleri - Avrupa": "soccer_fifa_world_cup_qualifiers_europe",
+        "Dünya Kupası Elemeleri - Güney Amerika": "soccer_fifa_world_cup_qualifiers_south_america",
         "UEFA Uluslar Ligi": "soccer_uefa_nations_league",
+        "UEFA Euro": "soccer_uefa_european_championship",
+        "UEFA Euro Elemeleri": "soccer_uefa_euro_qualification",
+        "Copa América": "soccer_conmebol_copa_america",
+        "CONCACAF Gold Cup": "soccer_concacaf_gold_cup",
     },
     "AVRUPA KUPALARI": {
         "Şampiyonlar Ligi": "soccer_uefa_champs_league",
@@ -7491,6 +7497,7 @@ FUTBOL_LIGLERI = {
     "ALMANYA": {
         "Bundesliga": "soccer_germany_bundesliga",
         "Bundesliga 2": "soccer_germany_bundesliga2",
+        "3. Liga": "soccer_germany_liga3",
         "DFB-Pokal": "soccer_germany_dfb_pokal",
     },
     "İTALYA": {
@@ -7512,6 +7519,7 @@ FUTBOL_LIGLERI = {
         "Avusturya": "soccer_austria_bundesliga",
         "İsviçre": "soccer_switzerland_superleague",
         "İsveç": "soccer_sweden_allsvenskan",
+        "İsveç Superettan": "soccer_sweden_superettan",
         "Norveç": "soccer_norway_eliteserien",
         "Polonya": "soccer_poland_ekstraklasa",
         "Finlandiya": "soccer_finland_veikkausliiga",
@@ -7532,6 +7540,10 @@ FUTBOL_LIGLERI = {
     },
 }
 
+
+# Milli ara genişletmesi: The Odds API tarafından desteklenen milli turnuvalar seçiciye eklendi.
+# Geçmiş eşlemesi bulunmayan yeni organizasyonlar genel oran havuzunda çalışır;
+# "sadece aynı lig" açılırsa mevcut güvenlik davranışı gereği sonuç üretmez.
 
 # The Odds API -> football-data.co.uk kod eşlemesi. Eşlemesi olmayan liglerde
 # "sadece aynı lig" seçeneği bilinçli olarak sonuç üretmez.
@@ -7573,7 +7585,13 @@ ODDS_TO_HISTORY = {
 
 LEAGUE_EMOJIS = {
     "Dünya Kupası": "🌍",
+    "Dünya Kupası Elemeleri - Avrupa": "🌍",
+    "Dünya Kupası Elemeleri - Güney Amerika": "🌎",
     "UEFA Uluslar Ligi": "🇪🇺",
+    "UEFA Euro": "🇪🇺",
+    "UEFA Euro Elemeleri": "🇪🇺",
+    "Copa América": "🌎",
+    "CONCACAF Gold Cup": "🌎",
     "Şampiyonlar Ligi": "🏆",
     "Avrupa Ligi": "🟠",
     "Konferans Ligi": "🟢",
@@ -7590,6 +7608,7 @@ LEAGUE_EMOJIS = {
     "Copa del Rey": "🇪🇸",
     "Bundesliga": "🇩🇪",
     "Bundesliga 2": "🇩🇪",
+    "3. Liga": "🇩🇪",
     "DFB-Pokal": "🇩🇪",
     "Serie A": "🇮🇹",
     "Serie B": "🇮🇹",
@@ -7605,6 +7624,7 @@ LEAGUE_EMOJIS = {
     "Avusturya": "🇦🇹",
     "İsviçre": "🇨🇭",
     "İsveç": "🇸🇪",
+    "İsveç Superettan": "🇸🇪",
     "Norveç": "🇳🇴",
     "Polonya": "🇵🇱",
     "Finlandiya": "🇫🇮",
