@@ -711,232 +711,277 @@ def backtest_kaydi(row, target, t):
 
 
 # ==========================================================
-# BASKETBOL MOTORU V1 — TAKIM FORM MODELİ
+# BASKETBOL MOTORU 1.0 — FORM + PACE + ORTG/DRTG + LINE + BACKTEST
 # ==========================================================
-BASKET_MODEL_VERSION = "2026.09.21.v1"
+BASKET_MODEL_VERSION = "2026.09.21.full1"
 
 
 def basket_veri_hazirla(df):
-    """Basketbol geçmişini ortak şemaya çevirir.
+    """Farklı basketbol CSV şemalarını ortak YapAiKupon şemasına çevirir.
 
-    Zorunlu alanlar: Date, HomeTeam, AwayTeam, HomeScore, AwayScore.
-    İsteğe bağlı: League. Aynı maç tekrarları temizlenir.
+    Zorunlu: Date, HomeTeam, AwayTeam, HomeScore, AwayScore.
+    Opsiyonel takım box-score alanları (Home/Away): FGA, ORB, TO, FTA.
+    Opsiyonel market: TotalLine, SpreadLine, HomeML, AwayML.
+    Opsiyonel yarı/çeyrek: HomeH1/AwayH1 veya HomeQ1..Q4/AwayQ1..Q4.
     """
     if df is None or df.empty:
         return pd.DataFrame()
     out = df.copy()
     aliases = {
-        "date": "Date", "tarih": "Date",
-        "hometeam": "HomeTeam", "home_team": "HomeTeam", "ev": "HomeTeam",
-        "awayteam": "AwayTeam", "away_team": "AwayTeam", "dep": "AwayTeam",
-        "homescore": "HomeScore", "home_score": "HomeScore", "ev_skor": "HomeScore",
-        "awayscore": "AwayScore", "away_score": "AwayScore", "dep_skor": "AwayScore",
-        "league": "League", "lig": "League",
+        "date":"Date","tarih":"Date","league":"League","lig":"League",
+        "hometeam":"HomeTeam","home_team":"HomeTeam","ev":"HomeTeam",
+        "awayteam":"AwayTeam","away_team":"AwayTeam","dep":"AwayTeam",
+        "homescore":"HomeScore","home_score":"HomeScore","ev_skor":"HomeScore","pts_home":"HomeScore",
+        "awayscore":"AwayScore","away_score":"AwayScore","dep_skor":"AwayScore","pts_away":"AwayScore",
+        "totalline":"TotalLine","total_line":"TotalLine","total":"TotalLine","ou_line":"TotalLine",
+        "spreadline":"SpreadLine","spread_line":"SpreadLine","spread":"SpreadLine","home_spread":"SpreadLine",
+        "homeml":"HomeML","home_ml":"HomeML","awayml":"AwayML","away_ml":"AwayML",
+        "homeh1":"HomeH1","home_h1":"HomeH1","home1h":"HomeH1","awayh1":"AwayH1","away_h1":"AwayH1","away1h":"AwayH1",
     }
+    for side in ("home","away"):
+        cap = side.title()
+        for stat in ("fga","orb","to","fta"):
+            aliases[f"{side}{stat}"] = f"{cap}{stat.upper()}"
+            aliases[f"{side}_{stat}"] = f"{cap}{stat.upper()}"
+        for q in range(1,5):
+            aliases[f"{side}q{q}"] = f"{cap}Q{q}"
+            aliases[f"{side}_q{q}"] = f"{cap}Q{q}"
     rename = {}
     for col in out.columns:
-        key = str(col).strip().lower().replace(" ", "_")
+        key = re.sub(r"[^a-z0-9_]+", "", str(col).strip().lower().replace(" ", "_"))
         if key in aliases:
             rename[col] = aliases[key]
     out = out.rename(columns=rename)
-    required = ["Date", "HomeTeam", "AwayTeam", "HomeScore", "AwayScore"]
+    required = ["Date","HomeTeam","AwayTeam","HomeScore","AwayScore"]
     if any(c not in out.columns for c in required):
         return pd.DataFrame()
     out["Date"] = pd.to_datetime(out["Date"], errors="coerce", dayfirst=True)
-    out["HomeScore"] = pd.to_numeric(out["HomeScore"], errors="coerce")
-    out["AwayScore"] = pd.to_numeric(out["AwayScore"], errors="coerce")
-    out["HomeTeam"] = out["HomeTeam"].astype(str).str.strip()
-    out["AwayTeam"] = out["AwayTeam"].astype(str).str.strip()
-    out = out.dropna(subset=["Date", "HomeScore", "AwayScore"])
-    out = out[(out["HomeTeam"] != "") & (out["AwayTeam"] != "")]
-    return out.sort_values("Date").drop_duplicates(
-        subset=["Date", "HomeTeam", "AwayTeam"], keep="last"
-    ).reset_index(drop=True)
+    numeric = ["HomeScore","AwayScore","TotalLine","SpreadLine","HomeML","AwayML","HomeH1","AwayH1"]
+    numeric += [f"{s}{x}" for s in ("Home","Away") for x in ("FGA","ORB","TO","FTA")]
+    numeric += [f"{s}Q{q}" for s in ("Home","Away") for q in range(1,5)]
+    for c in numeric:
+        if c in out:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    for c in ("HomeTeam","AwayTeam"):
+        out[c] = out[c].astype(str).str.strip()
+    if "League" not in out:
+        out["League"] = "Basketbol"
+    out = out.dropna(subset=["Date","HomeScore","AwayScore"])
+    out = out[(out.HomeTeam != "") & (out.AwayTeam != "")]
+    return out.sort_values("Date").drop_duplicates(["Date","HomeTeam","AwayTeam"], keep="last").reset_index(drop=True)
+
+
+def basket_possession(row, side):
+    """Box score varsa Dean Oliver yaklaşımı; yoksa None."""
+    opp = "Away" if side == "Home" else "Home"
+    needed = [f"{side}FGA",f"{side}ORB",f"{side}TO",f"{side}FTA",f"{opp}FGA",f"{opp}ORB",f"{opp}TO",f"{opp}FTA"]
+    try:
+        vals = [float(row.get(c)) for c in needed]
+        if not all(math.isfinite(v) and v >= 0 for v in vals): return None
+        own = float(row[f"{side}FGA"]) - float(row[f"{side}ORB"]) + float(row[f"{side}TO"]) + .44*float(row[f"{side}FTA"])
+        other = float(row[f"{opp}FGA"]) - float(row[f"{opp}ORB"]) + float(row[f"{opp}TO"]) + .44*float(row[f"{opp}FTA"])
+        return max(1.0, .5*(own+other))
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def basket_takim_maclari(df, takim, cutoff=None, limit=10, saha=None):
-    """Takımın cutoff öncesindeki son maçlarını takım bakış açısıyla döndürür."""
-    if df is None or df.empty:
-        return pd.DataFrame()
+    if df is None or df.empty: return pd.DataFrame()
     x = df.copy()
-    if cutoff is not None:
-        cutoff = pd.to_datetime(cutoff, errors="coerce")
-        if pd.notna(cutoff):
-            x = x[x["Date"] < cutoff]
-    mask = x["HomeTeam"].eq(takim) | x["AwayTeam"].eq(takim)
-    x = x.loc[mask].copy()
-    x["IsHome"] = x["HomeTeam"].eq(takim)
-    if saha == "home":
-        x = x[x["IsHome"]]
-    elif saha == "away":
-        x = x[~x["IsHome"]]
-    x["PF"] = x["HomeScore"].where(x["IsHome"], x["AwayScore"])
-    x["PA"] = x["AwayScore"].where(x["IsHome"], x["HomeScore"])
-    x["Margin"] = x["PF"] - x["PA"]
-    x["Win"] = (x["Margin"] > 0).astype(int)
-    x["Opponent"] = x["AwayTeam"].where(x["IsHome"], x["HomeTeam"])
+    dt = pd.to_datetime(cutoff, errors="coerce") if cutoff is not None else pd.NaT
+    if pd.notna(dt): x = x[x.Date < dt]
+    x = x[x.HomeTeam.eq(takim) | x.AwayTeam.eq(takim)].copy()
+    x["IsHome"] = x.HomeTeam.eq(takim)
+    if saha == "home": x = x[x.IsHome]
+    if saha == "away": x = x[~x.IsHome]
+    x["PF"] = x.HomeScore.where(x.IsHome, x.AwayScore)
+    x["PA"] = x.AwayScore.where(x.IsHome, x.HomeScore)
+    x["Margin"] = x.PF-x.PA
+    x["Win"] = (x.Margin>0).astype(float)
+    x["Opponent"] = x.AwayTeam.where(x.IsHome, x.HomeTeam)
+    x["Poss"] = [basket_possession(r, "Home" if r["IsHome"] else "Away") for _,r in x.iterrows()]
+    x["ORtg"] = x.PF / pd.to_numeric(x.Poss, errors="coerce") * 100
+    x["DRtg"] = x.PA / pd.to_numeric(x.Poss, errors="coerce") * 100
+    if "HomeH1" in x and "AwayH1" in x:
+        x["H1PF"] = x.HomeH1.where(x.IsHome, x.AwayH1); x["H1PA"] = x.AwayH1.where(x.IsHome, x.HomeH1)
+    for q in range(1,5):
+        hc,ac=f"HomeQ{q}",f"AwayQ{q}"
+        if hc in x and ac in x:
+            x[f"Q{q}PF"] = x[hc].where(x.IsHome,x[ac]); x[f"Q{q}PA"] = x[ac].where(x.IsHome,x[hc])
     return x.sort_values("Date", ascending=False).head(int(limit)).copy()
 
 
-def basket_agirlikli_ortalama(values, decay=0.88):
-    vals = pd.to_numeric(pd.Series(values), errors="coerce").dropna().tolist()
-    if not vals:
-        return float("nan")
-    # Veri en yeniden eskiye gelir; yakın maç daha yüksek ağırlık alır.
-    weights = [float(decay) ** i for i in range(len(vals))]
-    return sum(v*w for v, w in zip(vals, weights)) / sum(weights)
+def basket_wavg(values, decay=.90):
+    s = pd.to_numeric(pd.Series(values), errors="coerce").dropna().reset_index(drop=True)
+    if s.empty: return float("nan")
+    w = pd.Series([decay**i for i in range(len(s))])
+    return float((s*w).sum()/w.sum())
 
 
 def basket_lig_tabanlari(df, cutoff=None):
-    x = df.copy()
-    if cutoff is not None:
-        dt = pd.to_datetime(cutoff, errors="coerce")
-        if pd.notna(dt):
-            x = x[x["Date"] < dt]
-    if x.empty:
-        return {"team_points": 100.0, "home_edge": 2.0}
-    home = pd.to_numeric(x["HomeScore"], errors="coerce")
-    away = pd.to_numeric(x["AwayScore"], errors="coerce")
-    return {
-        "team_points": float(pd.concat([home, away]).mean()),
-        "home_edge": float((home-away).mean()),
-    }
+    x=df.copy(); dt=pd.to_datetime(cutoff,errors="coerce") if cutoff is not None else pd.NaT
+    if pd.notna(dt): x=x[x.Date<dt]
+    if x.empty: return {"team_points":100.,"home_edge":2.,"pace":100.,"ortg":100.}
+    hp=pd.to_numeric(x.HomeScore,errors="coerce"); ap=pd.to_numeric(x.AwayScore,errors="coerce")
+    poss=pd.Series([basket_possession(r,"Home") for _,r in x.iterrows()],dtype=float).dropna()
+    pace=float(poss.mean()) if len(poss)>=5 else 100.
+    pts=float(pd.concat([hp,ap]).mean())
+    return {"team_points":pts,"home_edge":float((hp-ap).mean()),"pace":pace,"ortg":pts/max(pace,1)*100}
 
 
-def basket_form_profili(df, takim, cutoff=None, limit=10, saha=None):
-    games = basket_takim_maclari(df, takim, cutoff=cutoff, limit=limit, saha=saha)
-    if games.empty:
-        return None
-    pf = basket_agirlikli_ortalama(games["PF"])
-    pa = basket_agirlikli_ortalama(games["PA"])
-    margin = basket_agirlikli_ortalama(games["Margin"])
-    win = basket_agirlikli_ortalama(games["Win"]) * 100
-    return {
-        "team": takim, "games": len(games), "pf": pf, "pa": pa,
-        "margin": margin, "win_pct": win,
-        "last5": games.head(5), "matches": games,
-    }
+def basket_rakip_gucu(df, cutoff=None, limit=12):
+    """Rakip gücü: tarih öncesi takım sayı farkının shrink edilmiş tahmini."""
+    teams=sorted(set(df.HomeTeam).union(df.AwayTeam)); result={}
+    for t in teams:
+        g=basket_takim_maclari(df,t,cutoff,limit)
+        n=len(g)
+        result[t]=(basket_wavg(g.Margin)*n/(n+6)) if n else 0.
+    return result
 
 
-def basket_form_tahmini(df, ev, dep, cutoff=None, limit=10):
-    """V1 form tahmini.
-
-    Genel son maç formu + ev/deplasman splitini shrinkage ile birleştirir.
-    Bu V1'de pace/ORtg/DRtg henüz yoktur; onlar V2'de eklenecek.
-    """
-    df = basket_veri_hazirla(df)
-    if df.empty:
-        return None
-    base = basket_lig_tabanlari(df, cutoff)
-    hp = basket_form_profili(df, ev, cutoff, limit)
-    ap = basket_form_profili(df, dep, cutoff, limit)
-    if hp is None or ap is None:
-        return None
-    hs = basket_form_profili(df, ev, cutoff, min(limit, 6), "home")
-    aas = basket_form_profili(df, dep, cutoff, min(limit, 6), "away")
-
-    # Split az örnekliyse genel forma doğru küçült.
-    def blend(general, split, field):
-        if split is None:
-            return general[field]
-        n = split["games"]
-        w = n / (n + 4.0)
-        return general[field]*(1-w) + split[field]*w
-
-    h_pf, h_pa = blend(hp, hs, "pf"), blend(hp, hs, "pa")
-    a_pf, a_pa = blend(ap, aas, "pf"), blend(ap, aas, "pa")
-    league = base["team_points"]
-
-    # Hücum ile rakip savunmasını lig ortalaması etrafında birleştir.
-    home_raw = league + (h_pf-league)*0.55 + (a_pa-league)*0.45
-    away_raw = league + (a_pf-league)*0.55 + (h_pa-league)*0.45
-    edge = max(-6.0, min(6.0, base["home_edge"]))
-    home_score = home_raw + edge/2
-    away_score = away_raw - edge/2
-
-    # Form farkı yalnızca küçük düzeltme; modeli tek başına W/L sürüklemesin.
-    form_delta = max(-4.0, min(4.0, (hp["margin"] - ap["margin"]) * 0.12))
-    home_score += form_delta/2
-    away_score -= form_delta/2
-
-    total = home_score + away_score
-    margin = home_score - away_score
-    sample = min(hp["games"], ap["games"])
-    confidence = int(round(max(50, min(82, 54 + min(sample, 10)*1.4 + min(abs(margin), 12)*0.8))))
-    return {
-        "home": ev, "away": dep,
-        "home_score": round(home_score, 1), "away_score": round(away_score, 1),
-        "total": round(total, 1), "margin": round(margin, 1),
-        "winner": ev if margin > 0 else dep,
-        "confidence": confidence, "home_profile": hp, "away_profile": ap,
-        "home_split": hs, "away_split": aas, "league_base": base,
-        "model_version": BASKET_MODEL_VERSION,
-    }
+def basket_form_profili(df,takim,cutoff=None,limit=10,saha=None,rakip_gucu=None):
+    g=basket_takim_maclari(df,takim,cutoff,limit,saha)
+    if g.empty:return None
+    opp = rakip_gucu or {}
+    adj_margin=[]
+    for _,r in g.iterrows(): adj_margin.append(float(r.Margin)+.35*float(opp.get(r.Opponent,0)))
+    prof={"team":takim,"games":len(g),"pf":basket_wavg(g.PF),"pa":basket_wavg(g.PA),"margin":basket_wavg(g.Margin),
+          "adj_margin":basket_wavg(adj_margin),"win_pct":basket_wavg(g.Win)*100,"pace":basket_wavg(g.Poss),
+          "ortg":basket_wavg(g.ORtg),"drtg":basket_wavg(g.DRtg),"matches":g}
+    if "H1PF" in g: prof.update(h1_pf=basket_wavg(g.H1PF),h1_pa=basket_wavg(g.H1PA))
+    for q in range(1,5):
+        if f"Q{q}PF" in g: prof[f"q{q}_pf"]=basket_wavg(g[f"Q{q}PF"]); prof[f"q{q}_pa"]=basket_wavg(g[f"Q{q}PA"])
+    return prof
 
 
-def basketbol_v1_sayfasi():
-    st.markdown("## 🏀 Basketbol Motoru · V1")
-    st.caption("Takım Form Modeli · Son 5/10 · ev/deplasman split · yakın maça daha yüksek ağırlık")
-    st.info("V1 yalnızca takım form çekirdeğidir. Pace + ORtg/DRtg, sakatlık ve çeyrek/yarı modeli sonraki sürümlerde eklenecek.")
+def basket_sigmoid(x, scale=7.5): return 100/(1+math.exp(-float(x)/max(.1,float(scale))))
 
-    uploaded = st.file_uploader("Basketbol geçmiş CSV'si", type=["csv"], key="basket_history_csv")
-    st.caption("Gerekli sütunlar: Date, HomeTeam, AwayTeam, HomeScore, AwayScore · İsteğe bağlı: League")
+
+def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None):
+    df=basket_veri_hazirla(df)
+    if df.empty:return None
+    base=basket_lig_tabanlari(df,cutoff); strength=basket_rakip_gucu(df,cutoff)
+    hp=basket_form_profili(df,ev,cutoff,limit,None,strength); ap=basket_form_profili(df,dep,cutoff,limit,None,strength)
+    hs=basket_form_profili(df,ev,cutoff,min(limit,8),"home",strength); aas=basket_form_profili(df,dep,cutoff,min(limit,8),"away",strength)
+    if hp is None or ap is None:return None
+    def blend(gen,split,key,k=5):
+        gv=gen.get(key,float("nan")); sv=split.get(key,float("nan")) if split else float("nan")
+        if not math.isfinite(float(gv)): return float("nan")
+        if not math.isfinite(float(sv)): return float(gv)
+        w=split["games"]/(split["games"]+k); return gv*(1-w)+sv*w
+    hpf,hpa=blend(hp,hs,"pf"),blend(hp,hs,"pa"); apf,apa=blend(ap,aas,"pf"),blend(ap,aas,"pa")
+    real_eff=all(math.isfinite(float(v)) for v in (hp.get("pace",float("nan")),ap.get("pace",float("nan")),hp.get("ortg",float("nan")),ap.get("ortg",float("nan"))))
+    if real_eff:
+        pace=.45*hp["pace"]+.45*ap["pace"]+.10*base["pace"]
+        h_off=hp["ortg"]; a_off=ap["ortg"]; h_def=hp["drtg"]; a_def=ap["drtg"]
+        league_eff=base["ortg"]
+        h_eff=league_eff+.55*(h_off-league_eff)+.45*(a_def-league_eff)
+        a_eff=league_eff+.55*(a_off-league_eff)+.45*(h_def-league_eff)
+        home=pace*h_eff/100; away=pace*a_eff/100
+    else:
+        pace=float("nan"); league=base["team_points"]
+        home=league+.55*(hpf-league)+.45*(apa-league)
+        away=league+.55*(apf-league)+.45*(hpa-league)
+    edge=max(-7,min(7,base["home_edge"])); home+=edge/2; away-=edge/2
+    form_delta=max(-5,min(5,(hp["adj_margin"]-ap["adj_margin"])*.10)); home+=form_delta/2; away-=form_delta/2
+    # injury adjustment: negatif değer takım beklenen skorunu düşürür, pozitif artırır.
+    home+=float(inj_home); away+=float(inj_away)
+    total=home+away; margin=home-away; sample=min(hp["games"],ap["games"])
+    ml_home=basket_sigmoid(margin); ml_away=100-ml_home
+    uncertainty=max(6.5,13.0-min(sample,10)*.45)
+    result={"home":ev,"away":dep,"home_score":round(home,1),"away_score":round(away,1),"total":round(total,1),"margin":round(margin,1),
+            "home_win_p":round(ml_home),"away_win_p":round(ml_away),"winner":ev if margin>=0 else dep,
+            "confidence":round(max(50,max(ml_home,ml_away))),"pace":round(pace,1) if math.isfinite(pace) else None,
+            "real_efficiency":real_eff,"home_profile":hp,"away_profile":ap,"home_split":hs,"away_split":aas,"league_base":base,
+            "inj_home":float(inj_home),"inj_away":float(inj_away),"model_version":BASKET_MODEL_VERSION}
+    if total_line is not None and math.isfinite(float(total_line)) and float(total_line)>0:
+        diff=total-float(total_line); p=basket_sigmoid(diff,uncertainty)
+        result.update(total_line=float(total_line),total_diff=round(diff,1),total_pick="Üst" if diff>=0 else "Alt",total_p=round(p if diff>=0 else 100-p))
+    if spread_line is not None and math.isfinite(float(spread_line)):
+        # SpreadLine ev takımının handikapı: -5.5 ise evin 6+ farkla kazanması gerekir.
+        cover_margin=margin+float(spread_line); p=basket_sigmoid(cover_margin,uncertainty*.75)
+        result.update(spread_line=float(spread_line),spread_diff=round(cover_margin,1),spread_pick=f"{ev} {float(spread_line):+g}" if cover_margin>=0 else f"{dep} {-float(spread_line):+g}",spread_p=round(p if cover_margin>=0 else 100-p))
+    # 1H / quarters only when actual split history exists.
+    if all(k in hp and k in ap for k in ("h1_pf","h1_pa")):
+        h1h=.5*(hp["h1_pf"]+ap["h1_pa"])+edge*.25; h1a=.5*(ap["h1_pf"]+hp["h1_pa"])-edge*.25
+        result.update(h1_home=round(h1h,1),h1_away=round(h1a,1),h1_total=round(h1h+h1a,1))
+    quarters=[]
+    for q in range(1,5):
+        if all(f"q{q}_{x}" in hp and f"q{q}_{x}" in ap for x in ("pf","pa")):
+            qh=.5*(hp[f"q{q}_pf"]+ap[f"q{q}_pa"]); qa=.5*(ap[f"q{q}_pf"]+hp[f"q{q}_pa"])
+            quarters.append((q,round(qh,1),round(qa,1)))
+    result["quarters"]=quarters
+    return result
+
+
+def basket_backtest(df,min_games=6,limit=10,max_test=300):
+    data=basket_veri_hazirla(df)
+    rows=[]
+    for idx,row in data.tail(int(max_test)).iterrows():
+        before=data[data.Date<row.Date]
+        if len(basket_takim_maclari(before,row.HomeTeam,row.Date,limit))<min_games or len(basket_takim_maclari(before,row.AwayTeam,row.Date,limit))<min_games: continue
+        total_line=row.get("TotalLine") if "TotalLine" in data else None; spread=row.get("SpreadLine") if "SpreadLine" in data else None
+        r=basket_model_tahmini(before,row.HomeTeam,row.AwayTeam,row.Date,limit,0,0,total_line,spread)
+        if not r: continue
+        actual_margin=float(row.HomeScore-row.AwayScore); actual_total=float(row.HomeScore+row.AwayScore)
+        rec={"Tarih":row.Date.date(),"Maç":f"{row.HomeTeam} - {row.AwayTeam}","Tahmin":r["winner"],"Güven":r["confidence"],
+             "Beklenen":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Sonuç":f'{int(row.HomeScore)}-{int(row.AwayScore)}',"MS Tuttu":(actual_margin>=0)==(r["margin"]>=0),
+             "Skor MAE":round((abs(r["home_score"]-row.HomeScore)+abs(r["away_score"]-row.AwayScore))/2,2)}
+        if r.get("total_line") is not None: rec["A/U"] = r["total_pick"]; rec["A/U Güven"]=r["total_p"]; rec["A/U Tuttu"]=(actual_total>r["total_line"])==(r["total_pick"]=="Üst")
+        if r.get("spread_line") is not None: rec["Handikap"]=r["spread_pick"]; rec["H Tuttu"]=(actual_margin+r["spread_line"]>=0)==(r["spread_diff"]>=0)
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
+def basketbol_sayfasi():
+    st.markdown("## 🏀 Basketbol Motoru · 1.0")
+    st.caption("Form + rakip gücü + ev/deplasman + Pace/ORtg/DRtg + sakatlık düzeltmesi + MS/Toplam/Handikap + 1Y/çeyrek + backtest")
+    uploaded=st.file_uploader("Basketbol geçmiş CSV'si",type=["csv"],key="basket_history_csv")
+    st.caption("Minimum: Date, HomeTeam, AwayTeam, HomeScore, AwayScore. Pace/reyting için Home/Away FGA, ORB, TO, FTA; market için TotalLine/SpreadLine; yarı/çeyrek için HomeH1/AwayH1 veya Q1-Q4 opsiyonel.")
     if uploaded is None:
-        st.warning("V1 form modelini çalıştırmak için geçmiş maç CSV'si yükle.")
+        st.info("CSV yüklediğinde motor otomatik olarak mevcut veri seviyesini algılar. Box-score yoksa skor-form modeli çalışır; varsa gerçek Pace + ORtg/DRtg devreye girer.")
         return
-    try:
-        raw = pd.read_csv(uploaded)
-    except Exception as exc:
-        st.error(f"CSV okunamadı: {type(exc).__name__}")
-        return
-    df = basket_veri_hazirla(raw)
-    if df.empty:
-        st.error("Uygun basketbol verisi bulunamadı. Sütun adlarını kontrol et.")
-        return
-
-    teams = sorted(set(df["HomeTeam"]).union(df["AwayTeam"]))
-    c1, c2, c3 = st.columns([2, 2, 1])
-    with c1:
-        ev = st.selectbox("Ev sahibi", teams, key="basket_home")
-    with c2:
-        dep_options = [x for x in teams if x != ev]
-        dep = st.selectbox("Deplasman", dep_options, key="basket_away")
-    with c3:
-        limit = st.selectbox("Form", [5, 10], index=1, key="basket_form_n")
-
-    cutoff = df["Date"].max() + pd.Timedelta(days=1)
-    result = basket_form_tahmini(df, ev, dep, cutoff=cutoff, limit=limit)
-    if result is None:
-        st.warning("Bu iki takım için yeterli geçmiş maç yok.")
-        return
-
-    a,b,c,d = st.columns(4)
-    a.metric("Beklenen skor", f'{result["home_score"]:.1f} - {result["away_score"]:.1f}')
-    b.metric("Beklenen toplam", f'{result["total"]:.1f}')
-    c.metric("Model farkı", f'{result["margin"]:+.1f}')
-    d.metric("Form güveni", f'%{result["confidence"]}')
-
-    hp, ap = result["home_profile"], result["away_profile"]
-    st.markdown("### Takım Formu")
-    form_table = pd.DataFrame([
-        {"Takım": ev, "Maç": hp["games"], "Attığı": round(hp["pf"],1), "Yediği": round(hp["pa"],1),
-         "Fark": round(hp["margin"],1), "Kazanma %": round(hp["win_pct"],1)},
-        {"Takım": dep, "Maç": ap["games"], "Attığı": round(ap["pf"],1), "Yediği": round(ap["pa"],1),
-         "Fark": round(ap["margin"],1), "Kazanma %": round(ap["win_pct"],1)},
-    ])
-    st.dataframe(form_table, use_container_width=True, hide_index=True)
-
-    with st.expander("Son maçları göster", expanded=False):
-        left, right = st.columns(2)
-        for col, profile, team in ((left, hp, ev), (right, ap, dep)):
-            with col:
-                st.markdown(f"**{team}**")
-                g = profile["matches"].copy()
-                g["Tarih"] = g["Date"].dt.strftime("%d.%m.%Y")
-                g["Skor"] = g["PF"].astype(int).astype(str) + "-" + g["PA"].astype(int).astype(str)
-                st.dataframe(g[["Tarih", "Opponent", "Skor", "Margin"]].rename(
-                    columns={"Opponent":"Rakip", "Margin":"Fark"}), use_container_width=True, hide_index=True)
-
+    try: raw=pd.read_csv(uploaded)
+    except Exception as exc: st.error(f"CSV okunamadı: {type(exc).__name__}"); return
+    df=basket_veri_hazirla(raw)
+    if df.empty: st.error("Zorunlu sütunlar bulunamadı veya veri okunamadı."); return
+    teams=sorted(set(df.HomeTeam).union(df.AwayTeam)); tabs=st.tabs(["🎯 Maç Analizi","📋 Aday Listesi","🧪 Backtest"])
+    with tabs[0]:
+        c1,c2,c3=st.columns([2,2,1]); ev=c1.selectbox("Ev sahibi",teams,key="basket_home"); dep=c2.selectbox("Deplasman",[x for x in teams if x!=ev],key="basket_away"); limit=c3.selectbox("Form",[5,8,10,12],index=2,key="basket_form_n")
+        l1,l2,l3,l4=st.columns(4)
+        total_line=l1.number_input("Toplam çizgisi",min_value=0.,value=0.,step=.5,key="basket_total_line"); spread=l2.number_input("Ev handikapı",value=0.,step=.5,key="basket_spread_line")
+        injh=l3.number_input("Ev sakatlık etkisi",value=0.,step=.5,help="Beklenen takım skoruna puan etkisi. Örn. -3.0",key="basket_injh")
+        inja=l4.number_input("Dep sakatlık etkisi",value=0.,step=.5,key="basket_inja")
+        cutoff=df.Date.max()+pd.Timedelta(days=1); r=basket_model_tahmini(df,ev,dep,cutoff,limit,injh,inja,total_line if total_line>0 else None,spread)
+        if not r: st.warning("Yeterli geçmiş yok."); return
+        a,b,c,d=st.columns(4); a.metric("Beklenen skor",f'{r["home_score"]:.1f} - {r["away_score"]:.1f}'); b.metric("Toplam",f'{r["total"]:.1f}'); c.metric("MS",f'{r["winner"]} %{r["confidence"]}'); d.metric("Pace",r["pace"] if r["pace"] is not None else "Box-score yok")
+        if not r["real_efficiency"]: st.warning("Bu CSV'de possession için gerekli box-score alanları yok. Pace/ORtg/DRtg tahmin edilmedi; form/skor motoru aktif.")
+        m1,m2=st.columns(2)
+        if r.get("total_pick"): m1.success(f'Alt/Üst: **{r["total_line"]:g} {r["total_pick"]}** · model %{r["total_p"]} · fark {r["total_diff"]:+.1f}')
+        if r.get("spread_pick"): m2.success(f'Handikap: **{r["spread_pick"]}** · model %{r["spread_p"]} · çizgi farkı {r["spread_diff"]:+.1f}')
+        hp,ap=r["home_profile"],r["away_profile"]
+        table=[]
+        for name,p in ((ev,hp),(dep,ap)):
+            table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1),"Pace":round(p["pace"],1) if math.isfinite(float(p["pace"])) else None,"ORtg":round(p["ortg"],1) if math.isfinite(float(p["ortg"])) else None,"DRtg":round(p["drtg"],1) if math.isfinite(float(p["drtg"])) else None})
+        st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
+        if "h1_total" in r: st.info(f'İlk yarı model skoru: {r["h1_home"]:.1f} - {r["h1_away"]:.1f} · toplam {r["h1_total"]:.1f}')
+        if r["quarters"]: st.dataframe(pd.DataFrame(r["quarters"],columns=["Çeyrek",ev,dep]),use_container_width=True,hide_index=True)
+    with tabs[1]:
+        st.caption("CSV'deki son tarihe göre tüm takımların olası eşleşmelerini değil, veri içindeki en son maçları modelleyerek aday performans görünümü verir.")
+        bt=basket_backtest(df,min_games=5,limit=10,max_test=min(150,len(df)))
+        if bt.empty: st.warning("Aday listesi için yeterli geçmiş yok.")
+        else:
+            recent=bt.sort_values(["Güven","Tarih"],ascending=[False,False]).head(50)
+            st.dataframe(recent,use_container_width=True,hide_index=True)
+    with tabs[2]:
+        max_test=st.slider("Test maçı",50,min(1000,max(50,len(df))),min(300,max(50,len(df))),50,key="basket_bt_n") if len(df)>=50 else len(df)
+        if st.button("Basketbol backtest çalıştır",type="primary",key="basket_bt_btn"):
+            with st.spinner("Basketbol motoru geçmiş maçlarda test ediliyor..."): bt=basket_backtest(df,6,10,max_test)
+            if bt.empty: st.warning("Backtest için yeterli geçmiş oluşmadı.")
+            else:
+                x1,x2,x3=st.columns(3); x1.metric("MS başarı",f'%{bt["MS Tuttu"].mean()*100:.1f}'); x2.metric("Skor MAE",f'{bt["Skor MAE"].mean():.2f}'); x3.metric("Tahmin",len(bt))
+                if "A/U Tuttu" in bt: st.metric("Alt/Üst başarı",f'%{bt["A/U Tuttu"].dropna().mean()*100:.1f}')
+                st.dataframe(bt.sort_values("Tarih",ascending=False),use_container_width=True,hide_index=True)
 
 def kart_takim_adi(ad):
     """Kartlarda baştaki yaygın kulüp eklerini gizler; veri eşleştirmesini etkilemez."""
@@ -8722,14 +8767,14 @@ with st.sidebar:
 
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "🏀 Basketbol V1", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "🏀 Basketbol", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
 
-    if st.session_state.get("sayfa_modu") == "🏀 Basketbol V1":
-        basketbol_v1_sayfasi()
+    if st.session_state.get("sayfa_modu") == "🏀 Basketbol":
+        basketbol_sayfasi()
         legal_footer()
         st.stop()
 
