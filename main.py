@@ -9100,25 +9100,35 @@ def uygula_tema_css(koyu_mod: bool):
     st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
 
 
-# ANA SPOR SEÇİMİ: futbol/basketbol ayrımı ana içerikte, sidebar'da değil.
-spor_modu = st.radio(
-    "Spor",
-    ["⚽ Futbol", "🏀 Basketbol"],
-    horizontal=True,
-    key="spor_modu",
-)
+# ANA SPOR SEÇİMİ SOL SIDEBAR'DA.
+# Basketbol modunda sidebar görünür kalır; basketbol sayfası ise ana içerikte render edilir.
+with st.sidebar:
+    spor_modu = st.radio(
+        "Spor",
+        ["⚽ Futbol", "🏀 Basketbol"],
+        horizontal=False,
+        key="spor_modu",
+    )
 
-# Basketbolda futbol sidebar'ını tamamen gizle ve basketbol sayfasını ANA İÇERİKTE render et.
-# ÖNEMLİ: basketbol_sayfasi() with st.sidebar bloğunun içinde çağrılmamalı;
-# aksi halde sidebar CSS ile gizlenince basketbol ekranı da görünmez olur.
+    # Basketbolda da tema kontrolü sidebar'da görünmeye devam etsin.
+    if spor_modu == "🏀 Basketbol":
+        with st.container(key="koyu_mod_toggle_basket"):
+            basket_koyu_mod = st.toggle(
+                "🌙 Koyu Mod",
+                value=bool(st.session_state.get("koyu_mod", False)),
+                key="basket_koyu_mod",
+            )
+        st.session_state["koyu_mod"] = basket_koyu_mod
+        st.markdown("### 🏀 Basketbol")
+        st.caption("Basketbol kontrolleri ve analiz sonuçları ana ekranda. Spor seçimi burada kalır.")
+
 if spor_modu == "🏀 Basketbol":
-    st.markdown("<style>section[data-testid='stSidebar']{display:none !important;}</style>", unsafe_allow_html=True)
     uygula_tema_css(bool(st.session_state.get("koyu_mod", False)))
     basketbol_sayfasi()
     legal_footer()
     st.stop()
 
-# FİLTRELER ARTIK SOL SIDEBAR İÇİNDE (yalnızca futbol modu buraya ulaşır)
+# Futbol filtreleri sol sidebar'da devam eder.
 with st.sidebar:
     with st.container(key="koyu_mod_toggle"):
         koyu_mod = st.toggle("🌙 Koyu Mod", key="koyu_mod")
