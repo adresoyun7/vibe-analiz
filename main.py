@@ -1041,23 +1041,99 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
     result["quarters"]=quarters
     return result
 
+def _basket_decimal_odds(row, side):
+    """Geçmiş satırında varsa decimal ML oranını döndürür. Yoksa ROI uydurulmaz."""
+    col = "HomeML" if side == "home" else "AwayML"
+    try:
+        v=float(row.get(col))
+        return v if math.isfinite(v) and v>1.0 else None
+    except Exception:
+        return None
+
+
 def basket_backtest(df,min_games=6,limit=10,max_test=300):
+    """Tam walk-forward basketbol backtesti.
+
+    Her test maçında yalnızca maç tarihinden ÖNCEKİ veriler kullanılır. MS her zaman
+    test edilir. A/U ve handikap yalnızca geçmiş satırında gerçek piyasa çizgisi
+    varsa test edilir; çizgi yoksa sentetik line üretilmez. ROI de yalnızca gerçek
+    geçmiş decimal oran mevcutsa hesaplanır.
+    """
     data=basket_veri_hazirla(df)
     rows=[]
-    for idx,row in data.tail(int(max_test)).iterrows():
-        before=data[data.Date<row.Date]
-        if len(basket_takim_maclari(before,row.HomeTeam,row.Date,limit))<min_games or len(basket_takim_maclari(before,row.AwayTeam,row.Date,limit))<min_games: continue
-        total_line=row.get("TotalLine") if "TotalLine" in data else None; spread=row.get("SpreadLine") if "SpreadLine" in data else None
+    if data.empty:
+        return pd.DataFrame()
+    test=data.tail(int(max_test)).copy()
+    for _,row in test.iterrows():
+        # Kritik veri-sızıntısı koruması: aynı tarih dahil hiçbir gelecek maç modele girmez.
+        before=data[data.Date < row.Date].copy()
+        if len(basket_takim_maclari(before,row.HomeTeam,row.Date,limit))<min_games or len(basket_takim_maclari(before,row.AwayTeam,row.Date,limit))<min_games:
+            continue
+        total_line=row.get("TotalLine") if "TotalLine" in data.columns and pd.notna(row.get("TotalLine")) else None
+        spread=row.get("SpreadLine") if "SpreadLine" in data.columns and pd.notna(row.get("SpreadLine")) else None
         r=basket_model_tahmini(before,row.HomeTeam,row.AwayTeam,row.Date,limit,0,0,total_line,spread)
-        if not r: continue
+        if not r or not r.get("projection_valid",True):
+            continue
         actual_margin=float(row.HomeScore-row.AwayScore); actual_total=float(row.HomeScore+row.AwayScore)
-        rec={"Tarih":row.Date.date(),"Maç":f"{row.HomeTeam} - {row.AwayTeam}","Tahmin":r["winner"],"Güven":r["confidence"],
-             "Beklenen":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Sonuç":f'{int(row.HomeScore)}-{int(row.AwayScore)}',"MS Tuttu":(actual_margin>=0)==(r["margin"]>=0),
-             "Skor MAE":round((abs(r["home_score"]-row.HomeScore)+abs(r["away_score"]-row.AwayScore))/2,2)}
-        if r.get("total_line") is not None: rec["A/U"] = r["total_pick"]; rec["A/U Güven"]=r["total_p"]; rec["A/U Tuttu"]=(actual_total>r["total_line"])==(r["total_pick"]=="Üst")
-        if r.get("spread_line") is not None: rec["Handikap"]=r["spread_pick"]; rec["H Tuttu"]=(actual_margin+r["spread_line"]>=0)==(r["spread_diff"]>=0)
+        home_pick = r["margin"] >= 0
+        ms_hit = (actual_margin>=0)==home_pick
+        ms_side="home" if home_pick else "away"
+        ms_odds=_basket_decimal_odds(row,ms_side)
+        ms_roi=(ms_odds-1.0 if ms_hit else -1.0) if ms_odds else None
+        rec={"Tarih":row.Date.date(),"Maç":f"{row.HomeTeam} - {row.AwayTeam}","Tahmin":r["winner"],"Güven":float(r["confidence"]),
+             "Beklenen":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Sonuç":f'{int(row.HomeScore)}-{int(row.AwayScore)}',"MS Tuttu":bool(ms_hit),
+             "MS Oran":ms_odds,"MS ROI":ms_roi,
+             "Skor MAE":round((abs(r["home_score"]-row.HomeScore)+abs(r["away_score"]-row.AwayScore))/2,2),
+             "Walk-forward":"OK"}
+        if r.get("total_line") is not None and r.get("total_pick"):
+            # Push durumunda sonuç NaN: başarı oranını bozmaz.
+            if abs(actual_total-float(r["total_line"])) < 1e-9:
+                au_hit=None
+            else:
+                au_hit=(actual_total>r["total_line"])==(r["total_pick"]=="Üst")
+            rec.update({"A/U":f'{r["total_line"]:g} {r["total_pick"]}',"A/U Güven":float(r.get("total_p") or 0),"A/U Tuttu":au_hit,
+                        "A/U Fark":r.get("total_diff")})
+        if r.get("spread_line") is not None and r.get("spread_pick"):
+            cover_actual=actual_margin+float(r["spread_line"])
+            if abs(cover_actual)<1e-9:
+                h_hit=None
+            else:
+                home_cover_actual=cover_actual>0
+                home_cover_pick=float(r.get("spread_diff",0))>=0
+                h_hit=home_cover_actual==home_cover_pick
+            rec.update({"Handikap":r["spread_pick"],"H Güven":float(r.get("spread_p") or 0),"H Tuttu":h_hit,
+                        "H Fark":r.get("spread_diff")})
         rows.append(rec)
     return pd.DataFrame(rows)
+
+
+def basket_backtest_ozet(bt):
+    """Market bazlı başarı, kalibrasyon ve gerçek oran varsa ROI özetleri."""
+    if bt is None or bt.empty:
+        return {}, pd.DataFrame(), pd.DataFrame()
+    summary={"Tahmin":len(bt),"MS Başarı":float(bt["MS Tuttu"].mean()*100),"Skor MAE":float(bt["Skor MAE"].mean())}
+    if "MS ROI" in bt and bt["MS ROI"].notna().any():
+        z=bt["MS ROI"].dropna(); summary["MS ROI"]=float(z.mean()*100); summary["MS ROI n"]=len(z)
+    market_rows=[]
+    specs=[("MS","Güven","MS Tuttu"),("Alt/Üst","A/U Güven","A/U Tuttu"),("Handikap","H Güven","H Tuttu")]
+    for name,conf_col,hit_col in specs:
+        if conf_col not in bt or hit_col not in bt: continue
+        z=bt[pd.to_numeric(bt[conf_col],errors="coerce").notna() & bt[hit_col].notna()].copy()
+        if z.empty: continue
+        z[conf_col]=pd.to_numeric(z[conf_col],errors="coerce")
+        market_rows.append({"Market":name,"Tahmin":len(z),"Başarı %":round(z[hit_col].astype(bool).mean()*100,1),
+                            "Ort. güven %":round(z[conf_col].mean(),1),"Kalibrasyon farkı":round(z[hit_col].astype(bool).mean()*100-z[conf_col].mean(),1)})
+    cal=[]
+    for name,conf_col,hit_col in specs:
+        if conf_col not in bt or hit_col not in bt: continue
+        conf=pd.to_numeric(bt[conf_col],errors="coerce")
+        for lo,hi in ((50,60),(60,70),(70,80),(80,101)):
+            z=bt[(conf>=lo)&(conf<hi)&bt[hit_col].notna()]
+            if len(z):
+                cal.append({"Market":name,"Güven bandı":f"%{lo}-{hi-1}","Tahmin":len(z),
+                            "Ort. model güveni %":round(pd.to_numeric(z[conf_col],errors="coerce").mean(),1),
+                            "Gerçek başarı %":round(z[hit_col].astype(bool).mean()*100,1)})
+    return summary,pd.DataFrame(market_rows),pd.DataFrame(cal)
 
 
 def basket_odds_market_ozeti(event):
@@ -1618,23 +1694,38 @@ def basketbol_sayfasi():
         return
 
     if basket_view == "🧪 Backtest":
+        st.markdown("### 🧪 Tam market walk-forward backtest")
+        st.caption("Her maç yalnızca kendisinden önceki maçlarla tahmin edilir. Geçmiş piyasa çizgisi/oranı yoksa A/U, handikap veya ROI uydurulmaz.")
         max_test=st.slider("Test maçı",50,min(1000,max(50,len(df))),min(300,max(50,len(df))),50,key="basket_bt_n") if len(df)>=50 else len(df)
         if st.button("Basketbol backtest çalıştır",type="primary",key="basket_bt_btn"):
-            with st.spinner("Basketbol motoru geçmiş maçlarda test ediliyor..."):
+            with st.spinner("MS + Alt/Üst + Handikap walk-forward test ediliyor..."):
                 bt=basket_backtest(df,6,form_n,max_test)
-            if bt.empty: st.warning("Backtest için yeterli geçmiş oluşmadı.")
+            st.session_state["basket_last_bt"]=bt
+        bt=st.session_state.get("basket_last_bt")
+        if isinstance(bt,pd.DataFrame) and not bt.empty:
+            summary,markets,cal=basket_backtest_ozet(bt)
+            c1,c2,c3=st.columns(3)
+            c1.metric("MS başarı",f'%{summary.get("MS Başarı",0):.1f}')
+            c2.metric("Skor MAE",f'{summary.get("Skor MAE",0):.2f}')
+            c3.metric("Tahmin",int(summary.get("Tahmin",0)))
+            if "MS ROI" in summary:
+                st.metric("MS ROI",f'%{summary["MS ROI"]:+.1f}',help=f'Gerçek geçmiş ML oranı bulunan {summary.get("MS ROI n",0)} maç.')
             else:
-                x1,x2,x3=st.columns(3); x1.metric("MS başarı",f'%{bt["MS Tuttu"].mean()*100:.1f}'); x2.metric("Skor MAE",f'{bt["Skor MAE"].mean():.2f}'); x3.metric("Tahmin",len(bt))
-                if "A/U Tuttu" in bt and bt["A/U Tuttu"].notna().any(): st.metric("Alt/Üst başarı",f'%{bt["A/U Tuttu"].dropna().mean()*100:.1f}')
-                # Güven kalibrasyonu: %60+ dediğimiz tahminler gerçekten ne kadar tutuyor?
-                cal=[]
-                for lo,hi in ((50,60),(60,70),(70,80),(80,101)):
-                    z=bt[(pd.to_numeric(bt["Güven"],errors="coerce")>=lo)&(pd.to_numeric(bt["Güven"],errors="coerce")<hi)]
-                    if len(z): cal.append({"MS güven bandı":f"%{lo}-{hi-1}","Tahmin":len(z),"Gerçek başarı %":round(z["MS Tuttu"].mean()*100,1)})
-                if cal:
-                    st.markdown("#### 🎯 Güven kalibrasyonu")
-                    st.dataframe(pd.DataFrame(cal),use_container_width=True,hide_index=True)
-                st.dataframe(bt.sort_values("Tarih",ascending=False),use_container_width=True,hide_index=True)
+                st.info("ROI gösterilmiyor: otomatik geçmiş feed bu maçlar için tarihsel bookmaker oranı taşımıyor. Sentetik oran üretmiyoruz.")
+            if not markets.empty:
+                st.markdown("#### 📊 Market performansı")
+                st.dataframe(markets,use_container_width=True,hide_index=True)
+            else:
+                st.warning("Geçmiş veride TotalLine / SpreadLine olmadığı için bu veri setinde yalnızca MS ve skor modeli backtest edilebildi.")
+            if not cal.empty:
+                st.markdown("#### 🎯 Market bazlı güven kalibrasyonu")
+                st.dataframe(cal,use_container_width=True,hide_index=True)
+            au_n=int(bt["A/U Tuttu"].notna().sum()) if "A/U Tuttu" in bt else 0
+            h_n=int(bt["H Tuttu"].notna().sum()) if "H Tuttu" in bt else 0
+            st.caption(f"Kapsama · MS: {len(bt)} · Alt/Üst çizgili: {au_n} · Handikap çizgili: {h_n} · Walk-forward: aktif")
+            st.dataframe(bt.sort_values("Tarih",ascending=False),use_container_width=True,hide_index=True)
+        elif isinstance(bt,pd.DataFrame):
+            st.warning("Backtest için yeterli geçmiş oluşmadı.")
 
 def kart_takim_adi(ad):
     """Kartlarda baştaki yaygın kulüp eklerini gizler; veri eşleştirmesini etkilemez."""
