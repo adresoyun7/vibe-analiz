@@ -2918,12 +2918,27 @@ def odds_spor_katalogu(key):
 
 
 def odds_lig_kodu_coz(key, kod):
-    if kod != "auto_turkey_1_lig":
+    # Sabit The Odds API sport key'leri doğrudan kullanılır. API dokümanında
+    # sabit key'i bulunmayan organizasyonlar katalogdan güvenli biçimde aranır.
+    if kod not in {"auto_turkey_1_lig", "auto_netherlands_cup", "auto_scotland_cup"}:
         return kod
-    for item in odds_spor_katalogu(key):
-        metin = f"{item.get('group','')} {item.get('title','')} {item.get('description','')}".lower()
-        if "soccer" in metin and "turk" in metin and ("1. lig" in metin or "1 lig" in metin or "tff 1" in metin):
-            return item.get("key")
+
+    katalog = odds_spor_katalogu(key)
+    for item in katalog:
+        metin = f"{item.get('group','')} {item.get('title','')} {item.get('description','')} {item.get('key','')}".lower()
+        if kod == "auto_turkey_1_lig":
+            if "soccer" in metin and "turk" in metin and ("1. lig" in metin or "1 lig" in metin or "tff 1" in metin):
+                return item.get("key")
+        elif kod == "auto_netherlands_cup":
+            # The Odds API kataloğunda ileride/aktif sezonda KNVB Beker görünürse
+            # sport key'i otomatik bulunur; uydurma key ile istek yapılmaz.
+            if ("soccer" in metin and ("knvb" in metin or "dutch cup" in metin or
+                ("netherland" in metin and ("cup" in metin or "beker" in metin)))):
+                return item.get("key")
+        elif kod == "auto_scotland_cup":
+            if ("soccer" in metin and ("scottish cup" in metin or
+                ("scotland" in metin and "cup" in metin))):
+                return item.get("key")
     return None
 
 
@@ -8227,9 +8242,11 @@ FUTBOL_LIGLERI = {
     },
     "AVRUPA VALUE": {
         "Hollanda": "soccer_netherlands_eredivisie",
+        "Hollanda Kupası (KNVB Beker)": "auto_netherlands_cup",
         "Belçika": "soccer_belgium_first_div",
         "Portekiz": "soccer_portugal_primeira_liga",
         "İskoçya": "soccer_spl",
+        "İskoçya Kupası (Scottish Cup)": "auto_scotland_cup",
         "Danimarka": "soccer_denmark_superliga",
         "Avusturya": "soccer_austria_bundesliga",
         "İsviçre": "soccer_switzerland_superleague",
@@ -8433,6 +8450,7 @@ KARLI_LIG_PRESETLERI = {
         "soccer_efl_champ",
         "soccer_england_league1",
         "soccer_england_league2",
+        "soccer_england_efl_cup",
         "soccer_spain_la_liga",
         "soccer_spain_segunda_division",
         "soccer_italy_serie_a",
