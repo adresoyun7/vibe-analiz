@@ -1223,13 +1223,12 @@ def basket_backtest_ozet(bt):
 
 
 def basket_odds_market_ozeti(event):
-    """Bookmaker'lar arasından medyan h2h/spread/total çizgisini çıkarır."""
+    """Bookmaker medyan çizgi + o çizgiye en yakın gerçek decimal fiyatları çıkarır."""
     home=str(event.get("home_team", "")); away=str(event.get("away_team", ""))
-    h2h_h=[]; h2h_a=[]; spreads_h=[]; totals=[]
+    h2h_h=[]; h2h_a=[]; spread_rows=[]; total_rows=[]
     for book in event.get("bookmakers", []) or []:
         for market in book.get("markets", []) or []:
-            key=market.get("key")
-            outs=market.get("outcomes", []) or []
+            key=market.get("key"); outs=market.get("outcomes", []) or []
             if key=="h2h":
                 for o in outs:
                     try: price=float(o.get("price"))
@@ -1238,16 +1237,29 @@ def basket_odds_market_ozeti(event):
                     elif o.get("name")==away: h2h_a.append(price)
             elif key=="spreads":
                 for o in outs:
-                    if o.get("name")==home:
-                        try: spreads_h.append(float(o.get("point")))
-                        except (TypeError,ValueError): pass
+                    try: point=float(o.get("point")); price=float(o.get("price"))
+                    except (TypeError,ValueError): continue
+                    spread_rows.append((str(o.get("name","")),point,price))
             elif key=="totals":
                 for o in outs:
-                    if str(o.get("name","")).lower()=="over":
-                        try: totals.append(float(o.get("point")))
-                        except (TypeError,ValueError): pass
+                    try: point=float(o.get("point")); price=float(o.get("price"))
+                    except (TypeError,ValueError): continue
+                    total_rows.append((str(o.get("name","")).lower(),point,price))
     med=lambda a: float(pd.Series(a).median()) if a else None
-    return {"home_odds":med(h2h_h),"away_odds":med(h2h_a),"spread_line":med(spreads_h),"total_line":med(totals)}
+    spread_line=med([x[1] for x in spread_rows if x[0]==home])
+    total_line=med([x[1] for x in total_rows if x[0]=="over"])
+    def near_price(rows, name, line):
+        if line is None: return None
+        vals=[price for nm,pt,price in rows if nm==name and abs(pt-line)<=0.26]
+        return med(vals)
+    return {
+        "home_odds":med(h2h_h),"away_odds":med(h2h_a),
+        "spread_line":spread_line,"total_line":total_line,
+        "home_spread_odds":near_price(spread_rows,home,spread_line),
+        "away_spread_odds":near_price(spread_rows,away,-spread_line if spread_line is not None else None),
+        "over_odds":near_price(total_rows,"over",total_line),
+        "under_odds":near_price(total_rows,"under",total_line),
+    }
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -1458,8 +1470,22 @@ def basket_piyasa_agirlik_optimize(df,min_games=6,limit=10,max_test=300):
     return float(tab.iloc[0]["Takım %"])/100.0,tab
 
 
+def _basket_ev(conf_pct, odds):
+    try:
+        p=float(conf_pct)/100.0; o=float(odds)
+        if not (0 < p < 1 and o > 1): return None
+        return p*o-1.0
+    except Exception:
+        return None
+
+
 def basket_guncel_adaylar(df, events, limit=10):
+    """Ana bahis seçici: yalnızca güven değil, gerçek market fiyatı + EV ile seçim yapar.
+    Çok düşük fiyatlı MS yerine değer varsa handikap veya A/U'ya geçer; hiçbirinde değer yoksa PAS.
+    """
     rows=[]; teams=sorted(set(df.HomeTeam).union(df.AwayTeam)); cutoff=df.Date.max()+pd.Timedelta(days=1)
+    min_conf=60.0
+    min_ev=0.00  # pozitif beklenen değer şartı
     for e in events:
         ev_api=str(e.get("home_team", "")); dep_api=str(e.get("away_team", ""))
         ev=basket_isim_eslestir(ev_api,teams); dep=basket_isim_eslestir(dep_api,teams)
@@ -1469,26 +1495,46 @@ def basket_guncel_adaylar(df, events, limit=10):
             continue
         r=basket_model_tahmini(df,ev,dep,cutoff,limit,0,0,mk["total_line"],mk["spread_line"])
         if not r: continue
-        # MS için takım modeli + de-vig piyasa modeli. Tarihsel oran yoksa güvenli varsayılan %70/%30.
         w=float(st.session_state.get("basket_market_team_weight",0.70))
         blend=basket_piyasa_birlestir(r,mk,w)
         ch=float(blend.get("combined_home_p") if blend.get("combined_home_p") is not None else 50.0)
-        ms_pick=ev_api if ch>=50 else dep_api
-        ms_conf=max(ch,100.0-ch)
-        # Pas filtresi: zayıf sinyali aday diye zorla gösterme.
-        picks=[]
-        if ms_conf >= 60: picks.append(("MS",ms_pick,ms_conf))
-        if r.get("total_pick") and r.get("total_quality")=="Yeterli" and r.get("total_p",0) >= 60:
-            picks.append(("A/U",f'{r["total_line"]:g} {r["total_pick"]}',r["total_p"]))
-        if r.get("spread_pick") and r.get("spread_quality")=="Yeterli" and r.get("spread_p",0) >= 60:
-            picks.append(("Handikap",r["spread_pick"],r["spread_p"]))
-        if picks:
-            best=max(picks,key=lambda x:x[2]); market,tahmin,guven=best; durum="Hazır"
+        ms_home=ch>=50; ms_pick=ev_api if ms_home else dep_api; ms_conf=max(ch,100.0-ch)
+        ms_odds=mk.get("home_odds") if ms_home else mk.get("away_odds")
+        candidates=[]
+        ev_ms=_basket_ev(ms_conf,ms_odds)
+        if ms_conf>=min_conf and ev_ms is not None and ev_ms>=min_ev:
+            candidates.append(("MS",ms_pick,ms_conf,ms_odds,ev_ms))
+
+        if r.get("total_pick") and r.get("total_quality")=="Yeterli" and float(r.get("total_p") or 0)>=min_conf:
+            is_over=r.get("total_pick")=="Üst"
+            o=mk.get("over_odds") if is_over else mk.get("under_odds")
+            evv=_basket_ev(r.get("total_p"),o)
+            if evv is not None and evv>=min_ev:
+                candidates.append(("A/U",f'{r["total_line"]:g} {r["total_pick"]}',float(r["total_p"]),o,evv))
+
+        if r.get("spread_pick") and r.get("spread_quality")=="Yeterli" and float(r.get("spread_p") or 0)>=min_conf:
+            # Model ev tarafını seçtiyse ev spread fiyatı, aksi halde deplasman spread fiyatı.
+            home_spread_pick=str(r.get("spread_pick","")).startswith(str(ev)) or str(r.get("spread_pick","")).startswith(str(ev_api))
+            o=mk.get("home_spread_odds") if home_spread_pick else mk.get("away_spread_odds")
+            evv=_basket_ev(r.get("spread_p"),o)
+            if evv is not None and evv>=min_ev:
+                candidates.append(("Handikap",r["spread_pick"],float(r["spread_p"]),o,evv))
+
+        if candidates:
+            # Önce en yüksek EV; çok yakın EV'de daha yüksek güveni tercih et.
+            best=max(candidates,key=lambda x:(x[4],x[2]))
+            market,tahmin,guven,ana_oran,ana_ev=best; durum="Hazır"
         else:
-            market,tahmin,guven="PAS","Avantaj yok",max([r.get("confidence",50),r.get("total_p",50) or 50,r.get("spread_p",50) or 50]); durum="Pas · %60+ kalibre sinyal yok"
-        rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":market,"Ana Tahmin":tahmin,"Güven":round(float(guven),1),
+            market,tahmin,guven,ana_oran,ana_ev="PAS","Değerli market yok",max([ms_conf,float(r.get("total_p") or 50),float(r.get("spread_p") or 50)]),None,None
+            durum="Pas · oran/güven/EV filtresini geçen market yok"
+
+        rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":market,"Ana Tahmin":tahmin,
+                     "Güven":round(float(guven),1),"Ana Oran":round(float(ana_oran),2) if ana_oran else None,
+                     "EV %":round(float(ana_ev)*100,1) if ana_ev is not None else None,
                      "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
-                     "Ev Handikap":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],
+                     "Piyasa Handikapı (Ev)":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],
+                     "Ev H Oranı":mk.get("home_spread_odds"),"Dep H Oranı":mk.get("away_spread_odds"),
+                     "Üst Oranı":mk.get("over_odds"),"Alt Oranı":mk.get("under_odds"),
                      "Takım MS %":round(max(float(blend.get("team_home_p") or 50),100-float(blend.get("team_home_p") or 50)),1),
                      "Piyasa MS %":round(max(float(blend.get("market_home_p") or 50),100-float(blend.get("market_home_p") or 50)),1) if blend.get("market_home_p") is not None else None,
                      "Birleşik MS %":round(ms_conf,1),"Uyum":blend.get("alignment"),"Durum":durum})
