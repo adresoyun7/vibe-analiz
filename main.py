@@ -1282,6 +1282,96 @@ def basket_isim_eslestir(api_name, teams):
     return best_team if best_score >= 0.86 else None
 
 
+def basket_piyasa_ms_olasiliklari(home_odds, away_odds):
+    """Decimal ML oranlarından bookmaker marjını temizleyip adil olasılık üretir."""
+    try:
+        ho=float(home_odds); ao=float(away_odds)
+        if not (math.isfinite(ho) and math.isfinite(ao) and ho>1.0 and ao>1.0):
+            return None
+        ih,ia=1.0/ho,1.0/ao
+        z=ih+ia
+        if z<=0: return None
+        return {"home_p":100.0*ih/z,"away_p":100.0*ia/z,"overround":100.0*(z-1.0)}
+    except Exception:
+        return None
+
+
+def basket_takim_home_prob(r):
+    """Takım modelinin kazanan+güven çıktısını ev sahibi olasılığına çevirir."""
+    if not r: return None
+    try:
+        c=float(r.get("confidence",50.0))
+    except Exception:
+        c=50.0
+    c=min(99.5,max(50.0,c))
+    winner=str(r.get("winner",''))
+    home=str(r.get("home_profile",{}).get("team",''))
+    # profile'da team yoksa margin işareti güvenilir yön bilgisidir.
+    home_wins=float(r.get("margin",0.0))>=0
+    return c if home_wins else 100.0-c
+
+
+def basket_piyasa_birlestir(r, mk, team_weight=0.70):
+    """Takım modelini de-vig edilmiş moneyline piyasa olasılığıyla birleştirir.
+    Spread/total piyasanın ima ettiği skoru da yalnızca açıklama/uyum için üretir.
+    """
+    if not r: return {}
+    team_home=basket_takim_home_prob(r)
+    market=basket_piyasa_ms_olasiliklari(mk.get("home_odds"),mk.get("away_odds"))
+    out={"team_home_p":team_home,"market_home_p":None,"combined_home_p":team_home,
+         "team_weight":1.0,"market_weight":0.0,"overround":None,"alignment":"Piyasa verisi yok",
+         "market_home_score":None,"market_away_score":None}
+    if market and team_home is not None:
+        w=min(1.0,max(0.0,float(team_weight)))
+        mp=float(market["home_p"])
+        cp=w*team_home+(1.0-w)*mp
+        out.update(market_home_p=mp,combined_home_p=cp,team_weight=w,market_weight=1.0-w,overround=market["overround"])
+        gap=abs(team_home-mp)
+        out["alignment"]="Yüksek" if gap<7 else ("Orta" if gap<15 else "Düşük")
+    # total T ve home spread S (home -x => S=-x): market implied home=(T-S)/2, away=(T+S)/2
+    try:
+        T=float(mk.get("total_line")); S=float(mk.get("spread_line"))
+        if math.isfinite(T) and math.isfinite(S) and T>0:
+            out["market_home_score"]=(T-S)/2.0
+            out["market_away_score"]=(T+S)/2.0
+    except Exception:
+        pass
+    return out
+
+
+def basket_piyasa_agirlik_optimize(df,min_games=6,limit=10,max_test=300):
+    """Gerçek tarihsel HomeML/AwayML varsa 100/0..0/100 tarar; yoksa None döner.
+    Seçim metriği Brier skoru: olasılık kalibrasyonunu salt isabetten daha iyi ölçer.
+    """
+    data=basket_veri_hazirla(df)
+    if data.empty or not {"HomeML","AwayML"}.issubset(data.columns): return None,pd.DataFrame()
+    rows=[]
+    for _,row in data.tail(int(max_test)).iterrows():
+        try:
+            ho=float(row.get("HomeML")); ao=float(row.get("AwayML"))
+        except Exception:
+            continue
+        market=basket_piyasa_ms_olasiliklari(ho,ao)
+        if not market: continue
+        before=data[data.Date < row.Date].copy()
+        if len(basket_takim_maclari(before,row.HomeTeam,row.Date,limit))<min_games or len(basket_takim_maclari(before,row.AwayTeam,row.Date,limit))<min_games: continue
+        r=basket_model_tahmini(before,row.HomeTeam,row.AwayTeam,row.Date,limit,0,0,None,None)
+        if not r: continue
+        th=basket_takim_home_prob(r)
+        if th is None: continue
+        y=1.0 if float(row.HomeScore)>float(row.AwayScore) else 0.0
+        rows.append((th/100.0,float(market["home_p"])/100.0,y))
+    if len(rows)<30: return None,pd.DataFrame()
+    scores=[]
+    for pct in range(100,-1,-10):
+        w=pct/100.0
+        b=sum((w*t+(1-w)*m-y)**2 for t,m,y in rows)/len(rows)
+        acc=sum(((w*t+(1-w)*m)>=0.5)==bool(y) for t,m,y in rows)/len(rows)
+        scores.append({"Takım %":pct,"Piyasa %":100-pct,"Brier":round(b,4),"Başarı %":round(acc*100,1),"n":len(rows)})
+    tab=pd.DataFrame(scores).sort_values(["Brier","Başarı %"],ascending=[True,False]).reset_index(drop=True)
+    return float(tab.iloc[0]["Takım %"])/100.0,tab
+
+
 def basket_guncel_adaylar(df, events, limit=10):
     rows=[]; teams=sorted(set(df.HomeTeam).union(df.AwayTeam)); cutoff=df.Date.max()+pd.Timedelta(days=1)
     for e in events:
@@ -1293,9 +1383,15 @@ def basket_guncel_adaylar(df, events, limit=10):
             continue
         r=basket_model_tahmini(df,ev,dep,cutoff,limit,0,0,mk["total_line"],mk["spread_line"])
         if not r: continue
+        # MS için takım modeli + de-vig piyasa modeli. Tarihsel oran yoksa güvenli varsayılan %70/%30.
+        w=float(st.session_state.get("basket_market_team_weight",0.70))
+        blend=basket_piyasa_birlestir(r,mk,w)
+        ch=float(blend.get("combined_home_p") if blend.get("combined_home_p") is not None else 50.0)
+        ms_pick=ev_api if ch>=50 else dep_api
+        ms_conf=max(ch,100.0-ch)
         # Pas filtresi: zayıf sinyali aday diye zorla gösterme.
         picks=[]
-        if r.get("confidence",0) >= 60: picks.append(("MS",r["winner"],r["confidence"]))
+        if ms_conf >= 60: picks.append(("MS",ms_pick,ms_conf))
         if r.get("total_pick") and r.get("total_quality")=="Yeterli" and r.get("total_p",0) >= 60:
             picks.append(("A/U",f'{r["total_line"]:g} {r["total_pick"]}',r["total_p"]))
         if r.get("spread_pick") and r.get("spread_quality")=="Yeterli" and r.get("spread_p",0) >= 60:
@@ -1306,7 +1402,10 @@ def basket_guncel_adaylar(df, events, limit=10):
             market,tahmin,guven="PAS","Avantaj yok",max([r.get("confidence",50),r.get("total_p",50) or 50,r.get("spread_p",50) or 50]); durum="Pas · %60+ kalibre sinyal yok"
         rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":market,"Ana Tahmin":tahmin,"Güven":round(float(guven),1),
                      "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
-                     "Ev Handikap":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],"Durum":durum})
+                     "Ev Handikap":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],
+                     "Takım MS %":round(max(float(blend.get("team_home_p") or 50),100-float(blend.get("team_home_p") or 50)),1),
+                     "Piyasa MS %":round(max(float(blend.get("market_home_p") or 50),100-float(blend.get("market_home_p") or 50)),1) if blend.get("market_home_p") is not None else None,
+                     "Birleşik MS %":round(ms_conf,1),"Uyum":blend.get("alignment"),"Durum":durum})
     return pd.DataFrame(rows)
 
 
@@ -1652,12 +1751,27 @@ def basketbol_sayfasi():
                 st.divider()
                 continue
 
+            w=float(st.session_state.get("basket_market_team_weight",0.70))
+            blend=basket_piyasa_birlestir(r,mk,w)
+            ch=float(blend.get("combined_home_p") if blend.get("combined_home_p") is not None else 50.0)
+            combined_pick=home_label if ch>=50 else away_label
+            combined_conf=max(ch,100.0-ch)
             x1,x2,x3,x4=st.columns(4)
             x1.metric("Beklenen skor",f'{r["home_score"]:.1f} - {r["away_score"]:.1f}')
             x2.metric("Model toplam",f'{r["total"]:.1f}')
-            ms_pas = r.get("confidence",0) < 60
-            x3.metric("MS",f'{r["winner"]} %{r["confidence"]}' + (" · PAS" if ms_pas else ""))
+            ms_pas = combined_conf < 60
+            x3.metric("MS Birleşik",f'{combined_pick} %{combined_conf:.1f}' + (" · PAS" if ms_pas else ""))
             x4.metric("Pace",r["pace"] if r["pace"] is not None else "Skor modeli")
+            tm=float(blend.get("team_home_p") or 50.0); pm=blend.get("market_home_p")
+            team_pick=home_label if tm>=50 else away_label
+            team_conf=max(tm,100-tm)
+            if pm is not None:
+                pm=float(pm); market_pick=home_label if pm>=50 else away_label; market_conf=max(pm,100-pm)
+                st.caption(f"Takım modeli: **{team_pick} %{team_conf:.1f}** · Piyasa (marjsız): **{market_pick} %{market_conf:.1f}** · Birleşim: **%{w*100:.0f}/%{(1-w)*100:.0f}** · Uyum: **{blend.get('alignment')}** · bookmaker marjı ≈ %{float(blend.get('overround') or 0):.1f}")
+            else:
+                st.caption(f"Takım modeli: **{team_pick} %{team_conf:.1f}** · Moneyline piyasa verisi yok; birleşik tahmin takım modeline düşer.")
+            if blend.get("market_home_score") is not None:
+                st.caption(f"Piyasanın spread+total ile ima ettiği skor ≈ **{blend['market_home_score']:.1f} - {blend['market_away_score']:.1f}**")
 
             if not r["real_efficiency"]:
                 st.caption("Gerçek possession box-score alanı yoksa Pace/ORtg/DRtg yerine otomatik skor-form modeli kullanılır.")
@@ -1697,6 +1811,20 @@ def basketbol_sayfasi():
         st.markdown("### 🧪 Tam market walk-forward backtest")
         st.caption("Her maç yalnızca kendisinden önceki maçlarla tahmin edilir. Geçmiş piyasa çizgisi/oranı yoksa A/U, handikap veya ROI uydurulmaz.")
         max_test=st.slider("Test maçı",50,min(1000,max(50,len(df))),min(300,max(50,len(df))),50,key="basket_bt_n") if len(df)>=50 else len(df)
+        if st.button("⚖️ Takım/Piyasa ağırlığını tara",use_container_width=True,key="basket_weight_scan"):
+            with st.spinner("100/0 → 0/100 ağırlıkları gerçek tarihsel ML oranlarıyla taranıyor..."):
+                bw,btab=basket_piyasa_agirlik_optimize(df,6,form_n,max_test)
+            if bw is None:
+                st.session_state["basket_weight_table"]=pd.DataFrame()
+                st.warning("Bu geçmiş veri setinde yeterli gerçek HomeML/AwayML oranı yok. Ağırlık uydurulmadı; canlı analiz %70 Takım + %30 Piyasa kullanacak.")
+            else:
+                st.session_state["basket_market_team_weight"]=bw
+                st.session_state["basket_weight_table"]=btab
+        bw=float(st.session_state.get("basket_market_team_weight",0.70))
+        st.caption(f"Canlı MS birleşimi · Takım modeli %{bw*100:.0f} + de-vig piyasa modeli %{(1-bw)*100:.0f}")
+        btab=st.session_state.get("basket_weight_table",pd.DataFrame())
+        if isinstance(btab,pd.DataFrame) and not btab.empty:
+            st.dataframe(btab,use_container_width=True,hide_index=True)
         if st.button("Basketbol backtest çalıştır",type="primary",key="basket_bt_btn"):
             with st.spinner("MS + Alt/Üst + Handikap walk-forward test ediliyor..."):
                 bt=basket_backtest(df,6,form_n,max_test)
