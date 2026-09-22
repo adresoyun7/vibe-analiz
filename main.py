@@ -1084,6 +1084,8 @@ def basket_backtest(df,min_games=6,limit=10,max_test=300):
              "Beklenen":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Sonuç":f'{int(row.HomeScore)}-{int(row.AwayScore)}',"MS Tuttu":bool(ms_hit),
              "MS Oran":ms_odds,"MS ROI":ms_roi,
              "Skor MAE":round((abs(r["home_score"]-row.HomeScore)+abs(r["away_score"]-row.AwayScore))/2,2),
+             "Toplam MAE":round(abs((r["home_score"]+r["away_score"])-actual_total),2),
+             "Marj MAE":round(abs(r["margin"]-actual_margin),2),
              "Walk-forward":"OK"}
         if r.get("total_line") is not None and r.get("total_pick"):
             # Push durumunda sonuç NaN: başarı oranını bozmaz.
@@ -1111,7 +1113,9 @@ def basket_backtest_ozet(bt):
     """Market bazlı başarı, kalibrasyon ve gerçek oran varsa ROI özetleri."""
     if bt is None or bt.empty:
         return {}, pd.DataFrame(), pd.DataFrame()
-    summary={"Tahmin":len(bt),"MS Başarı":float(bt["MS Tuttu"].mean()*100),"Skor MAE":float(bt["Skor MAE"].mean())}
+    summary={"Tahmin":len(bt),"MS Başarı":float(bt["MS Tuttu"].mean()*100),"Skor MAE":float(bt["Skor MAE"].mean()),
+             "Toplam MAE":float(bt["Toplam MAE"].mean()) if "Toplam MAE" in bt else float("nan"),
+             "Marj MAE":float(bt["Marj MAE"].mean()) if "Marj MAE" in bt else float("nan")}
     if "MS ROI" in bt and bt["MS ROI"].notna().any():
         z=bt["MS ROI"].dropna(); summary["MS ROI"]=float(z.mean()*100); summary["MS ROI n"]=len(z)
     market_rows=[]
@@ -1832,10 +1836,13 @@ def basketbol_sayfasi():
         bt=st.session_state.get("basket_last_bt")
         if isinstance(bt,pd.DataFrame) and not bt.empty:
             summary,markets,cal=basket_backtest_ozet(bt)
-            c1,c2,c3=st.columns(3)
+            c1,c2,c3,c4,c5=st.columns(5)
             c1.metric("MS başarı",f'%{summary.get("MS Başarı",0):.1f}')
-            c2.metric("Skor MAE",f'{summary.get("Skor MAE",0):.2f}')
-            c3.metric("Tahmin",int(summary.get("Tahmin",0)))
+            c2.metric("Takım Skor MAE",f'{summary.get("Skor MAE",0):.2f}',help="Ev ve deplasman takım skorlarının ortalama mutlak hatası.")
+            c3.metric("Toplam MAE",f'{summary.get("Toplam MAE",0):.2f}',help="Model toplamı ile gerçek maç toplamı arasındaki ortalama mutlak hata.")
+            c4.metric("Marj MAE",f'{summary.get("Marj MAE",0):.2f}',help="Model sayı farkı ile gerçek maç sayı farkı arasındaki ortalama mutlak hata.")
+            c5.metric("Tahmin",int(summary.get("Tahmin",0)))
+            st.caption("MAE ne kadar düşükse o kadar iyi · Toplam MAE Alt/Üst skor projeksiyonunu, Marj MAE ise MS/handikap sayı farkı projeksiyonunu teşhis eder.")
             if "MS ROI" in summary:
                 st.metric("MS ROI",f'%{summary["MS ROI"]:+.1f}',help=f'Gerçek geçmiş ML oranı bulunan {summary.get("MS ROI n",0)} maç.')
             else:
