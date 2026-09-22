@@ -8188,6 +8188,7 @@ FUTBOL_LIGLERI = {
     },
     "AVRUPA KUPALARI": {
         "Şampiyonlar Ligi": "soccer_uefa_champs_league",
+        "Şampiyonlar Ligi Kadınlar": "soccer_uefa_champs_league_women",
         "Avrupa Ligi": "soccer_uefa_europa_league",
         "Konferans Ligi": "soccer_uefa_europa_conference_league",
     },
@@ -8425,6 +8426,7 @@ KARLI_LIG_PRESETLERI = {
     "cekirdek_value": [
         "soccer_uefa_nations_league",
         "soccer_uefa_champs_league",
+        "soccer_uefa_champs_league_women",
         "soccer_uefa_europa_league",
         "soccer_uefa_europa_conference_league",
         "soccer_epl",
