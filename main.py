@@ -856,6 +856,32 @@ def basket_form_profili(df,takim,cutoff=None,limit=10,saha=None,rakip_gucu=None)
 
 def basket_sigmoid(x, scale=7.5): return 100/(1+math.exp(-float(x)/max(.1,float(scale))))
 
+def basket_normal_cdf_pct(x, sigma):
+    """0 merkezli normal dağılımda P(X <= x), yüzde."""
+    sigma=max(1e-6,float(sigma))
+    return 50.0*(1.0+math.erf(float(x)/(sigma*math.sqrt(2.0))))
+
+def basket_total_belirsizlik(hp, ap, base):
+    """Alt/Üst için veri-temelli tahmin belirsizliği.
+    Takımların yakın dönem gerçek maç toplamlarının oynaklığını kullanır;
+    küçük örnekte lig seviyesine doğru muhafazakârlaştırır.
+    """
+    vals=[]
+    for prof in (hp,ap):
+        g=prof.get("matches") if prof else None
+        if g is not None and not g.empty:
+            t=pd.to_numeric(g.PF,errors="coerce")+pd.to_numeric(g.PA,errors="coerce")
+            vals.extend(t.dropna().astype(float).tolist())
+    if len(vals)>=4:
+        ser=pd.Series(vals,dtype=float)
+        # IQR ile uç değerleri kırp; standart sapma predictive sigma için taban olur.
+        q1,q3=ser.quantile(.25),ser.quantile(.75); iqr=max(0.0,float(q3-q1))
+        if iqr>0: ser=ser[(ser>=q1-1.5*iqr)&(ser<=q3+1.5*iqr)]
+        sd=float(ser.std(ddof=1)) if len(ser)>=3 else float("nan")
+    else: sd=float("nan")
+    if not math.isfinite(sd): sd=13.0
+    # Basketbol toplamlarında aşırı kesinlik üretmemek için makul veri tabanı.
+    return max(9.0,min(22.0,sd))
 
 def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None):
     df=basket_veri_hazirla(df)
@@ -886,17 +912,46 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
     form_delta=max(-5,min(5,(hp["adj_margin"]-ap["adj_margin"])*.10)); home+=form_delta/2; away-=form_delta/2
     # injury adjustment: negatif değer takım beklenen skorunu düşürür, pozitif artırır.
     home+=float(inj_home); away+=float(inj_away)
+    # Verimlilik modeli bozuk/eksik box-score nedeniyle gerçek skor seviyesinden
+    # koparsa yakın dönem sayı profiline geri çek. Bu özellikle tüm maçların
+    # sistematik olarak Alt görünmesini engeller.
+    league=base["team_points"]
+    empirical_home=league+.55*(hpf-league)+.45*(apa-league)
+    empirical_away=league+.55*(apf-league)+.45*(hpa-league)
+    empirical_home+=edge/2+form_delta/2+float(inj_home)
+    empirical_away-=edge/2+form_delta/2-float(inj_away)
+    empirical_total=empirical_home+empirical_away
+    projected_total=home+away
+    if real_eff and math.isfinite(empirical_total) and abs(projected_total-empirical_total)>10.0:
+        # İki bağımsız projeksiyonu harmanla; tek bir hatalı possession/efficiency
+        # kaynağının toplam marketini domine etmesine izin verme.
+        home=.5*home+.5*empirical_home
+        away=.5*away+.5*empirical_away
+
     total=home+away; margin=home-away; sample=min(hp["games"],ap["games"])
     ml_home=basket_sigmoid(margin); ml_away=100-ml_home
     uncertainty=max(6.5,13.0-min(sample,10)*.45)
+    total_sigma=basket_total_belirsizlik(hp,ap,base)
     result={"home":ev,"away":dep,"home_score":round(home,1),"away_score":round(away,1),"total":round(total,1),"margin":round(margin,1),
             "home_win_p":round(ml_home),"away_win_p":round(ml_away),"winner":ev if margin>=0 else dep,
             "confidence":round(max(50,max(ml_home,ml_away))),"pace":round(pace,1) if math.isfinite(pace) else None,
             "real_efficiency":real_eff,"home_profile":hp,"away_profile":ap,"home_split":hs,"away_split":aas,"league_base":base,
             "inj_home":float(inj_home),"inj_away":float(inj_away),"model_version":BASKET_MODEL_VERSION}
     if total_line is not None and math.isfinite(float(total_line)) and float(total_line)>0:
-        diff=total-float(total_line); p=basket_sigmoid(diff,uncertainty)
-        result.update(total_line=float(total_line),total_diff=round(diff,1),total_pick="Üst" if diff>=0 else "Alt",total_p=round(p if diff>=0 else 100-p))
+        line=float(total_line); diff=total-line
+        # P(actual total > line) = Phi((model_total-line)/sigma).
+        # Eski sigmoid hesabı büyük farklarda kolayca %100'e yuvarlanıyordu.
+        over_p=basket_normal_cdf_pct(diff,total_sigma)
+        pick="Üst" if over_p>=50.0 else "Alt"
+        pick_p=over_p if pick=="Üst" else 100.0-over_p
+        # Çok az geçmişte veya model piyasa çizgisinden olağandışı uzaksa
+        # tahmini kesin göstermeyip veri kalitesi uyarısı üret.
+        total_quality="Yeterli"
+        if sample<5: total_quality="Yetersiz veri"
+        elif abs(diff)>30: total_quality="Kontrol gerekli"
+        result.update(total_line=line,total_diff=round(diff,1),total_pick=pick,total_p=round(pick_p,1),
+                      total_over_p=round(over_p,1),total_sigma=round(total_sigma,1),total_quality=total_quality,
+                      empirical_total=round(empirical_total,1) if math.isfinite(empirical_total) else None)
     if spread_line is not None and math.isfinite(float(spread_line)):
         # SpreadLine ev takımının handikapı: -5.5 ise evin 6+ farkla kazanması gerekir.
         cover_margin=margin+float(spread_line); p=basket_sigmoid(cover_margin,uncertainty*.75)
@@ -1404,7 +1459,12 @@ def basketbol_sayfasi():
         x3.metric("MS",f'{r["winner"]} %{r["confidence"]}')
         x4.metric("Pace",r["pace"] if r["pace"] is not None else "Skor modeli")
         if not r["real_efficiency"]: st.caption("Gerçek possession box-score alanı yoksa Pace/ORtg/DRtg yerine otomatik skor-form modeli kullanılır.")
-        if r.get("total_pick"): st.success(f'Alt/Üst: {r["total_line"]:g} {r["total_pick"]} · %{r["total_p"]} · model farkı {r["total_diff"]:+.1f}')
+        if r.get("total_pick"):
+            q=r.get("total_quality","Yeterli"); sig=r.get("total_sigma")
+            msg=f'Alt/Üst: {r["total_line"]:g} {r["total_pick"]} · %{r["total_p"]:.1f} · model farkı {r["total_diff"]:+.1f}'
+            if sig is not None: msg+=f' · hata payı σ≈{sig:.1f}'
+            if q=="Yeterli": st.success(msg)
+            else: st.warning(msg+f' · {q}')
         if r.get("spread_pick"): st.success(f'Handikap: {r["spread_pick"]} · %{r["spread_p"]} · model farkı {r["spread_diff"]:+.1f}')
         table=[]
         for name,p in ((ev,r["home_profile"]),(dep,r["away_profile"])):
