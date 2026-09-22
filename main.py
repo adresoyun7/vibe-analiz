@@ -1518,45 +1518,71 @@ def basketbol_sayfasi():
         return
 
     if basket_view == "🎯 Maç Analizi":
-        # Öncelik güncel bültendeki maçlar; manuel takım seçmeye gerek kalmaz.
+        # Futbol Maç Analizi gibi: seçili ligdeki bütün oynanabilir maçları tek ekranda göster.
         playable=[]
         teams=sorted(set(df.HomeTeam).union(df.AwayTeam))
         for e in events:
-            ev=basket_isim_eslestir(str(e.get("home_team","")),teams); dep=basket_isim_eslestir(str(e.get("away_team","")),teams)
-            if ev and dep: playable.append((e,ev,dep))
+            ev=basket_isim_eslestir(str(e.get("home_team","")),teams)
+            dep=basket_isim_eslestir(str(e.get("away_team","")),teams)
+            if ev and dep:
+                playable.append((e,ev,dep))
         if not playable:
             st.warning("Bültendeki takımlar geçmiş verisiyle eşleşmedi.")
             return
-        labels=[f'{e.get("home_team")} - {e.get("away_team")}' for e,_,_ in playable]
-        ix=st.selectbox("Maç",range(len(labels)),format_func=lambda i: labels[i],key="basket_match_select")
-        e,ev,dep=playable[int(ix)]; mk=basket_odds_market_ozeti(e)
-        r=basket_model_tahmini(df,ev,dep,df.Date.max()+pd.Timedelta(days=1),form_n,0,0,mk["total_line"],mk["spread_line"])
-        if not r: st.warning("Yeterli geçmiş yok."); return
-        x1,x2,x3,x4=st.columns(4)
-        x1.metric("Beklenen skor",f'{r["home_score"]:.1f} - {r["away_score"]:.1f}')
-        x2.metric("Model toplam",f'{r["total"]:.1f}')
-        x3.metric("MS",f'{r["winner"]} %{r["confidence"]}')
-        x4.metric("Pace",r["pace"] if r["pace"] is not None else "Skor modeli")
-        if not r["real_efficiency"]: st.caption("Gerçek possession box-score alanı yoksa Pace/ORtg/DRtg yerine otomatik skor-form modeli kullanılır.")
-        if r.get("total_pick"):
-            msg=f'Alt/Üst: {r["total_line"]:g} {r["total_pick"]} · %{r["total_p"]} · model farkı {r["total_diff"]:+.1f} · σ≈{r.get("total_sigma")}'
-            (st.success if r.get("total_p",0)>=60 and r.get("total_quality")=="Yeterli" else st.info)(msg + ("" if r.get("total_p",0)>=60 else " · PAS"))
-        if r.get("spread_pick"):
-            msg=f'Handikap: {r["spread_pick"]} · %{r["spread_p"]} · model farkı {r["spread_diff"]:+.1f} · σ≈{r.get("spread_sigma")}'
-            (st.success if r.get("spread_p",0)>=60 and r.get("spread_quality")=="Yeterli" else st.info)(msg + ("" if r.get("spread_p",0)>=60 else " · PAS"))
-        if r.get("confidence",0)<60: st.info(f'MS: {r["winner"]} %{r["confidence"]} · PAS (%60 altı)')
 
-        ex=r.get("explain",{})
-        with st.expander("🧮 Skor hesabı nasıl oluştu?", expanded=False):
-            st.write(f'Lig takım başı ortalama: **{ex.get("league_avg")}** · örnek: **{ex.get("sample")} maç**')
-            ec1,ec2=st.columns(2)
-            ec1.write(f'{ev}: hücum **{ex.get("home_off")}** · rakip savunma **{ex.get("home_opp_def")}** → ham kalibre **{ex.get("emp_home")}**')
-            ec2.write(f'{dep}: hücum **{ex.get("away_off")}** · rakip savunma **{ex.get("away_opp_def")}** → ham kalibre **{ex.get("emp_away")}**')
-            st.caption(f'Ev avantajı {ex.get("home_edge"):+.1f} · form farkı düzeltmesi {ex.get("form_delta"):+.1f} · total σ {ex.get("total_sigma")} · margin σ {ex.get("margin_sigma")}')
-        table=[]
-        for name,p in ((ev,r["home_profile"]),(dep,r["away_profile"])):
-            table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1)})
-        st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
+        st.markdown(f"### 🎯 {league} Maç Analizi")
+        st.caption(f"Bültendeki {len(playable)} eşleşmiş maç tek ekranda gösteriliyor. %60 altındaki marketler PAS olarak işaretlenir.")
+
+        for idx,(e,ev,dep) in enumerate(playable):
+            mk=basket_odds_market_ozeti(e)
+            r=basket_model_tahmini(df,ev,dep,df.Date.max()+pd.Timedelta(days=1),form_n,0,0,mk["total_line"],mk["spread_line"])
+            home_label=str(e.get("home_team",ev))
+            away_label=str(e.get("away_team",dep))
+            st.markdown(f"#### 🏀 {home_label} — {away_label}")
+            if not r:
+                st.warning("Yeterli geçmiş yok.")
+                st.divider()
+                continue
+
+            x1,x2,x3,x4=st.columns(4)
+            x1.metric("Beklenen skor",f'{r["home_score"]:.1f} - {r["away_score"]:.1f}')
+            x2.metric("Model toplam",f'{r["total"]:.1f}')
+            ms_pas = r.get("confidence",0) < 60
+            x3.metric("MS",f'{r["winner"]} %{r["confidence"]}' + (" · PAS" if ms_pas else ""))
+            x4.metric("Pace",r["pace"] if r["pace"] is not None else "Skor modeli")
+
+            if not r["real_efficiency"]:
+                st.caption("Gerçek possession box-score alanı yoksa Pace/ORtg/DRtg yerine otomatik skor-form modeli kullanılır.")
+
+            sig1,sig2=st.columns(2)
+            with sig1:
+                if r.get("total_pick"):
+                    ok = r.get("total_p",0)>=60 and r.get("total_quality")=="Yeterli"
+                    msg=f'Alt/Üst: {r["total_line"]:g} {r["total_pick"]} · %{r["total_p"]} · fark {r["total_diff"]:+.1f} · σ≈{r.get("total_sigma")}'
+                    (st.success if ok else st.info)(msg + ("" if ok else " · PAS"))
+                else:
+                    st.info("Alt/Üst: çizgi/veri yok · PAS")
+            with sig2:
+                if r.get("spread_pick"):
+                    ok = r.get("spread_p",0)>=60 and r.get("spread_quality")=="Yeterli"
+                    msg=f'Handikap: {r["spread_pick"]} · %{r["spread_p"]} · fark {r["spread_diff"]:+.1f} · σ≈{r.get("spread_sigma")}'
+                    (st.success if ok else st.info)(msg + ("" if ok else " · PAS"))
+                else:
+                    st.info("Handikap: çizgi/veri yok · PAS")
+
+            ex=r.get("explain",{})
+            with st.expander("🧮 Detaylı analiz / skor hesabı", expanded=False):
+                st.write(f'Lig takım başı ortalama: **{ex.get("league_avg")}** · örnek: **{ex.get("sample")} maç**')
+                ec1,ec2=st.columns(2)
+                ec1.write(f'{ev}: hücum **{ex.get("home_off")}** · rakip savunma **{ex.get("home_opp_def")}** → ham kalibre **{ex.get("emp_home")}**')
+                ec2.write(f'{dep}: hücum **{ex.get("away_off")}** · rakip savunma **{ex.get("away_opp_def")}** → ham kalibre **{ex.get("emp_away")}**')
+                st.caption(f'Ev avantajı {ex.get("home_edge"):+.1f} · form farkı düzeltmesi {ex.get("form_delta"):+.1f} · total σ {ex.get("total_sigma")} · margin σ {ex.get("margin_sigma")}')
+                table=[]
+                for name,p in ((ev,r["home_profile"]),(dep,r["away_profile"])):
+                    table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1)})
+                st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
+            if idx < len(playable)-1:
+                st.divider()
         return
 
     if basket_view == "🧪 Backtest":
