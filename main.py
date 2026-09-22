@@ -904,7 +904,46 @@ def basket_margin_belirsizlik(hp, ap):
     if not math.isfinite(sd): sd=11.5
     return max(7.5,min(20.0,sd))
 
-def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None):
+def basket_backtest_hata_kalibrasyonu():
+    """Son walk-forward backtestten canlı marketler için gerçek residual dağılımını çıkarır.
+
+    Backtest yoksa None döner ve model maç-bazlı eski belirsizlik hesabını kullanır.
+    MAE sigma değildir; güven hesabında signed residual standart sapması kullanılır,
+    MAE ise minimum oynanabilir model farkını belirlemek için kullanılır.
+    """
+    try:
+        bt=st.session_state.get("basket_last_bt")
+    except Exception:
+        bt=None
+    if not isinstance(bt,pd.DataFrame) or len(bt)<30:
+        return None
+    total_res=[]; margin_res=[]
+    pat=re.compile(r"(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)")
+    for _,rr in bt.iterrows():
+        try:
+            mp=pat.search(str(rr.get("Beklenen",""))); ma=pat.search(str(rr.get("Sonuç","")))
+            if not mp or not ma: continue
+            ph,pa=float(mp.group(1)),float(mp.group(2)); ah,aa=float(ma.group(1)),float(ma.group(2))
+            total_res.append((ph+pa)-(ah+aa))
+            margin_res.append((ph-pa)-(ah-aa))
+        except Exception:
+            continue
+    if len(total_res)<30 or len(margin_res)<30:
+        return None
+    ts=pd.Series(total_res,dtype=float); ms=pd.Series(margin_res,dtype=float)
+    t_sigma=float(ts.std(ddof=1)); m_sigma=float(ms.std(ddof=1))
+    t_mae=float(ts.abs().mean()); m_mae=float(ms.abs().mean())
+    if not all(math.isfinite(x) for x in (t_sigma,m_sigma,t_mae,m_mae)):
+        return None
+    return {
+        "n":min(len(ts),len(ms)),
+        "total_sigma":max(8.0,min(25.0,t_sigma)),
+        "margin_sigma":max(6.0,min(20.0,m_sigma)),
+        "total_mae":t_mae,
+        "margin_mae":m_mae,
+    }
+
+def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None,use_backtest_calibration=True):
     """Lig ortalamasına kalibre edilmiş basketbol skor modeli.
 
     Temel fikir: ham son-10 sayı ortalamalarını doğrudan toplamak yerine takımın
@@ -991,6 +1030,13 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
     ml_home=basket_normal_cdf_pct(margin, margin_sigma) if projection_valid else 50.0
     ml_away=100-ml_home
     total_sigma=basket_total_belirsizlik(hp,ap,base)
+    bt_cal=basket_backtest_hata_kalibrasyonu() if use_backtest_calibration else None
+    if bt_cal:
+        # Güveni teorik son-10 oynaklığı yerine modelin gerçek walk-forward hatasıyla kalibre et.
+        margin_sigma=float(bt_cal["margin_sigma"])
+        total_sigma=float(bt_cal["total_sigma"])
+    total_edge_min=max(2.0,0.35*float(bt_cal["total_mae"])) if bt_cal else 2.0
+    spread_edge_min=max(1.5,0.35*float(bt_cal["margin_mae"])) if bt_cal else 1.5
 
     result={"home":ev,"away":dep,"home_score":round(home,1),"away_score":round(away,1),"total":round(total,1),"margin":round(margin,1),
             "home_win_p":round(ml_home),"away_win_p":round(ml_away),"winner":ev if margin>=0 else dep,
@@ -998,6 +1044,9 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
             "real_efficiency":real_eff,"home_profile":hp,"away_profile":ap,"home_split":hs,"away_split":aas,"league_base":base,
             "league_total":round(league_total,1),"inj_home":float(inj_home),"inj_away":float(inj_away),"model_version":BASKET_MODEL_VERSION,
             "projection_valid":bool(projection_valid),"margin_sigma":round(margin_sigma,1),
+            "calibration_source":"walk-forward" if bt_cal else "maç oynaklığı",
+            "calibration_n":int(bt_cal["n"]) if bt_cal else 0,
+            "total_edge_min":round(total_edge_min,1),"spread_edge_min":round(spread_edge_min,1),
             "explain":{
                 "league_avg":round(league,1),
                 "home_off":round(hpf,1),"home_opp_def":round(apa,1),
@@ -1013,6 +1062,7 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
         pick="Üst" if over_p>=50.0 else "Alt"; pick_p=over_p if pick=="Üst" else 100.0-over_p
         total_quality="Yeterli"
         if sample<5: total_quality="Yetersiz veri"
+        elif abs(diff)<total_edge_min: total_quality="Zayıf fark"
         elif abs(diff)>max(22.0,2.0*total_sigma): total_quality="Kontrol gerekli"
         result.update(total_line=line,total_diff=round(diff,1),total_pick=pick,total_p=round(pick_p,1),
                       total_over_p=round(over_p,1),total_sigma=round(total_sigma,1),total_quality=total_quality,
@@ -1027,6 +1077,8 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
         spread_pick=f"{ev} {float(spread_line):+g}" if home_cover_p>=50.0 else f"{dep} {-float(spread_line):+g}"
         spread_p=home_cover_p if home_cover_p>=50.0 else 100.0-home_cover_p
         spread_quality="Yeterli" if sample>=5 else "Yetersiz veri"
+        if sample>=5 and abs(cover_margin)<spread_edge_min:
+            spread_quality="Zayıf fark"
         result.update(spread_line=float(spread_line),spread_diff=round(cover_margin,1),
                       spread_pick=spread_pick,spread_p=round(spread_p,1),spread_sigma=round(margin_sigma,1),spread_quality=spread_quality)
 
@@ -1071,7 +1123,7 @@ def basket_backtest(df,min_games=6,limit=10,max_test=300):
             continue
         total_line=row.get("TotalLine") if "TotalLine" in data.columns and pd.notna(row.get("TotalLine")) else None
         spread=row.get("SpreadLine") if "SpreadLine" in data.columns and pd.notna(row.get("SpreadLine")) else None
-        r=basket_model_tahmini(before,row.HomeTeam,row.AwayTeam,row.Date,limit,0,0,total_line,spread)
+        r=basket_model_tahmini(before,row.HomeTeam,row.AwayTeam,row.Date,limit,0,0,total_line,spread,use_backtest_calibration=False)
         if not r or not r.get("projection_valid",True):
             continue
         actual_margin=float(row.HomeScore-row.AwayScore); actual_total=float(row.HomeScore+row.AwayScore)
@@ -1086,6 +1138,8 @@ def basket_backtest(df,min_games=6,limit=10,max_test=300):
              "Skor MAE":round((abs(r["home_score"]-row.HomeScore)+abs(r["away_score"]-row.AwayScore))/2,2),
              "Toplam MAE":round(abs((r["home_score"]+r["away_score"])-actual_total),2),
              "Marj MAE":round(abs(r["margin"]-actual_margin),2),
+             "Toplam Residual":round((r["home_score"]+r["away_score"])-actual_total,2),
+             "Marj Residual":round(r["margin"]-actual_margin,2),
              "Walk-forward":"OK"}
         if r.get("total_line") is not None and r.get("total_pick"):
             # Push durumunda sonuç NaN: başarı oranını bozmaz.
@@ -1113,9 +1167,37 @@ def basket_backtest_ozet(bt):
     """Market bazlı başarı, kalibrasyon ve gerçek oran varsa ROI özetleri."""
     if bt is None or bt.empty:
         return {}, pd.DataFrame(), pd.DataFrame()
-    summary={"Tahmin":len(bt),"MS Başarı":float(bt["MS Tuttu"].mean()*100),"Skor MAE":float(bt["Skor MAE"].mean()),
-             "Toplam MAE":float(bt["Toplam MAE"].mean()) if "Toplam MAE" in bt else float("nan"),
-             "Marj MAE":float(bt["Marj MAE"].mean()) if "Marj MAE" in bt else float("nan")}
+    work = bt.copy()
+    def _score_pair(v):
+        try:
+            m = re.search(r"(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)", str(v))
+            return (float(m.group(1)), float(m.group(2))) if m else (None, None)
+        except Exception:
+            return (None, None)
+    if "Toplam MAE" not in work.columns or pd.to_numeric(work.get("Toplam MAE"), errors="coerce").notna().sum() == 0:
+        vals=[]
+        for _, rr in work.iterrows():
+            ph,pa=_score_pair(rr.get("Beklenen")); ah,aa=_score_pair(rr.get("Sonuç"))
+            vals.append(abs((ph+pa)-(ah+aa)) if None not in (ph,pa,ah,aa) else float("nan"))
+        work["Toplam MAE"]=vals
+    if "Marj MAE" not in work.columns or pd.to_numeric(work.get("Marj MAE"), errors="coerce").notna().sum() == 0:
+        vals=[]
+        for _, rr in work.iterrows():
+            ph,pa=_score_pair(rr.get("Beklenen")); ah,aa=_score_pair(rr.get("Sonuç"))
+            vals.append(abs((ph-pa)-(ah-aa)) if None not in (ph,pa,ah,aa) else float("nan"))
+        work["Marj MAE"]=vals
+    bt["Toplam MAE"] = pd.to_numeric(work["Toplam MAE"], errors="coerce")
+    bt["Marj MAE"] = pd.to_numeric(work["Marj MAE"], errors="coerce")
+    total_mae = bt["Toplam MAE"].dropna().mean(); margin_mae = bt["Marj MAE"].dropna().mean()
+    summary={"Tahmin":len(bt),"MS Başarı":float(bt["MS Tuttu"].mean()*100),"Skor MAE":float(pd.to_numeric(bt["Skor MAE"],errors="coerce").mean()),
+             "Toplam MAE":float(total_mae) if pd.notna(total_mae) else 0.0,
+             "Marj MAE":float(margin_mae) if pd.notna(margin_mae) else 0.0}
+    if "Toplam Residual" in bt:
+        tr=pd.to_numeric(bt["Toplam Residual"],errors="coerce").dropna()
+        if len(tr)>=3: summary["Toplam σ"]=float(tr.std(ddof=1))
+    if "Marj Residual" in bt:
+        mr=pd.to_numeric(bt["Marj Residual"],errors="coerce").dropna()
+        if len(mr)>=3: summary["Marj σ"]=float(mr.std(ddof=1))
     if "MS ROI" in bt and bt["MS ROI"].notna().any():
         z=bt["MS ROI"].dropna(); summary["MS ROI"]=float(z.mean()*100); summary["MS ROI n"]=len(z)
     market_rows=[]
@@ -1802,7 +1884,9 @@ def basketbol_sayfasi():
                 ec1,ec2=st.columns(2)
                 ec1.write(f'{ev}: hücum **{ex.get("home_off")}** · rakip savunma **{ex.get("home_opp_def")}** → ham kalibre **{ex.get("emp_home")}**')
                 ec2.write(f'{dep}: hücum **{ex.get("away_off")}** · rakip savunma **{ex.get("away_opp_def")}** → ham kalibre **{ex.get("emp_away")}**')
-                st.caption(f'Ev avantajı {ex.get("home_edge"):+.1f} · form farkı düzeltmesi {ex.get("form_delta"):+.1f} · total σ {ex.get("total_sigma")} · margin σ {ex.get("margin_sigma")}')
+                st.caption(f'Ev avantajı {ex.get("home_edge"):+.1f} · form farkı düzeltmesi {ex.get("form_delta"):+.1f} · total σ {r.get("total_sigma")} · margin σ {r.get("margin_sigma")} · kalibrasyon: {r.get("calibration_source")}')
+                if r.get("calibration_source")=="walk-forward":
+                    st.caption(f'PAS fark eşiği · Alt/Üst ≥ {r.get("total_edge_min"):.1f} sayı · Handikap ≥ {r.get("spread_edge_min"):.1f} sayı · geçmiş örnek {r.get("calibration_n")}')
                 table=[]
                 for name,p in ((ev,r["home_profile"]),(dep,r["away_profile"])):
                     table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1)})
@@ -1829,6 +1913,10 @@ def basketbol_sayfasi():
         btab=st.session_state.get("basket_weight_table",pd.DataFrame())
         if isinstance(btab,pd.DataFrame) and not btab.empty:
             st.dataframe(btab,use_container_width=True,hide_index=True)
+        _bt_build = "fix9_mae_v2"
+        if st.session_state.get("basket_bt_build") != _bt_build:
+            st.session_state.pop("basket_last_bt", None)
+            st.session_state["basket_bt_build"] = _bt_build
         if st.button("Basketbol backtest çalıştır",type="primary",key="basket_bt_btn"):
             with st.spinner("MS + Alt/Üst + Handikap walk-forward test ediliyor..."):
                 bt=basket_backtest(df,6,form_n,max_test)
@@ -1843,6 +1931,8 @@ def basketbol_sayfasi():
             c4.metric("Marj MAE",f'{summary.get("Marj MAE",0):.2f}',help="Model sayı farkı ile gerçek maç sayı farkı arasındaki ortalama mutlak hata.")
             c5.metric("Tahmin",int(summary.get("Tahmin",0)))
             st.caption("MAE ne kadar düşükse o kadar iyi · Toplam MAE Alt/Üst skor projeksiyonunu, Marj MAE ise MS/handikap sayı farkı projeksiyonunu teşhis eder.")
+            if summary.get("Toplam σ") is not None and summary.get("Marj σ") is not None:
+                st.success(f'Canlı kalibrasyon hazır · Total residual σ ≈ {summary["Toplam σ"]:.2f} · Marj residual σ ≈ {summary["Marj σ"]:.2f}. Bu değerler canlı Alt/Üst ve handikap güvenlerinde kullanılacak.')
             if "MS ROI" in summary:
                 st.metric("MS ROI",f'%{summary["MS ROI"]:+.1f}',help=f'Gerçek geçmiş ML oranı bulunan {summary.get("MS ROI n",0)} maç.')
             else:
