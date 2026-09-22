@@ -1445,8 +1445,37 @@ def basketbol_sayfasi():
             st.caption("✅ Odds API key aktif")
 
     api_key = get_app_api_key()
-    c1,c2,c3 = st.columns([2,1,1])
-    league = c1.selectbox("Basketbol ligi", ["NBA","WNBA","NCAA","EuroLeague"], key="basket_league")
+    c1,c2,c3 = st.columns([2.4,1,1])
+    basket_leagues = [
+        "🇪🇺 EuroLeague",
+        "🇹🇷 Türkiye BSL",
+        "🇹🇷 Cumhurbaşkanlığı Kupası",
+        "🇪🇸 İspanya ACB",
+        "🇮🇹 İtalya LBA",
+        "🇩🇪 Almanya BBL",
+        "🇫🇷 Fransa Pro A",
+        "🇬🇷 Yunanistan GBL",
+        "🇱🇹 Litvanya LKL",
+        "🇮🇱 İsrail Winner League",
+        "🌍 ABA League",
+        "🇺🇸 NBA",
+        "🇺🇸 WNBA",
+        "🇺🇸 NCAA",
+    ]
+    league_label = c1.selectbox("Basketbol ligi", basket_leagues, key="basket_league_v6")
+    league_alias = {
+        "🇪🇺 EuroLeague":"EuroLeague", "🇹🇷 Türkiye BSL":"Türkiye BSL",
+        "🇹🇷 Cumhurbaşkanlığı Kupası":"Cumhurbaşkanlığı Kupası",
+        "🇪🇸 İspanya ACB":"İspanya ACB", "🇮🇹 İtalya LBA":"İtalya LBA",
+        "🇩🇪 Almanya BBL":"Almanya BBL", "🇫🇷 Fransa Pro A":"Fransa Pro A",
+        "🇬🇷 Yunanistan GBL":"Yunanistan GBL", "🇱🇹 Litvanya LKL":"Litvanya LKL",
+        "🇮🇱 İsrail Winner League":"İsrail Winner League", "🌍 ABA League":"ABA League",
+        "🇺🇸 NBA":"NBA", "🇺🇸 WNBA":"WNBA", "🇺🇸 NCAA":"NCAA",
+    }
+    league = league_alias[league_label]
+    # Yalnızca The Odds API'nin gerçekten desteklediği basketbol sport key'leri kullanılır.
+    # Avrupa ülke liglerine sahte key verilmez; menüde görünürler ve veri sağlayıcısı
+    # bağlanana kadar açık bir durum mesajı verirler.
     sport_map={"NBA":"basketball_nba","WNBA":"basketball_wnba","EuroLeague":"basketball_euroleague","NCAA":"basketball_ncaab"}
     region=c2.selectbox("Odds bölgesi",["eu","us","uk"],key="basket_region")
     form_n=c3.selectbox("Form",[5,8,10,12],index=2,key="basket_form_n_global")
@@ -1455,11 +1484,14 @@ def basketbol_sayfasi():
         st.warning("Güncel bülten için ODDS API KEY gerekli. Basketbol ekranındaki API Key alanından girebilirsin.")
     if league in ("NBA", "EuroLeague"):
         st.caption("Geçmiş veri anahtarsız otomatik: NBA → NBA Stats · EuroLeague → resmi EuroLeague feed")
-    else:
+    elif league in sport_map:
         st.info(f"{league} bülteni/oranları The Odds API'den gelir; geçmiş model sağlayıcısı bu sürümde NBA ve EuroLeague için aktiftir.")
+    else:
+        extra = " · Nötr saha/kupa olarak modellenir." if league == "Cumhurbaşkanlığı Kupası" else ""
+        st.info(f"{league} YapAiKupon lig listesine eklendi.{extra} The Odds API bu organizasyon için resmi basketbol sport key sunmadığından sahte key kullanılmıyor; otomatik bülten/oran sağlayıcısı bağlanana kadar analiz başlatılmaz.")
 
     events=[]; err=""; quota={}
-    if api_key:
+    if api_key and league in sport_map:
         events,err,quota=basket_odds_canli(api_key,sport_map[league],region)
         if err: st.warning(err)
         else:
@@ -9327,7 +9359,7 @@ with st.sidebar:
             )
         st.session_state["koyu_mod"] = basket_koyu_mod
         st.markdown("### 🏀 Basketbol")
-        st.caption("Basketbol kontrolleri ve analiz sonuçları ana ekranda. Spor seçimi burada kalır.")
+        st.caption("Basketbol kontrolleri ve analiz sonuçları ana ekranda. Futbola özel Oran Hassasiyeti basketbolda gizlidir.")
 
 if spor_modu == "🏀 Basketbol":
     uygula_tema_css(bool(st.session_state.get("koyu_mod", False)))
