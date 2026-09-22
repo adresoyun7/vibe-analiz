@@ -713,7 +713,7 @@ def backtest_kaydi(row, target, t):
 # ==========================================================
 # BASKETBOL MOTORU 1.0 — FORM + PACE + ORTG/DRTG + LINE + BACKTEST
 # ==========================================================
-BASKET_MODEL_VERSION = "2026.09.22.score-zero-fix2"
+BASKET_MODEL_VERSION = "2026.09.22.league-calibrated-score-v3"
 
 
 def basket_veri_hazirla(df):
@@ -888,87 +888,119 @@ def basket_total_belirsizlik(hp, ap, base):
     return max(9.0,min(22.0,sd))
 
 def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None):
+    """Lig ortalamasına kalibre edilmiş basketbol skor modeli.
+
+    Temel fikir: ham son-10 sayı ortalamalarını doğrudan toplamak yerine takımın
+    hücum/savunmasını lig ortalamasına göre oranlar. Böylece yüksek skorlu kısa
+    seriler toplam projeksiyonunu tek başına 180+ seviyesine taşıyamaz.
+    """
     df=basket_veri_hazirla(df)
     if df.empty:return None
     base=basket_lig_tabanlari(df,cutoff); strength=basket_rakip_gucu(df,cutoff)
     hp=basket_form_profili(df,ev,cutoff,limit,None,strength); ap=basket_form_profili(df,dep,cutoff,limit,None,strength)
     hs=basket_form_profili(df,ev,cutoff,min(limit,8),"home",strength); aas=basket_form_profili(df,dep,cutoff,min(limit,8),"away",strength)
     if hp is None or ap is None:return None
-    def blend(gen,split,key,k=5):
-        gv=gen.get(key,float("nan")); sv=split.get(key,float("nan")) if split else float("nan")
-        if not math.isfinite(float(gv)): return float("nan")
-        if not math.isfinite(float(sv)): return float(gv)
-        w=split["games"]/(split["games"]+k); return gv*(1-w)+sv*w
-    hpf,hpa=blend(hp,hs,"pf"),blend(hp,hs,"pa"); apf,apa=blend(ap,aas,"pf"),blend(ap,aas,"pa")
-    real_eff=all(math.isfinite(float(v)) for v in (hp.get("pace",float("nan")),ap.get("pace",float("nan")),hp.get("ortg",float("nan")),ap.get("ortg",float("nan"))))
+
+    def blend(gen,split,key,k=7):
+        gv=float(gen.get(key,float("nan"))); sv=float(split.get(key,float("nan"))) if split else float("nan")
+        if not math.isfinite(gv): return float("nan")
+        if not math.isfinite(sv): return gv
+        # Saha split'i küçük örnekte genel forma karşı muhafazakâr tut.
+        w=min(.55, float(split["games"])/(float(split["games"])+k))
+        return gv*(1-w)+sv*w
+
+    hpf,hpa=blend(hp,hs,"pf"),blend(hp,hs,"pa")
+    apf,apa=blend(ap,aas,"pf"),blend(ap,aas,"pa")
+    league=float(base["team_points"])
+    if not math.isfinite(league) or league < 40:
+        return None
+
+    # --- Lig-normalize skor modeli ---
+    # Hücum ve rakip savunma lig ortalamasına göre çarpan olarak değerlendirilir.
+    # Geometrik birleşim, iki uç değerin aritmetik ortalamayı şişirmesini azaltır.
+    def expected_points(off, opp_allowed):
+        if not (math.isfinite(float(off)) and math.isfinite(float(opp_allowed))): return float("nan")
+        off_ratio=max(.72,min(1.28,float(off)/league))
+        def_ratio=max(.72,min(1.28,float(opp_allowed)/league))
+        raw=league*math.sqrt(off_ratio*def_ratio)
+        # Küçük örnek ve kısa dönem formunu lig ortalamasına shrink et.
+        return league + .72*(raw-league)
+
+    empirical_home=expected_points(hpf,apa)
+    empirical_away=expected_points(apf,hpa)
+
+    # Gerçek possession/advanced box-score varsa ikinci bağımsız projeksiyon.
+    real_eff=all(math.isfinite(float(v)) for v in (
+        hp.get("pace",float("nan")),ap.get("pace",float("nan")),
+        hp.get("ortg",float("nan")),ap.get("ortg",float("nan")),
+        hp.get("drtg",float("nan")),ap.get("drtg",float("nan"))))
+    pace=float("nan")
     if real_eff:
-        pace=.45*hp["pace"]+.45*ap["pace"]+.10*base["pace"]
-        h_off=hp["ortg"]; a_off=ap["ortg"]; h_def=hp["drtg"]; a_def=ap["drtg"]
-        league_eff=base["ortg"]
-        h_eff=league_eff+.55*(h_off-league_eff)+.45*(a_def-league_eff)
-        a_eff=league_eff+.55*(a_off-league_eff)+.45*(h_def-league_eff)
-        home=pace*h_eff/100; away=pace*a_eff/100
+        # Pace de lig ortalamasına shrink edilir; iki takımın son dönem temposu tek
+        # başına tahmini aşırı oynatmasın.
+        raw_pace=.5*float(hp["pace"])+.5*float(ap["pace"])
+        pace=float(base["pace"])+.65*(raw_pace-float(base["pace"]))
+        league_eff=float(base["ortg"])
+        h_eff=league_eff*math.sqrt(max(.75,min(1.25,float(hp["ortg"])/league_eff))*max(.75,min(1.25,float(ap["drtg"])/league_eff)))
+        a_eff=league_eff*math.sqrt(max(.75,min(1.25,float(ap["ortg"])/league_eff))*max(.75,min(1.25,float(hp["drtg"])/league_eff)))
+        adv_home=pace*h_eff/100.0; adv_away=pace*a_eff/100.0
+        # Advanced veri faydalı ama kısa dönem box-score hatalarına karşı skor
+        # modeli ana ağırlığı korur.
+        home=.65*empirical_home+.35*adv_home
+        away=.65*empirical_away+.35*adv_away
     else:
-        pace=float("nan"); league=base["team_points"]
-        home=league+.55*(hpf-league)+.45*(apa-league)
-        away=league+.55*(apf-league)+.45*(hpa-league)
-    edge=max(-7,min(7,base["home_edge"])); home+=edge/2; away-=edge/2
-    form_delta=max(-5,min(5,(hp["adj_margin"]-ap["adj_margin"])*.10)); home+=form_delta/2; away-=form_delta/2
-    # injury adjustment: negatif değer takım beklenen skorunu düşürür, pozitif artırır.
+        home,away=empirical_home,empirical_away
+
+    # Ev sahibi avantajı toplam sayıyı şişirmesin: yalnızca iki takım arasında dağıt.
+    edge=max(-6.0,min(6.0,float(base["home_edge"])))
+    home+=edge/2.0; away-=edge/2.0
+
+    # Rakip gücü ayarlı form sadece margin'i ince ayarlar. Toplamı değiştirmez.
+    form_delta=max(-4.0,min(4.0,(float(hp["adj_margin"])-float(ap["adj_margin"]))*0.08))
+    home+=form_delta/2.0; away-=form_delta/2.0
+
+    # Sakatlık etkisi kullanıcının/modelin doğrudan sayı ayarıdır.
     home+=float(inj_home); away+=float(inj_away)
-    # Verimlilik modeli bozuk/eksik box-score nedeniyle gerçek skor seviyesinden
-    # koparsa yakın dönem sayı profiline geri çek. Bu özellikle tüm maçların
-    # sistematik olarak Alt görünmesini engeller.
-    league=base["team_points"]
-    empirical_home=league+.55*(hpf-league)+.45*(apa-league)
-    empirical_away=league+.55*(apf-league)+.45*(hpa-league)
-    empirical_home+=edge/2+form_delta/2+float(inj_home)
-    empirical_away-=edge/2+form_delta/2-float(inj_away)
-    empirical_total=empirical_home+empirical_away
-    projected_total=home+away
-    if real_eff and math.isfinite(empirical_total) and abs(projected_total-empirical_total)>10.0:
-        # İki bağımsız projeksiyonu harmanla; tek bir hatalı possession/efficiency
-        # kaynağının toplam marketini domine etmesine izin verme.
-        home=.5*home+.5*empirical_home
-        away=.5*away+.5*empirical_away
 
     total=home+away; margin=home-away; sample=min(hp["games"],ap["games"])
-    # Bozuk veri/fallback ile 0 veya basketbol için imkânsız skor üretildiyse
-    # hiçbir markette sahte güven yüzdesi üretme.
-    projection_valid = all(math.isfinite(float(v)) for v in (home, away, total)) and home >= 35 and away >= 35 and total >= 80
+    # Lig tabanına göre veri kalite sınırı. 80 sabiti yerine lig seviyesine göre
+    # anormal projeksiyonları engelle.
+    league_total=2.0*league
+    projection_valid=(all(math.isfinite(float(v)) for v in (home,away,total)) and
+                      home>=35 and away>=35 and
+                      .70*league_total <= total <= 1.30*league_total)
     ml_home=basket_sigmoid(margin) if projection_valid else 50.0
     ml_away=100-ml_home
-    uncertainty=max(6.5,13.0-min(sample,10)*.45)
+    uncertainty=max(7.0,13.5-min(sample,10)*.40)
     total_sigma=basket_total_belirsizlik(hp,ap,base)
+
     result={"home":ev,"away":dep,"home_score":round(home,1),"away_score":round(away,1),"total":round(total,1),"margin":round(margin,1),
             "home_win_p":round(ml_home),"away_win_p":round(ml_away),"winner":ev if margin>=0 else dep,
             "confidence":round(max(50,max(ml_home,ml_away))),"pace":round(pace,1) if math.isfinite(pace) else None,
             "real_efficiency":real_eff,"home_profile":hp,"away_profile":ap,"home_split":hs,"away_split":aas,"league_base":base,
-            "inj_home":float(inj_home),"inj_away":float(inj_away),"model_version":BASKET_MODEL_VERSION,
+            "league_total":round(league_total,1),"inj_home":float(inj_home),"inj_away":float(inj_away),"model_version":BASKET_MODEL_VERSION,
             "projection_valid":bool(projection_valid)}
+
     if total_line is not None and math.isfinite(float(total_line)) and float(total_line)>0 and projection_valid:
         line=float(total_line); diff=total-line
-        # P(actual total > line) = Phi((model_total-line)/sigma).
-        # Eski sigmoid hesabı büyük farklarda kolayca %100'e yuvarlanıyordu.
         over_p=basket_normal_cdf_pct(diff,total_sigma)
-        pick="Üst" if over_p>=50.0 else "Alt"
-        pick_p=over_p if pick=="Üst" else 100.0-over_p
-        # Çok az geçmişte veya model piyasa çizgisinden olağandışı uzaksa
-        # tahmini kesin göstermeyip veri kalitesi uyarısı üret.
+        pick="Üst" if over_p>=50.0 else "Alt"; pick_p=over_p if pick=="Üst" else 100.0-over_p
         total_quality="Yeterli"
         if sample<5: total_quality="Yetersiz veri"
-        elif abs(diff)>30: total_quality="Kontrol gerekli"
+        elif abs(diff)>max(22.0,2.0*total_sigma): total_quality="Kontrol gerekli"
         result.update(total_line=line,total_diff=round(diff,1),total_pick=pick,total_p=round(pick_p,1),
                       total_over_p=round(over_p,1),total_sigma=round(total_sigma,1),total_quality=total_quality,
-                      empirical_total=round(empirical_total,1) if math.isfinite(empirical_total) else None)
+                      empirical_total=round(empirical_home+empirical_away,1))
     elif total_line is not None and math.isfinite(float(total_line)) and float(total_line)>0:
-        result.update(total_line=float(total_line), total_pick=None, total_p=None, total_diff=None,
-                      total_sigma=round(total_sigma,1), total_quality="Model skoru hesaplanamadı")
+        result.update(total_line=float(total_line),total_pick=None,total_p=None,total_diff=None,
+                      total_sigma=round(total_sigma,1),total_quality="Model skoru hesaplanamadı")
+
     if spread_line is not None and math.isfinite(float(spread_line)) and projection_valid:
-        # SpreadLine ev takımının handikapı: -5.5 ise evin 6+ farkla kazanması gerekir.
-        cover_margin=margin+float(spread_line); p=basket_sigmoid(cover_margin,uncertainty*.75)
-        result.update(spread_line=float(spread_line),spread_diff=round(cover_margin,1),spread_pick=f"{ev} {float(spread_line):+g}" if cover_margin>=0 else f"{dep} {-float(spread_line):+g}",spread_p=round(p if cover_margin>=0 else 100-p))
-    # 1H / quarters only when actual split history exists.
+        cover_margin=margin+float(spread_line); p=basket_sigmoid(cover_margin,uncertainty*.80)
+        result.update(spread_line=float(spread_line),spread_diff=round(cover_margin,1),
+                      spread_pick=f"{ev} {float(spread_line):+g}" if cover_margin>=0 else f"{dep} {-float(spread_line):+g}",
+                      spread_p=round(p if cover_margin>=0 else 100-p))
+
     if all(k in hp and k in ap for k in ("h1_pf","h1_pa")):
         h1h=.5*(hp["h1_pf"]+ap["h1_pa"])+edge*.25; h1a=.5*(ap["h1_pf"]+hp["h1_pa"])-edge*.25
         result.update(h1_home=round(h1h,1),h1_away=round(h1a,1),h1_total=round(h1h+h1a,1))
@@ -979,7 +1011,6 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
             quarters.append((q,round(qh,1),round(qa,1)))
     result["quarters"]=quarters
     return result
-
 
 def basket_backtest(df,min_games=6,limit=10,max_test=300):
     data=basket_veri_hazirla(df)
