@@ -887,6 +887,23 @@ def basket_total_belirsizlik(hp, ap, base):
     # Basketbol toplamlarında aşırı kesinlik üretmemek için makul veri tabanı.
     return max(9.0,min(22.0,sd))
 
+def basket_margin_belirsizlik(hp, ap):
+    """MS/handikap için yakın dönem sayı farkı oynaklığından predictive sigma."""
+    vals=[]
+    for prof in (hp, ap):
+        g=prof.get("matches") if prof else None
+        if g is not None and not g.empty and "Margin" in g:
+            vals.extend(pd.to_numeric(g["Margin"], errors="coerce").dropna().astype(float).tolist())
+    if len(vals) >= 4:
+        ser=pd.Series(vals,dtype=float)
+        q1,q3=ser.quantile(.25),ser.quantile(.75); iqr=max(0.0,float(q3-q1))
+        if iqr>0: ser=ser[(ser>=q1-1.5*iqr)&(ser<=q3+1.5*iqr)]
+        sd=float(ser.std(ddof=1)) if len(ser)>=3 else float("nan")
+    else:
+        sd=float("nan")
+    if not math.isfinite(sd): sd=11.5
+    return max(7.5,min(20.0,sd))
+
 def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None):
     """Lig ortalamasına kalibre edilmiş basketbol skor modeli.
 
@@ -969,9 +986,10 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
     projection_valid=(all(math.isfinite(float(v)) for v in (home,away,total)) and
                       home>=35 and away>=35 and
                       .70*league_total <= total <= 1.30*league_total)
-    ml_home=basket_sigmoid(margin) if projection_valid else 50.0
+    margin_sigma=basket_margin_belirsizlik(hp,ap)
+    # MS de handikap gibi aynı skor-farkı dağılımından gelir; marketler birbiriyle tutarlı kalır.
+    ml_home=basket_normal_cdf_pct(margin, margin_sigma) if projection_valid else 50.0
     ml_away=100-ml_home
-    uncertainty=max(7.0,13.5-min(sample,10)*.40)
     total_sigma=basket_total_belirsizlik(hp,ap,base)
 
     result={"home":ev,"away":dep,"home_score":round(home,1),"away_score":round(away,1),"total":round(total,1),"margin":round(margin,1),
@@ -979,7 +997,15 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
             "confidence":round(max(50,max(ml_home,ml_away))),"pace":round(pace,1) if math.isfinite(pace) else None,
             "real_efficiency":real_eff,"home_profile":hp,"away_profile":ap,"home_split":hs,"away_split":aas,"league_base":base,
             "league_total":round(league_total,1),"inj_home":float(inj_home),"inj_away":float(inj_away),"model_version":BASKET_MODEL_VERSION,
-            "projection_valid":bool(projection_valid)}
+            "projection_valid":bool(projection_valid),"margin_sigma":round(margin_sigma,1),
+            "explain":{
+                "league_avg":round(league,1),
+                "home_off":round(hpf,1),"home_opp_def":round(apa,1),
+                "away_off":round(apf,1),"away_opp_def":round(hpa,1),
+                "emp_home":round(empirical_home,1),"emp_away":round(empirical_away,1),
+                "home_edge":round(edge,1),"form_delta":round(form_delta,1),
+                "sample":int(sample),"total_sigma":round(total_sigma,1),"margin_sigma":round(margin_sigma,1)
+            }}
 
     if total_line is not None and math.isfinite(float(total_line)) and float(total_line)>0 and projection_valid:
         line=float(total_line); diff=total-line
@@ -996,10 +1022,13 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
                       total_sigma=round(total_sigma,1),total_quality="Model skoru hesaplanamadı")
 
     if spread_line is not None and math.isfinite(float(spread_line)) and projection_valid:
-        cover_margin=margin+float(spread_line); p=basket_sigmoid(cover_margin,uncertainty*.80)
+        cover_margin=margin+float(spread_line)
+        home_cover_p=basket_normal_cdf_pct(cover_margin, margin_sigma)
+        spread_pick=f"{ev} {float(spread_line):+g}" if home_cover_p>=50.0 else f"{dep} {-float(spread_line):+g}"
+        spread_p=home_cover_p if home_cover_p>=50.0 else 100.0-home_cover_p
+        spread_quality="Yeterli" if sample>=5 else "Yetersiz veri"
         result.update(spread_line=float(spread_line),spread_diff=round(cover_margin,1),
-                      spread_pick=f"{ev} {float(spread_line):+g}" if cover_margin>=0 else f"{dep} {-float(spread_line):+g}",
-                      spread_p=round(p if cover_margin>=0 else 100-p))
+                      spread_pick=spread_pick,spread_p=round(spread_p,1),spread_sigma=round(margin_sigma,1),spread_quality=spread_quality)
 
     if all(k in hp and k in ap for k in ("h1_pf","h1_pa")):
         h1h=.5*(hp["h1_pf"]+ap["h1_pa"])+edge*.25; h1a=.5*(ap["h1_pf"]+hp["h1_pa"])-edge*.25
@@ -1188,13 +1217,20 @@ def basket_guncel_adaylar(df, events, limit=10):
             continue
         r=basket_model_tahmini(df,ev,dep,cutoff,limit,0,0,mk["total_line"],mk["spread_line"])
         if not r: continue
-        picks=[("MS",r["winner"],r["confidence"])]
-        if r.get("total_pick"): picks.append(("A/U",f'{r["total_line"]:g} {r["total_pick"]}',r["total_p"]))
-        if r.get("spread_pick"): picks.append(("Handikap",r["spread_pick"],r["spread_p"]))
-        best=max(picks,key=lambda x:x[2])
-        rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":best[0],"Ana Tahmin":best[1],"Güven":best[2],
+        # Pas filtresi: zayıf sinyali aday diye zorla gösterme.
+        picks=[]
+        if r.get("confidence",0) >= 60: picks.append(("MS",r["winner"],r["confidence"]))
+        if r.get("total_pick") and r.get("total_quality")=="Yeterli" and r.get("total_p",0) >= 60:
+            picks.append(("A/U",f'{r["total_line"]:g} {r["total_pick"]}',r["total_p"]))
+        if r.get("spread_pick") and r.get("spread_quality")=="Yeterli" and r.get("spread_p",0) >= 60:
+            picks.append(("Handikap",r["spread_pick"],r["spread_p"]))
+        if picks:
+            best=max(picks,key=lambda x:x[2]); market,tahmin,guven=best; durum="Hazır"
+        else:
+            market,tahmin,guven="PAS","Avantaj yok",max([r.get("confidence",50),r.get("total_p",50) or 50,r.get("spread_p",50) or 50]); durum="Pas · %60+ kalibre sinyal yok"
+        rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":market,"Ana Tahmin":tahmin,"Güven":round(float(guven),1),
                      "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
-                     "Ev Handikap":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],"Durum":"Hazır"})
+                     "Ev Handikap":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],"Durum":durum})
     return pd.DataFrame(rows)
 
 
@@ -1466,7 +1502,7 @@ def basketbol_sayfasi():
                 st.dataframe(ready,use_container_width=True,hide_index=True)
             bad=aday[~aday["Durum"].eq("Hazır")] if "Durum" in aday else pd.DataFrame()
             if not bad.empty:
-                with st.expander(f"Takım adı eşleşmeyen {len(bad)} maç"):
+                with st.expander(f"Analiz dışı / pas {len(bad)} maç"):
                     st.dataframe(bad[["Maç","Durum"]],use_container_width=True,hide_index=True)
         elif not analiz:
             st.info("🚀 Analizi Başlat'a bas. CSV yüklemen gerekmiyor.")
@@ -1502,8 +1538,21 @@ def basketbol_sayfasi():
         x3.metric("MS",f'{r["winner"]} %{r["confidence"]}')
         x4.metric("Pace",r["pace"] if r["pace"] is not None else "Skor modeli")
         if not r["real_efficiency"]: st.caption("Gerçek possession box-score alanı yoksa Pace/ORtg/DRtg yerine otomatik skor-form modeli kullanılır.")
-        if r.get("total_pick"): st.success(f'Alt/Üst: {r["total_line"]:g} {r["total_pick"]} · %{r["total_p"]} · model farkı {r["total_diff"]:+.1f}')
-        if r.get("spread_pick"): st.success(f'Handikap: {r["spread_pick"]} · %{r["spread_p"]} · model farkı {r["spread_diff"]:+.1f}')
+        if r.get("total_pick"):
+            msg=f'Alt/Üst: {r["total_line"]:g} {r["total_pick"]} · %{r["total_p"]} · model farkı {r["total_diff"]:+.1f} · σ≈{r.get("total_sigma")}'
+            (st.success if r.get("total_p",0)>=60 and r.get("total_quality")=="Yeterli" else st.info)(msg + ("" if r.get("total_p",0)>=60 else " · PAS"))
+        if r.get("spread_pick"):
+            msg=f'Handikap: {r["spread_pick"]} · %{r["spread_p"]} · model farkı {r["spread_diff"]:+.1f} · σ≈{r.get("spread_sigma")}'
+            (st.success if r.get("spread_p",0)>=60 and r.get("spread_quality")=="Yeterli" else st.info)(msg + ("" if r.get("spread_p",0)>=60 else " · PAS"))
+        if r.get("confidence",0)<60: st.info(f'MS: {r["winner"]} %{r["confidence"]} · PAS (%60 altı)')
+
+        ex=r.get("explain",{})
+        with st.expander("🧮 Skor hesabı nasıl oluştu?", expanded=False):
+            st.write(f'Lig takım başı ortalama: **{ex.get("league_avg")}** · örnek: **{ex.get("sample")} maç**')
+            ec1,ec2=st.columns(2)
+            ec1.write(f'{ev}: hücum **{ex.get("home_off")}** · rakip savunma **{ex.get("home_opp_def")}** → ham kalibre **{ex.get("emp_home")}**')
+            ec2.write(f'{dep}: hücum **{ex.get("away_off")}** · rakip savunma **{ex.get("away_opp_def")}** → ham kalibre **{ex.get("emp_away")}**')
+            st.caption(f'Ev avantajı {ex.get("home_edge"):+.1f} · form farkı düzeltmesi {ex.get("form_delta"):+.1f} · total σ {ex.get("total_sigma")} · margin σ {ex.get("margin_sigma")}')
         table=[]
         for name,p in ((ev,r["home_profile"]),(dep,r["away_profile"])):
             table.append({"Takım":name,"Maç":p["games"],"Attığı":round(p["pf"],1),"Yediği":round(p["pa"],1),"Rakip ayarlı fark":round(p["adj_margin"],1),"Kazanma %":round(p["win_pct"],1)})
@@ -1519,6 +1568,14 @@ def basketbol_sayfasi():
             else:
                 x1,x2,x3=st.columns(3); x1.metric("MS başarı",f'%{bt["MS Tuttu"].mean()*100:.1f}'); x2.metric("Skor MAE",f'{bt["Skor MAE"].mean():.2f}'); x3.metric("Tahmin",len(bt))
                 if "A/U Tuttu" in bt and bt["A/U Tuttu"].notna().any(): st.metric("Alt/Üst başarı",f'%{bt["A/U Tuttu"].dropna().mean()*100:.1f}')
+                # Güven kalibrasyonu: %60+ dediğimiz tahminler gerçekten ne kadar tutuyor?
+                cal=[]
+                for lo,hi in ((50,60),(60,70),(70,80),(80,101)):
+                    z=bt[(pd.to_numeric(bt["Güven"],errors="coerce")>=lo)&(pd.to_numeric(bt["Güven"],errors="coerce")<hi)]
+                    if len(z): cal.append({"MS güven bandı":f"%{lo}-{hi-1}","Tahmin":len(z),"Gerçek başarı %":round(z["MS Tuttu"].mean()*100,1)})
+                if cal:
+                    st.markdown("#### 🎯 Güven kalibrasyonu")
+                    st.dataframe(pd.DataFrame(cal),use_container_width=True,hide_index=True)
                 st.dataframe(bt.sort_values("Tarih",ascending=False),use_container_width=True,hide_index=True)
 
 def kart_takim_adi(ad):
