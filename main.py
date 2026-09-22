@@ -9362,6 +9362,26 @@ with st.sidebar:
         st.caption("Basketbol kontrolleri ve analiz sonuçları ana ekranda. Futbola özel Oran Hassasiyeti basketbolda gizlidir.")
 
 if spor_modu == "🏀 Basketbol":
+    # Futbola ait ana analiz paneli dosyanın daha üst bölümünde oluşturuluyor.
+    # Basketbol modunda bu panel ve futbol tarih/lig/sezon paneli tamamen gizlenir.
+    st.markdown(
+        """
+        <style>
+        .st-key-sticky_analysis_controls,
+        div.st-key-sticky_analysis_controls,
+        .st-key-tarih_lig_sezon_paneli,
+        div.st-key-tarih_lig_sezon_paneli {
+            display:none !important;
+            height:0 !important;
+            min-height:0 !important;
+            margin:0 !important;
+            padding:0 !important;
+            border:0 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     uygula_tema_css(bool(st.session_state.get("koyu_mod", False)))
     basketbol_sayfasi()
     legal_footer()
