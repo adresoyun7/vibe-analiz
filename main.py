@@ -2958,7 +2958,12 @@ def bulten_cek(key, kodlar, t):
     for secili_kod in kodlar:
         k = odds_lig_kodu_coz(key, secili_kod)
         if not k:
-            st.session_state["odds_api_last_error"] = f"Lig kodu çözülemedi: {secili_kod}"
+            # Opsiyonel/otomatik çözülen kupalar The Odds API kataloğunda yoksa
+            # bunu tüm bülteni başarısız yapan bir API hatası sayma. Sadece o
+            # organizasyonu atla; diğer seçili ligler normal analiz edilmeye devam eder.
+            unsupported = st.session_state.setdefault("odds_api_unsupported_leagues", [])
+            if secili_kod not in unsupported:
+                unsupported.append(secili_kod)
             continue
         try:
             r = requests.get(
@@ -3251,6 +3256,7 @@ def odds_cache_key(kod, tarih, api_key=None):
 def bulten_guncel_al(key, kodlar, t, zorla_yenile=False):
     """Yalnızca başarılı yanıtlar 6 saat saklanır; hatada son başarılı veri korunur."""
     key = get_app_api_key() or key
+    st.session_state["odds_api_unsupported_leagues"] = []
     cache = st.session_state.setdefault("odds_league_cache", {})
     now = time.time()
     parts, errors = [], []
@@ -11974,6 +11980,15 @@ if analiz_btn:
         with st.spinner("📊 Bülten hazırlanıyor (cache varsa API kullanılmaz) ve analiz ediliyor..."):
             gecmis = futbol_veri_motoru(tuple(yillar))
             bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+            _desteklenmeyen_kupalar = st.session_state.get("odds_api_unsupported_leagues", [])
+            if _desteklenmeyen_kupalar:
+                _adlar = {
+                    "auto_netherlands_cup": "Hollanda Kupası (KNVB Beker)",
+                    "auto_scotland_cup": "İskoçya Kupası (Scottish Cup)",
+                }
+                st.info("ℹ️ The Odds API kataloğunda bulunmayan organizasyonlar atlandı: " +
+                        ", ".join(_adlar.get(x, x) for x in _desteklenmeyen_kupalar) +
+                        ". Diğer seçili liglerin analizi devam ediyor.")
             st.session_state["son_gecmis_satir_sayisi"] = 0 if getattr(gecmis, "empty", True) else len(gecmis)
             try:
                 st.session_state["son_gecmis_kaynak_hatalari"] = list(gecmis.attrs.get("kaynak_hatalari", []))
