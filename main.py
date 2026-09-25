@@ -10440,6 +10440,7 @@ def _spor_toto_api_kodlari(api_key, normal_kodlar):
 FIX19_SPOR_TOTO = "smart-national-slate-v1"
 FIX20_KOLON_ONERISI = "weighted-coverage-95-v1"
 FIX21_KOLON_FREKANSI = "probability-frequency-hamilton-v1"
+FIX22_PREFIX_FREKANSI = "probability-balanced-prefix-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10818,6 +10819,46 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             secilen_imzalar = _frekans_dengele(secilen_imzalar)
 
+            # FIX22: sadece 64 kolonun toplamını değil, ilk N kolonun kendisini de
+            # olasılık dağılımına yaklaştır. Her adımda, o ana kadarki kolonlarda
+            # en eksik temsil edilen 1/X/2 taraflarını en iyi tamamlayan kalan kolon seçilir.
+            def _prefix_frekans_sirala(imzalar):
+                if len(imzalar) <= 2:
+                    return imzalar
+                kalan = list(imzalar)
+                secilen = [kalan.pop(0)]  # ana kolon her zaman 1.
+                toplam_n = len(imzalar)
+
+                # Her maç için nihai model olasılıklarını normalize et.
+                probs = []
+                for r0 in tamam:
+                    dag = r0.get('spor_toto_dagilim') or {}
+                    vals = {t: max(0.0, float(dag.get(t, 0) or 0)) for t in ('1','X','2')}
+                    s = sum(vals.values()) or 1.0
+                    probs.append({t: vals[t]/s for t in ('1','X','2')})
+
+                while kalan:
+                    yeni_n = len(secilen) + 1
+                    mevcut = []
+                    for idx in range(len(tamam)):
+                        mevcut.append({t: sum(1 for row in secilen if row[idx] == t) for t in ('1','X','2')})
+
+                    def skor(cand):
+                        hata = 0.0
+                        for idx, pmap in enumerate(probs):
+                            for t in ('1','X','2'):
+                                c = mevcut[idx][t] + (1 if cand[idx] == t else 0)
+                                hedef = pmap[t] * yeni_n
+                                # squared deficit/excess: every prefix is pushed toward target frequency
+                                hata += (c - hedef) ** 2
+                        return hata
+
+                    best_i = min(range(len(kalan)), key=lambda i: skor(kalan[i]))
+                    secilen.append(kalan.pop(best_i))
+                return secilen
+
+            secilen_imzalar = _prefix_frekans_sirala(secilen_imzalar)
+
             kolonlar = {}
             for k, imza in enumerate(secilen_imzalar, start=1):
                 kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
@@ -10882,7 +10923,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
-            st.caption("FIX21: Her maçın 1/X/2 kolon frekansı modelin o maça ait olasılık dağılımına göre dengelenmiştir.")
+            st.caption("FIX22: Kolonlar, yalnız toplam havuzda değil ilk N kolonda da 1/X/2 model olasılıklarına yaklaşacak şekilde sıralanmıştır.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
