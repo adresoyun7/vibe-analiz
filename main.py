@@ -10441,6 +10441,7 @@ FIX19_SPOR_TOTO = "smart-national-slate-v1"
 FIX20_KOLON_ONERISI = "weighted-coverage-95-v1"
 FIX21_KOLON_FREKANSI = "probability-frequency-hamilton-v1"
 FIX22_PREFIX_FREKANSI = "probability-balanced-prefix-v1"
+FIX23_SURPRIZ_DENGESI = "row-swap-surprise-load-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10859,6 +10860,51 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             secilen_imzalar = _prefix_frekans_sirala(secilen_imzalar)
 
+            # FIX23: Maç bazlı 1/X/2 adetlerini değiştirmeden sürprizleri kolonlara yay.
+            def _surpriz_yuku_dengele(imzalar):
+                if len(imzalar) <= 2:
+                    return imzalar
+                out = [list(x) for x in imzalar]
+                probs = []
+                for r0 in tamam:
+                    dag = r0.get('spor_toto_dagilim') or {}
+                    vals = {t: max(0.0, float(dag.get(t, 0) or 0)) for t in ('1','X','2')}
+                    s = sum(vals.values()) or 1.0
+                    probs.append({t: vals[t]/s for t in ('1','X','2')})
+
+                def hy(i, sec):
+                    pmap = probs[i]
+                    pmax = max(pmap.values())
+                    return max(0.0, pmax-pmap.get(sec,0.0))/max(0.01,pmax)
+
+                def loads():
+                    return [sum(hy(i,row[i]) for i in range(len(tamam))) for row in out]
+
+                # 1. kolon ana model: dokunma. Diğer kolonlarda aynı maç içi takas.
+                for _ in range(300):
+                    y=loads()
+                    ort=sum(y[1:])/max(1,len(y)-1)
+                    heavy=sorted(range(1,len(out)),key=lambda j:y[j],reverse=True)[:16]
+                    light=sorted(range(1,len(out)),key=lambda j:y[j])[:16]
+                    best=None; gain_best=1e-12
+                    for a in heavy:
+                        for b in light:
+                            if a==b: continue
+                            for i in range(len(tamam)):
+                                sa,sb=out[a][i],out[b][i]
+                                if sa==sb: continue
+                                na=y[a]-hy(i,sa)+hy(i,sb)
+                                nb=y[b]-hy(i,sb)+hy(i,sa)
+                                gain=((y[a]-ort)**2+(y[b]-ort)**2)-((na-ort)**2+(nb-ort)**2)
+                                if gain>gain_best:
+                                    gain_best=gain; best=(a,b,i)
+                    if best is None: break
+                    a,b,i=best
+                    out[a][i],out[b][i]=out[b][i],out[a][i]
+                return [tuple(x) for x in out]
+
+            secilen_imzalar = _surpriz_yuku_dengele(secilen_imzalar)
+
             kolonlar = {}
             for k, imza in enumerate(secilen_imzalar, start=1):
                 kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
@@ -10923,7 +10969,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
-            st.caption("FIX22: Kolonlar, yalnız toplam havuzda değil ilk N kolonda da 1/X/2 model olasılıklarına yaklaşacak şekilde sıralanmıştır.")
+            st.caption("FIX23: 1/X/2 frekansları korunur; düşük olasılıklı sürpriz seçimler kolonlara dengeli dağıtılır.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
