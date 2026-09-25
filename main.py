@@ -10445,6 +10445,7 @@ FIX23_SURPRIZ_DENGESI = "row-swap-surprise-load-v1"
 FIX24_PREFIX_SURPRIZ = "prefix-hard-surprise-separation-v1"
 FIX25_FREKANS_GARANTI = "constructive-frequency-first-v1"
 FIX26_GUVEN_KORUMA = "confidence-aware-frequency-v1"
+FIX27_KOLON_DENGESI = "column-composition-swap-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10938,6 +10939,50 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                         rows[j].append(t)
                         if ciddi: yuk[j]+=1
                         bos.remove(j)
+                # FIX27: maç bazlı 1/X/2 adetlerini değiştirmeden kolon kompozisyonunu dengele.
+                # Aynı maç satırında iki kolonun hücresini takas etmek frekansları aynen korur.
+                # 1. kolon ana model olarak sabit kalır.
+                if n > 2:
+                    bek={t:sum(p[t] for p in _f25_probs) for t in ('1','X','2')}
+
+                    def _col_penalty(row):
+                        say={t:sum(1 for sec in row if sec==t) for t in ('1','X','2')}
+                        base=sum((say[t]-bek[t])**2 for t in ('1','X','2'))
+                        # X'in tek kolonda aşırı kümelenmesine ek ceza.
+                        x_over=max(0.0, say['X']-(bek['X']+1.0))
+                        return base + 3.0*(x_over**2)
+
+                    def _serious_count(row):
+                        return sum(
+                            1 for mi,sec in enumerate(row)
+                            if _f25_probs[mi].get(sec,0.0) < CIDDI_SURPRIZ_ESIGI
+                        )
+
+                    for _ in range(250):
+                        penalties=[_col_penalty(rows[j]) for j in range(n)]
+                        best=None
+                        best_gain=1e-9
+                        # Yalnız 1..N-1 kolonlarında takas; ana kolon korunur.
+                        for i in range(len(tamam)):
+                            for a in range(1,n):
+                                for b in range(a+1,n):
+                                    if rows[a][i]==rows[b][i]:
+                                        continue
+                                    before=penalties[a]+penalties[b]
+                                    rows[a][i],rows[b][i]=rows[b][i],rows[a][i]
+                                    # %20 altı iki ciddi sürprizi aynı kolona toplama.
+                                    valid=(_serious_count(rows[a])<=1 and _serious_count(rows[b])<=1)
+                                    after=_col_penalty(rows[a])+_col_penalty(rows[b])
+                                    rows[a][i],rows[b][i]=rows[b][i],rows[a][i]
+                                    gain=before-after
+                                    if valid and gain>best_gain:
+                                        best_gain=gain
+                                        best=(i,a,b)
+                        if best is None:
+                            break
+                        i,a,b=best
+                        rows[a][i],rows[b][i]=rows[b][i],rows[a][i]
+
                 return [tuple(r) for r in rows]
 
             kolonlar = {}
@@ -11016,7 +11061,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
-            st.caption("FIX26: Güçlü ana tercihler korunur; maç belirsizleştikçe 1/X/2 dağılımı genişler. %20 altı ciddi sürprizler frekansları bozmadan ayrı kolonlara dağıtılır.")
+            st.caption("FIX27: Güçlü tercihler ve maç bazlı 1/X/2 adetleri korunur; aynı maç içi kolon takaslarıyla X/1/2 seçimlerinin tek kolonlarda aşırı kümelenmesi azaltılır. %20 altı ciddi sürprizler ayrı tutulur.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
