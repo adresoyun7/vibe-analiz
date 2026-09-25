@@ -713,7 +713,7 @@ def backtest_kaydi(row, target, t):
 # ==========================================================
 # BASKETBOL MOTORU 1.0 — FORM + PACE + ORTG/DRTG + LINE + BACKTEST
 # ==========================================================
-BASKET_MODEL_VERSION = "2026.09.25.fix15-quarter-safe-v1"
+BASKET_MODEL_VERSION = "2026.09.25.fix16-stable-no-periods"
 
 
 def basket_veri_hazirla(df):
@@ -722,7 +722,6 @@ def basket_veri_hazirla(df):
     Zorunlu: Date, HomeTeam, AwayTeam, HomeScore, AwayScore.
     Opsiyonel takım box-score alanları (Home/Away): FGA, ORB, TO, FTA.
     Opsiyonel market: TotalLine, SpreadLine, HomeML, AwayML.
-    Opsiyonel yarı/çeyrek: HomeH1/AwayH1 veya HomeQ1..Q4/AwayQ1..Q4.
     """
     if df is None or df.empty:
         return pd.DataFrame()
@@ -736,16 +735,12 @@ def basket_veri_hazirla(df):
         "totalline":"TotalLine","total_line":"TotalLine","total":"TotalLine","ou_line":"TotalLine",
         "spreadline":"SpreadLine","spread_line":"SpreadLine","spread":"SpreadLine","home_spread":"SpreadLine",
         "homeml":"HomeML","home_ml":"HomeML","awayml":"AwayML","away_ml":"AwayML",
-        "homeh1":"HomeH1","home_h1":"HomeH1","home1h":"HomeH1","awayh1":"AwayH1","away_h1":"AwayH1","away1h":"AwayH1",
     }
     for side in ("home","away"):
         cap = side.title()
         for stat in ("fga","orb","to","fta"):
             aliases[f"{side}{stat}"] = f"{cap}{stat.upper()}"
             aliases[f"{side}_{stat}"] = f"{cap}{stat.upper()}"
-        for q in range(1,5):
-            aliases[f"{side}q{q}"] = f"{cap}Q{q}"
-            aliases[f"{side}_q{q}"] = f"{cap}Q{q}"
     rename = {}
     for col in out.columns:
         key = re.sub(r"[^a-z0-9_]+", "", str(col).strip().lower().replace(" ", "_"))
@@ -756,9 +751,8 @@ def basket_veri_hazirla(df):
     if any(c not in out.columns for c in required):
         return pd.DataFrame()
     out["Date"] = pd.to_datetime(out["Date"], errors="coerce", dayfirst=True)
-    numeric = ["HomeScore","AwayScore","TotalLine","SpreadLine","HomeML","AwayML","HomeH1","AwayH1"]
+    numeric = ["HomeScore","AwayScore","TotalLine","SpreadLine","HomeML","AwayML"]
     numeric += [f"{s}{x}" for s in ("Home","Away") for x in ("FGA","ORB","TO","FTA")]
-    numeric += [f"{s}Q{q}" for s in ("Home","Away") for q in range(1,5)]
     for c in numeric:
         if c in out:
             out[c] = pd.to_numeric(out[c], errors="coerce")
@@ -806,12 +800,6 @@ def basket_takim_maclari(df, takim, cutoff=None, limit=10, saha=None):
     x["Poss"] = [basket_possession(r, "Home" if r["IsHome"] else "Away") for _,r in x.iterrows()]
     x["ORtg"] = x.PF / pd.to_numeric(x.Poss, errors="coerce") * 100
     x["DRtg"] = x.PA / pd.to_numeric(x.Poss, errors="coerce") * 100
-    if "HomeH1" in x and "AwayH1" in x:
-        x["H1PF"] = x.HomeH1.where(x.IsHome, x.AwayH1); x["H1PA"] = x.AwayH1.where(x.IsHome, x.HomeH1)
-    for q in range(1,5):
-        hc,ac=f"HomeQ{q}",f"AwayQ{q}"
-        if hc in x and ac in x:
-            x[f"Q{q}PF"] = x[hc].where(x.IsHome,x[ac]); x[f"Q{q}PA"] = x[ac].where(x.IsHome,x[hc])
     return x.sort_values("Date", ascending=False).head(int(limit)).copy()
 
 
@@ -852,9 +840,6 @@ def basket_form_profili(df,takim,cutoff=None,limit=10,saha=None,rakip_gucu=None)
     prof={"team":takim,"games":len(g),"pf":basket_wavg(g.PF),"pa":basket_wavg(g.PA),"margin":basket_wavg(g.Margin),
           "adj_margin":basket_wavg(adj_margin),"win_pct":basket_wavg(g.Win)*100,"pace":basket_wavg(g.Poss),
           "ortg":basket_wavg(g.ORtg),"drtg":basket_wavg(g.DRtg),"matches":g}
-    if "H1PF" in g: prof.update(h1_pf=basket_wavg(g.H1PF),h1_pa=basket_wavg(g.H1PA))
-    for q in range(1,5):
-        if f"Q{q}PF" in g: prof[f"q{q}_pf"]=basket_wavg(g[f"Q{q}PF"]); prof[f"q{q}_pa"]=basket_wavg(g[f"Q{q}PA"])
     return prof
 
 
@@ -1082,15 +1067,6 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
         result.update(spread_line=float(spread_line),spread_diff=round(cover_margin,1),
                       spread_pick=spread_pick,spread_p=round(spread_p,1),spread_sigma=round(margin_sigma,1),spread_quality=spread_quality)
 
-    if all(k in hp and k in ap for k in ("h1_pf","h1_pa")):
-        h1h=.5*(hp["h1_pf"]+ap["h1_pa"])+edge*.25; h1a=.5*(ap["h1_pf"]+hp["h1_pa"])-edge*.25
-        result.update(h1_home=round(h1h,1),h1_away=round(h1a,1),h1_total=round(h1h+h1a,1))
-    quarters=[]
-    for q in range(1,5):
-        if all(f"q{q}_{x}" in hp and f"q{q}_{x}" in ap for x in ("pf","pa")):
-            qh=.5*(hp[f"q{q}_pf"]+ap[f"q{q}_pa"]); qa=.5*(ap[f"q{q}_pf"]+hp[f"q{q}_pa"])
-            quarters.append((q,round(qh,1),round(qa,1)))
-    result["quarters"]=quarters
     return result
 
 def _basket_decimal_odds(row, side):
@@ -1536,13 +1512,7 @@ def basket_guncel_adaylar(df, events, limit=10):
         rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":market,"Ana Tahmin":tahmin,
                      "Güven":round(float(guven),1),"Ana Oran":round(float(ana_oran),2) if ana_oran else None,
                      "EV %":round(float(ana_ev)*100,1) if ana_ev is not None else None,
-                     "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',
-                     "İY Tahmin":(f'{r["h1_home"]:.1f}-{r["h1_away"]:.1f}' if r.get("h1_home") is not None and r.get("h1_away") is not None else None),
-                     "Q1":(f'{r["quarters"][0][1]:.1f}-{r["quarters"][0][2]:.1f}' if len(r.get("quarters",[]))>=1 else None),
-                     "Q2":(f'{r["quarters"][1][1]:.1f}-{r["quarters"][1][2]:.1f}' if len(r.get("quarters",[]))>=2 else None),
-                     "Q3":(f'{r["quarters"][2][1]:.1f}-{r["quarters"][2][2]:.1f}' if len(r.get("quarters",[]))>=3 else None),
-                     "Q4":(f'{r["quarters"][3][1]:.1f}-{r["quarters"][3][2]:.1f}' if len(r.get("quarters",[]))>=4 else None),
-                     "Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
+                     "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
                      "Piyasa Handikapı (Ev)":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],
                      "Ev H Oranı":mk.get("home_spread_odds"),"Dep H Oranı":mk.get("away_spread_odds"),
                      "Üst Oranı":mk.get("over_odds"),"Alt Oranı":mk.get("under_odds"),
@@ -1664,23 +1634,10 @@ def _deep_get(d,*paths):
     return None
 
 
-def _eu_side_obj(obj, side):
-    """EuroLeague v2 geçmişinde hem local/road hem home/away şemasını destekle."""
-    if not isinstance(obj, dict):
-        return None
-    keys = ("local", "home") if side == "local" else ("road", "away")
-    for key in keys:
-        value = obj.get(key)
-        if isinstance(value, dict):
-            return value
-    return None
-
-
 def _eu_team_name(obj, side):
-    side_obj = _eu_side_obj(obj, side)
-    if isinstance(side_obj, dict):
-        v = _deep_get(side_obj, ("club","name"), ("club","clubName"), ("team","name"),
-                      ("name",), ("clubName",), ("teamName",), ("shortName",))
+    side_obj=obj.get(side) if isinstance(obj,dict) else None
+    if isinstance(side_obj,dict):
+        v=_deep_get(side_obj,("club","name"),("club","clubName"),("team","name"),("name",),("clubName",),("teamName",))
         if v: return str(v)
     aliases={"local":["localClub","homeClub","homeTeam"],"road":["roadClub","awayClub","awayTeam"]}[side]
     for k in aliases:
@@ -1700,62 +1657,13 @@ def _eu_score(obj,side):
         try:
             if v is not None:return float(v)
         except Exception: pass
-    sobj=_eu_side_obj(obj, side)
+    sobj=obj.get(side) if isinstance(obj,dict) else None
     if isinstance(sobj,dict):
         for k in ("score","points","totalPoints"):
             try:
                 if sobj.get(k) is not None:return float(sobj.get(k))
             except Exception: pass
     return None
-
-
-def _eu_num(value):
-    try:
-        value=float(value)
-        return value if math.isfinite(value) and value >= 0 else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _eu_quarters(obj, side):
-    """v2 games içindeki home/away.quarters alanını Q1-Q4'e çevirir.
-
-    Ana geçmiş maç havuzunu değiştirmez; yalnızca mevcut satıra ek kolon üretir.
-    Upstream şema küçük farklılıklar gösterdiği için liste/dict biçimlerini destekler.
-    """
-    sobj=_eu_side_obj(obj, side)
-    if not isinstance(sobj,dict): return []
-    q=sobj.get("quarters") or sobj.get("quarterScores") or sobj.get("periods")
-    if q is None: return []
-    values=[]
-    if isinstance(q,(list,tuple)):
-        for item in q:
-            if isinstance(item,dict):
-                v=None
-                for key in ("score","points","value","teamScore","pointsScored"):
-                    if key in item:
-                        v=_eu_num(item.get(key));
-                        if v is not None: break
-                if v is None and len(item)==1:
-                    v=_eu_num(next(iter(item.values())))
-                values.append(v)
-            else:
-                values.append(_eu_num(item))
-    elif isinstance(q,dict):
-        for i in range(1,5):
-            v=None
-            for key in (f"q{i}",f"Q{i}",str(i),f"quarter{i}",f"Quarter{i}"):
-                if key in q:
-                    item=q.get(key)
-                    if isinstance(item,dict):
-                        for sk in ("score","points","value","teamScore","pointsScored"):
-                            if sk in item:
-                                v=_eu_num(item.get(sk));
-                                if v is not None: break
-                    else: v=_eu_num(item)
-                    if v is not None: break
-            values.append(v)
-    return values[:4] if len(values)>=4 and all(v is not None for v in values[:4]) else []
 
 
 def basket_euroleague_gecmis_cek(events, days=500):
@@ -1781,14 +1689,7 @@ def basket_euroleague_gecmis_cek(events, days=500):
                 hs=_eu_score(g,"local"); aas=_eu_score(g,"road")
                 if not hn or not an or hs is None or aas is None:continue
                 dt=_deep_get(g,("date",),("startDate",),("startTime",),("utcDate",),("gameDate",))
-                row={"Date":dt,"League":league_name,"HomeTeam":hn,"AwayTeam":an,"HomeScore":hs,"AwayScore":aas,
-                     "_season":season,"_gamecode":g.get("gameCode") or g.get("code")}
-                hq=_eu_quarters(g,"local"); aq=_eu_quarters(g,"road")
-                if len(hq)>=4 and len(aq)>=4:
-                    for qi in range(4):
-                        row[f"HomeQ{qi+1}"]=hq[qi]; row[f"AwayQ{qi+1}"]=aq[qi]
-                    row["HomeH1"]=hq[0]+hq[1]; row["AwayH1"]=aq[0]+aq[1]
-                rows.append(row)
+                rows.append({"Date":dt,"League":league_name,"HomeTeam":hn,"AwayTeam":an,"HomeScore":hs,"AwayScore":aas,"_season":season,"_gamecode":g.get("gameCode") or g.get("code")})
     df=basket_veri_hazirla(pd.DataFrame(rows)) if rows else pd.DataFrame()
     if df.empty:return df,"EuroLeague/EuroCup resmi feed'inden tamamlanmış geçmiş maç alınamadı."
     cutoff=pd.Timestamp.now(tz="UTC").tz_localize(None)-pd.Timedelta(days=int(days))
@@ -1798,7 +1699,7 @@ def basket_euroleague_gecmis_cek(events, days=500):
 
 def basket_otomatik_gecmis(league, events, key=None, refresh=False):
     """Anahtarsız geçmiş sağlayıcı. NBA=NBA Stats, EuroLeague=resmi EuroLeague feed."""
-    cache_key=f"basket_auto_history_fix15_{league}"
+    cache_key=f"basket_auto_history_{league}"
     ts_key=cache_key+"_ts"; now=time.time()
     old=st.session_state.get(cache_key); old_ts=float(st.session_state.get(ts_key,0) or 0)
     if (not refresh) and isinstance(old,pd.DataFrame) and not old.empty and now-old_ts<1800:
