@@ -10438,6 +10438,7 @@ def _spor_toto_api_kodlari(api_key, normal_kodlar):
 
 
 FIX19_SPOR_TOTO = "smart-national-slate-v1"
+FIX20_KOLON_ONERISI = "weighted-coverage-95-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10777,38 +10778,49 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
             kolon_sayisi = len(kolonlar)
 
-            # 8 kolon yeterlilik uyarısı: yalnız kolon sayısına değil, modelin anlamlı
-            # alternatif kapsamına bak. İlk 8 kolon tüm kapsama hedeflerini taşımıyorsa
-            # kullanıcıya daha fazla kolon gerektiğini açıkça söyle.
-            ilk8 = secilen_imzalar[:8]
-            ilk8_kapsanmayan = []
-            for idx, taraf, p_alt, gap in kapsama_hedefleri:
-                if not any(imza[idx] == taraf for imza in ilk8):
-                    ilk8_kapsanmayan.append((idx, taraf, p_alt))
+            # FIX20: kolon tavsiyesi artık sabit sayı değil.
+            # Her anlamlı alternatif, kendi model olasılığı kadar ağırlık taşır.
+            # İlk N kolonun kapsadığı ağırlıklı alternatif kütlesi hesaplanır ve
+            # %95 hedefini ilk geçen N doğrudan o haftanın kolon tavsiyesi olur.
+            def _agirlikli_kapsama(n):
+                ilk_n = secilen_imzalar[:max(1, min(int(n), len(secilen_imzalar)))]
+                if not ilk_n:
+                    return 0.0
+                toplam_agirlik = 0.0
+                kapsanan_agirlik = 0.0
+                for idx, taraf, p_alt, gap in kapsama_hedefleri:
+                    agirlik = max(0.0, float(p_alt or 0.0))
+                    toplam_agirlik += agirlik
+                    if any(imza[idx] == taraf for imza in ilk_n):
+                        kapsanan_agirlik += agirlik
+                # Hiç alternatif hedefi yoksa ana kolon zaten çekirdek kapsamadır.
+                return (kapsanan_agirlik / toplam_agirlik) if toplam_agirlik > 0 else 1.0
 
+            KAPSAMA_HEDEFI = 0.95
             onerilen_min_kolon = 1
-            if kapsama_hedefleri:
-                for n in range(1, len(secilen_imzalar) + 1):
-                    ilk_n = secilen_imzalar[:n]
-                    if all(any(imza[idx] == taraf for imza in ilk_n) for idx, taraf, _, _ in kapsama_hedefleri):
-                        onerilen_min_kolon = n
-                        break
-                else:
-                    onerilen_min_kolon = len(secilen_imzalar)
+            for n in range(1, len(secilen_imzalar) + 1):
+                if _agirlikli_kapsama(n) >= KAPSAMA_HEDEFI:
+                    onerilen_min_kolon = n
+                    break
+            else:
+                onerilen_min_kolon = len(secilen_imzalar)
 
-            if kolon_sayisi > 8 and (ilk8_kapsanmayan or onerilen_min_kolon > 8):
+            kapsama8 = _agirlikli_kapsama(min(8, kolon_sayisi))
+            kapsama_oneri = _agirlikli_kapsama(onerilen_min_kolon)
+
+            if onerilen_min_kolon > 8:
                 st.warning(
-                    f"⚠️ Bu hafta 8 kolon modelin anlamlı 1/X/2 alternatiflerini tam kapsamıyor. "
-                    f"Kapsama için en az {max(onerilen_min_kolon, 9)} kolon öneriliyor; "
-                    f"model toplam {kolon_sayisi} kaliteli kolon üretti. Bütçen uygunsa daha fazla kolon görüntüleyebilirsin."
-                )
-            elif kolon_sayisi > 8:
-                st.info(
-                    f"Model {kolon_sayisi} kaliteli kolon üretti. İlk 8 kolon çekirdek kapsama için yeterli görünüyor; "
-                    "8'in üzeri kolon ek senaryo çeşitliliği sağlar."
+                    f"⚠️ Bu hafta ilk 8 kolon modelin anlamlı alternatif ağırlığının "
+                    f"%{kapsama8*100:.1f}'ini kapsıyor. Dinamik %{KAPSAMA_HEDEFI*100:.0f} "
+                    f"kapsama hedefine ulaşmak için model {onerilen_min_kolon} kolon öneriyor. "
+                    f"Toplam {kolon_sayisi} kaliteli kolon üretildi."
                 )
             else:
-                st.success(f"Model bu hafta için {kolon_sayisi} kolonluk çekirdek kapsamayı yeterli görüyor.")
+                st.success(
+                    f"Bu hafta 8 kolon yeterli görünüyor: anlamlı alternatif ağırlığının "
+                    f"%{kapsama8*100:.1f}'i kapsanıyor. Modelin dinamik çekirdek önerisi "
+                    f"{onerilen_min_kolon} kolon."
+                )
 
             iki_farkli_sayisi = sum(
                 1 for imza in secilen_imzalar[1:]
@@ -10827,11 +10839,11 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
-            gosterim_secenekleri = [n for n in (8, 16, 32, 64) if n <= kolon_sayisi]
+            gosterim_secenekleri = [n for n in (8, onerilen_min_kolon, 16, 32, 64) if 1 <= n <= kolon_sayisi]
             if kolon_sayisi not in gosterim_secenekleri:
                 gosterim_secenekleri.append(kolon_sayisi)
             gosterim_secenekleri = sorted(set(gosterim_secenekleri))
-            varsayilan_gosterim = 32 if 32 in gosterim_secenekleri else gosterim_secenekleri[-1]
+            varsayilan_gosterim = onerilen_min_kolon if onerilen_min_kolon in gosterim_secenekleri else gosterim_secenekleri[-1]
             gosterilecek_kolon = st.selectbox(
                 "Gösterilecek en iyi kolon",
                 options=gosterim_secenekleri,
