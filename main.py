@@ -10442,6 +10442,7 @@ FIX20_KOLON_ONERISI = "weighted-coverage-95-v1"
 FIX21_KOLON_FREKANSI = "probability-frequency-hamilton-v1"
 FIX22_PREFIX_FREKANSI = "probability-balanced-prefix-v1"
 FIX23_SURPRIZ_DENGESI = "row-swap-surprise-load-v1"
+FIX24_PREFIX_SURPRIZ = "prefix-hard-surprise-separation-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10860,50 +10861,40 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             secilen_imzalar = _prefix_frekans_sirala(secilen_imzalar)
 
-            # FIX23: Maç bazlı 1/X/2 adetlerini değiştirmeden sürprizleri kolonlara yay.
-            def _surpriz_yuku_dengele(imzalar):
-                if len(imzalar) <= 2:
-                    return imzalar
-                out = [list(x) for x in imzalar]
-                probs = []
-                for r0 in tamam:
-                    dag = r0.get('spor_toto_dagilim') or {}
-                    vals = {t: max(0.0, float(dag.get(t, 0) or 0)) for t in ('1','X','2')}
-                    s = sum(vals.values()) or 1.0
-                    probs.append({t: vals[t]/s for t in ('1','X','2')})
+            # FIX24: İlk-N kolonlarda ciddi sürprizleri ayır ve frekansı koru.
+            CIDDI_SURPRIZ_ESIGI = 0.20
+            _f24_probs=[]
+            for r0 in tamam:
+                dag=r0.get('spor_toto_dagilim') or {}
+                vals={t:max(0.0,float(dag.get(t,0) or 0)) for t in ('1','X','2')}
+                s=sum(vals.values()) or 1.0
+                _f24_probs.append({t:vals[t]/s for t in ('1','X','2')})
 
-                def hy(i, sec):
-                    pmap = probs[i]
-                    pmax = max(pmap.values())
-                    return max(0.0, pmax-pmap.get(sec,0.0))/max(0.01,pmax)
+            def _ciddi_surpriz_sayisi(imza):
+                return sum(1 for i,sec in enumerate(imza)
+                           if _f24_probs[i].get(sec,0.0) < CIDDI_SURPRIZ_ESIGI)
 
-                def loads():
-                    return [sum(hy(i,row[i]) for i in range(len(tamam))) for row in out]
+            def _prefix_surpriz_sirala(imzalar):
+                if len(imzalar)<=2: return imzalar
+                kalan=list(imzalar)
+                secilen=[kalan.pop(0)]
+                while kalan:
+                    n=len(secilen)+1
+                    mevcut=[{t:sum(row[i]==t for row in secilen) for t in ('1','X','2')}
+                            for i in range(len(tamam))]
+                    def score(cand):
+                        fh=0.0
+                        for i,pmap in enumerate(_f24_probs):
+                            for t in ('1','X','2'):
+                                c=mevcut[i][t]+(cand[i]==t)
+                                fh+=(c-pmap[t]*n)**2
+                        cs=_ciddi_surpriz_sayisi(cand)
+                        return fh + 100.0*(max(0,cs-1)**2)
+                    j=min(range(len(kalan)),key=lambda q:score(kalan[q]))
+                    secilen.append(kalan.pop(j))
+                return secilen
 
-                # 1. kolon ana model: dokunma. Diğer kolonlarda aynı maç içi takas.
-                for _ in range(300):
-                    y=loads()
-                    ort=sum(y[1:])/max(1,len(y)-1)
-                    heavy=sorted(range(1,len(out)),key=lambda j:y[j],reverse=True)[:16]
-                    light=sorted(range(1,len(out)),key=lambda j:y[j])[:16]
-                    best=None; gain_best=1e-12
-                    for a in heavy:
-                        for b in light:
-                            if a==b: continue
-                            for i in range(len(tamam)):
-                                sa,sb=out[a][i],out[b][i]
-                                if sa==sb: continue
-                                na=y[a]-hy(i,sa)+hy(i,sb)
-                                nb=y[b]-hy(i,sb)+hy(i,sa)
-                                gain=((y[a]-ort)**2+(y[b]-ort)**2)-((na-ort)**2+(nb-ort)**2)
-                                if gain>gain_best:
-                                    gain_best=gain; best=(a,b,i)
-                    if best is None: break
-                    a,b,i=best
-                    out[a][i],out[b][i]=out[b][i],out[a][i]
-                return [tuple(x) for x in out]
-
-            secilen_imzalar = _surpriz_yuku_dengele(secilen_imzalar)
+            secilen_imzalar=_prefix_surpriz_sirala(secilen_imzalar)
 
             kolonlar = {}
             for k, imza in enumerate(secilen_imzalar, start=1):
@@ -10929,29 +10920,33 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 return (kapsanan_agirlik / toplam_agirlik) if toplam_agirlik > 0 else 1.0
 
             KAPSAMA_HEDEFI = 0.95
-            onerilen_min_kolon = 1
-            for n in range(1, len(secilen_imzalar) + 1):
-                if _agirlikli_kapsama(n) >= KAPSAMA_HEDEFI:
-                    onerilen_min_kolon = n
-                    break
-            else:
-                onerilen_min_kolon = len(secilen_imzalar)
 
-            kapsama8 = _agirlikli_kapsama(min(8, kolon_sayisi))
-            kapsama_oneri = _agirlikli_kapsama(onerilen_min_kolon)
+            def _prefix_surpriz_cakisma(n):
+                ilk_n=secilen_imzalar[:max(1,min(int(n),len(secilen_imzalar)))]
+                return sum(1 for imza in ilk_n if _ciddi_surpriz_sayisi(imza)>1)
+
+            onerilen_min_kolon=len(secilen_imzalar)
+            for n in range(1,len(secilen_imzalar)+1):
+                if _agirlikli_kapsama(n)>=KAPSAMA_HEDEFI and _prefix_surpriz_cakisma(n)==0:
+                    onerilen_min_kolon=n
+                    break
+
+            kapsama8=_agirlikli_kapsama(min(8,kolon_sayisi))
+            kapsama_oneri=_agirlikli_kapsama(onerilen_min_kolon)
+            surpriz_cakisma8=_prefix_surpriz_cakisma(min(8,kolon_sayisi))
+            surpriz_cakisma_oneri=_prefix_surpriz_cakisma(onerilen_min_kolon)
 
             if onerilen_min_kolon > 8:
                 st.warning(
-                    f"⚠️ Bu hafta ilk 8 kolon modelin anlamlı alternatif ağırlığının "
-                    f"%{kapsama8*100:.1f}'ini kapsıyor. Dinamik %{KAPSAMA_HEDEFI*100:.0f} "
-                    f"kapsama hedefine ulaşmak için model {onerilen_min_kolon} kolon öneriyor. "
-                    f"Toplam {kolon_sayisi} kaliteli kolon üretildi."
+                    f"⚠️ İlk 8 kolon: alternatif kapsama %{kapsama8*100:.1f} · "
+                    f"ciddi sürpriz çakışmalı kolon {surpriz_cakisma8}. "
+                    f"%95 kapsama ve aynı kolonda birden fazla %20-altı sürpriz olmaması "
+                    f"şartlarını birlikte sağlayan dinamik öneri: {onerilen_min_kolon} kolon."
                 )
             else:
                 st.success(
-                    f"Bu hafta 8 kolon yeterli görünüyor: anlamlı alternatif ağırlığının "
-                    f"%{kapsama8*100:.1f}'i kapsanıyor. Modelin dinamik çekirdek önerisi "
-                    f"{onerilen_min_kolon} kolon."
+                    f"Dinamik öneri {onerilen_min_kolon} kolon · kapsama "
+                    f"%{kapsama_oneri*100:.1f} · ciddi sürpriz çakışması {surpriz_cakisma_oneri}."
                 )
 
             iki_farkli_sayisi = sum(
@@ -10969,7 +10964,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
-            st.caption("FIX23: 1/X/2 frekansları korunur; düşük olasılıklı sürpriz seçimler kolonlara dengeli dağıtılır.")
+            st.caption("FIX24: %20 altı ciddi sürprizler ilk-N kolonlarda ayrılır; kolon önerisi %95 kapsama + sıfır ciddi-sürpriz çakışması şartıyla hesaplanır.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
