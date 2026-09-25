@@ -1,128 +1,142 @@
+                                f"""
+                                <style>
+                                .st-key-{kart_key} {{
+                                    background: {arka};
+                                    border: 1px solid rgba(255,255,255,.16);
+                                    border-radius: 12px;
+                                    padding: 10px 12px 9px 14px;
+                                    margin: 0 0 12px 0;
+                                }}
+                                .st-key-{kart_key} [data-testid="stHorizontalBlock"] {{
+                                    align-items: center;
+                                }}
+                                .st-key-{kart_key} .stButton > button {{
+                                    min-height: 42px;
+                                    margin: 0;
+                                }}
+                                </style>
+                                """,
+                                unsafe_allow_html=True,
+                            )
 
-import io
-import os
-import json
-import math
-import re
-import time
-import textwrap
-import unicodedata
-from difflib import SequenceMatcher
-from datetime import datetime, timedelta
-from html import escape
-from pathlib import Path
+                            with st.container(key=kart_key, border=False):
+                                bilgi_col, detay_col, ekle_col = st.columns([6.4, 2.3, 1.3], gap="small")
 
-import pandas as pd
-import requests
-import streamlit as st
-import streamlit.components.v1 as components
+                                with bilgi_col:
+                                    st.markdown(
+                                        f"""
+                                        <div style="color:#f8fafc;padding:2px 0">
+                                          <b style="font-size:.94rem">
+                                            {escape(str(secim.get('ev', '')))} – {escape(str(secim.get('dep', '')))}
+                                          </b>
+                                          <div style="font-size:.80rem;color:#dbeafe;margin-top:5px">
+                                            {escape(str(secim.get('tahmin', '-')))} · Güven %{int(secim.get('guven', 0))}
+                                          </div>
+                                          {_kupon_market_html}
+                                          {hassasiyet_alt}
+                                          {baglam_alt}
+                                        </div>
+                                        """,
+                                        unsafe_allow_html=True,
+                                    )
 
-import copy
-import hashlib
-import logging
-import sqlite3
-import tempfile
-from contextlib import contextmanager
-from datetime import timezone
-from zoneinfo import ZoneInfo
+                                with detay_col:
+                                    if st.button(
+                                        "Detay",
+                                        key=f"auto_coupon_detail_{kayit.get('kupon_id')}_{secim_no}",
+                                        use_container_width=True,
+                                    ):
+                                        detay_item = kupon_seciminden_detay_itemi(
+                                            secim, sadece_ayni_lig=sadece_ayni_lig
+                                        )
+                                        if detay_item is None:
+                                            st.warning("Bu kupon kaydı için detay verisi yeniden oluşturulamadı.")
+                                        else:
+                                            st.session_state.detay_item = detay_item
+                                            st.session_state.detay_idx = None
+                                            st.rerun()
 
+                                with ekle_col:
+                                    if st.button(
+                                        "＋",
+                                        key=f"auto_to_manual_{kayit.get('kupon_id')}_{secim_no}",
+                                        use_container_width=True,
+                                        help="Kendi Kuponuma ekle",
+                                    ):
+                                        secim_m = {
+                                            "ev": secim.get("ev", ""),
+                                            "dep": secim.get("dep", ""),
+                                            "lig": secim.get("lig", ""),
+                                            "sport_key": secim.get("sport_key", ""),
+                                            "h": secim.get("h"),
+                                            "b": secim.get("b"),
+                                            "a": secim.get("a"),
+                                            "zaman": parse_mac_datetime(secim.get("zaman_iso", "")),
+                                        }
+                                        manuel_kupona_ekle(
+                                            secim_m, {}, secim.get("tahmin", "-"), secim.get("guven", 0),
+                                            oran=secim.get("oran"),
+                                            oran_tahmini=bool(secim.get("oran_tahmini", False)),
+                                        )
+                                        st.rerun()
 
-MODEL_VERSION = "2026.09.13.2"
-TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
-APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
-LOGGER = logging.getLogger("yapaikupon")
+                        kart_col, sil_col = st.columns([8, 2])
+                        with kart_col:
+                            st.markdown("<div style='height:1px'></div>", unsafe_allow_html=True)
+                        with sil_col:
+                            if st.button("🗑️", key=f"auto_coupon_delete_{kayit.get('kupon_id')}", use_container_width=True):
+                                yeni_gecmis = [x for x in kupon_gecmisi if x.get("kupon_id") != kayit.get("kupon_id")]
+                                kupon_gecmisini_yaz(yeni_gecmis)
+                                st.rerun()
 
-# Bunlar doğrulanmış optimumlar değildir; canlı ve backtest aynı ayarları kullanır.
-MODEL_SETTINGS = {"league_weight": 1.25, "half_life_days": 730.0,
-                  "min_time_weight": 0.25, "prior_strength": 5.0,
-                  "base_prior_strength": 20.0}
-BOOKMAKER_HISTORY_PREFIX = {"bet365": "B365", "bet365_au": "B365",
-                            "williamhill": "WH", "pinnacle": "PS",
-                            "bwin": "BW", "betvictor": "VC"}
-ORAN_KAYIT_ALANLARI = ("match_id", "bookmaker_key", "odds_updated_at", "odds_phase",
-                      "totals_updated_at", "totals_phase", "totals_bookmaker_key",
-                      "o25_over", "o25_under",
-                      "btts_updated_at", "btts_bookmaker_key", "btts_yes", "btts_no",
-                      "odds_fetched_at")
+            with profil_sutunlari[4]:
+                st.markdown(
+                    """
+                    <div style="background:#312e81;border:1px solid #a78bfa;border-radius:12px;
+                                padding:10px 12px;margin-bottom:10px;text-align:center;
+                                color:#f8fafc;-webkit-text-fill-color:#f8fafc;font-size:1rem;
+                                font-weight:900;opacity:1">
+                        🟣 Kendi Kuponum
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if not st.session_state.kupona:
+                    st.info("Henüz manuel seçim eklenmedi.")
+                for del_i, item in enumerate(list(st.session_state.kupona)):
+                    mac_dt = parse_mac_datetime(item.get("zaman_iso", ""))
+                    durum = mac_canli_durumu(mac_dt) if item.get("zaman_iso") else "Takipte"
+                    mac_ad = f"{item.get('ev', '')} – {item.get('dep', '')}".strip(" –")
+                    kart_col, sil_col = st.columns([8, 2])
+                    with kart_col:
+                        st.markdown(
+                            f"""
+                            <div style="background:#1e1b4b;border:1px solid #7c3aed;border-radius:13px;
+                                        padding:11px 12px;margin-bottom:8px;color:#f8fafc">
+                              <b style="color:#c4b5fd">{escape(mac_ad)}</b>
+                              <div style="font-size:.79rem;color:#e2e8f0;margin-top:5px">
+                                {escape(str(item.get('tahmin','-')))} · Güven %{int(item.get('guven',0))}<br>
+                                {escape(durum)}
+                              </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    with sil_col:
+                        if st.button("🗑️", key=f"coupon_delete_{del_i}", use_container_width=True):
+                            st.session_state.kupona.pop(del_i)
+                            st.rerun()
+                if st.session_state.kupona and st.button(
+                    "Kendi kuponumu temizle", key="coupon_clear_inside_panel", use_container_width=True
+                ):
+                    st.session_state.kupona = []
+                    st.rerun()
 
+        if not st.session_state.kupona and not kupon_gecmisi:
+            st.info("Henüz kupon kaydı yok. Maç kartlarından seçim ekleyebilir veya Günün Kuponunu Oluştur bölümünü kullanabilirsin.")
 
-def hassasiyet_oku(value, default=0.08):
-    """0.00 geçerli bir seçimdir; yalnızca eksik/bozuk değer varsayılana düşer."""
-    try:
-        result = float(value) if value is not None else float(default)
-        return result if math.isfinite(result) and result >= 0 else float(default)
-    except (TypeError, ValueError):
-        return float(default)
+        if st.button("Kapat", key="coupon_close_inside_panel", use_container_width=True):
+            st.session_state.coupon_popup_open = False
+            st.rerun()
 
-
-def oran_kayit_bilgisi(m):
-    return {key: m.get(key) for key in ORAN_KAYIT_ALANLARI if m.get(key) is not None}
-
-
-def zaman_agirliklari(df, m):
-    dates = tarih_serisi_oku(df["Date"])
-    target = parse_mac_datetime(m.get("zaman"))
-    if target is None:
-        return pd.Series(0.0, index=df.index)
-    age = (pd.Timestamp(target).normalize() - dates).dt.total_seconds().div(86400).clip(lower=0)
-    return (0.5 ** (age / MODEL_SETTINGS["half_life_days"])).clip(
-        lower=MODEL_SETTINGS["min_time_weight"]).fillna(0.0)
-
-
-def olasilik_yuzdeleri(values):
-    """Birbirini dışlayan sonuçları, yuvarlama dahil tam %100'e tamamlar."""
-    values = [max(0.0, float(value)) if math.isfinite(float(value)) else 0.0 for value in values]
-    total = sum(values)
-    if not total:
-        return [0] * len(values)
-    scaled = [value / total * 100.0 for value in values]
-    rounded = [math.floor(value) for value in scaled]
-    order = sorted(range(len(values)), key=lambda i: (scaled[i] - rounded[i], -i), reverse=True)
-    for i in order[:100 - sum(rounded)]:
-        rounded[i] += 1
-    return rounded
-
-
-def market_etkin_ornek(t, label):
-    if str(label).startswith(("İY ", "HT/FT")):
-        key = "effective_ht_samples"
-    elif any(part in str(label) for part in ("KG", "Üst", "Alt")):
-        key = "effective_goal_samples"
-    else:
-        key = "effective_ms_samples"
-    return float(t.get(key, t.get("ornek", 0)) or 0)
-
-
-def sabit_kalibrasyon_kayitlari():
-    """İsteğe bağlı, sürümü sabit eğitim çıktısı; son UI backtestine bağlı değildir.
-
-    yapaikupon_kalibrasyon.json: model_version, trained_through (ISO tarih), records.
-    Hedefi eğitim dönemi içinde kalan bir maç bu profil ile düzeltilemez.
-    Dosya bulunmazsa canlı ve backtest aynı nötr düzeltmeyi kullanır.
-    """
-    path = APP_DATA_DIR / "yapaikupon_kalibrasyon.json"
-    try:
-        profile = json.loads(path.read_text(encoding="utf-8"))
-        cutoff = parse_mac_datetime(profile.get("trained_through"))
-        records = profile.get("records", [])
-        if profile.get("model_version") != MODEL_VERSION or cutoff is None or not isinstance(records, list):
-            return []
-        return [dict(record, calibration_trained_through=cutoff.isoformat()) for record in records
-                if isinstance(record, dict) and parse_mac_datetime(record.get("Tarih")) is not None
-                and parse_mac_datetime(record["Tarih"]).date() <= cutoff.date()]
-    except (OSError, ValueError, TypeError):
-        return []
-
-
-def tr_simdi():
-    """Uygulama içi karşılaştırmalar: her zaman Türkiye yerel saati (naive)."""
-    return datetime.now(TR_TIMEZONE).replace(tzinfo=None)
-
-
-def kayit_zamani_iso():
-    """Kalıcı kayıtlar saat dilimini de taşır."""
-    return datetime.now(TR_TIMEZONE).isoformat(timespec="seconds")
-
-
-def tarih_serisi_oku(values):
-    """ISO ve Football-Data tarihlerini açık biçimlerle, gün/ay değiştirmeden okur."""
+legal_footer()
