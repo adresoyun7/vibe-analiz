@@ -713,7 +713,7 @@ def backtest_kaydi(row, target, t):
 # ==========================================================
 # BASKETBOL MOTORU 1.0 — FORM + PACE + ORTG/DRTG + LINE + BACKTEST
 # ==========================================================
-BASKET_MODEL_VERSION = "2026.09.25.quarter-score-v4"
+BASKET_MODEL_VERSION = "2026.09.22.league-calibrated-score-v3"
 
 
 def basket_veri_hazirla(df):
@@ -1536,13 +1536,7 @@ def basket_guncel_adaylar(df, events, limit=10):
         rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":market,"Ana Tahmin":tahmin,
                      "Güven":round(float(guven),1),"Ana Oran":round(float(ana_oran),2) if ana_oran else None,
                      "EV %":round(float(ana_ev)*100,1) if ana_ev is not None else None,
-                     "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',
-                     "İY Tahmin":(f'{r["h1_home"]:.1f}-{r["h1_away"]:.1f}' if r.get("h1_home") is not None else None),
-                     "Q1":(next((f'{qh:.1f}-{qa:.1f}' for q,qh,qa in r.get("quarters",[]) if q==1),None)),
-                     "Q2":(next((f'{qh:.1f}-{qa:.1f}' for q,qh,qa in r.get("quarters",[]) if q==2),None)),
-                     "Q3":(next((f'{qh:.1f}-{qa:.1f}' for q,qh,qa in r.get("quarters",[]) if q==3),None)),
-                     "Q4":(next((f'{qh:.1f}-{qa:.1f}' for q,qh,qa in r.get("quarters",[]) if q==4),None)),
-                     "Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
+                     "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
                      "Piyasa Handikapı (Ev)":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],
                      "Ev H Oranı":mk.get("home_spread_odds"),"Dep H Oranı":mk.get("away_spread_odds"),
                      "Üst Oranı":mk.get("over_odds"),"Alt Oranı":mk.get("under_odds"),
@@ -1696,138 +1690,148 @@ def _eu_score(obj,side):
     return None
 
 
-def _eu_quarter_scores(game):
-    """EuroLeague/EuroCup game nesnesinden Q1-Q4 skorlarını mümkün olan şemalarda okur.
-
-    Feed sürümüne göre quarters/periods/byQuarter alanları farklı biçimde gelebilir.
-    Dört normal periyot bulunamazsa boş sözlük döner; tahmin uydurulmaz.
-    """
-    result = {}
-
-    def num(v):
-        try:
-            x = float(v)
-            return x if math.isfinite(x) else None
-        except (TypeError, ValueError):
+def _eu_float(value):
+    try:
+        if isinstance(value, dict):
+            for key in ("score", "points", "value", "pts"):
+                if key in value:
+                    return _eu_float(value.get(key))
             return None
-
-    def side_score(obj, side):
-        if not isinstance(obj, dict):
-            return None
-        keys = ({
-            "home": ("localScore", "homeScore", "scoreLocal", "scoreHome", "local", "home"),
-            "away": ("roadScore", "awayScore", "scoreRoad", "scoreAway", "road", "away"),
-        })[side]
-        for k in keys:
-            if k not in obj:
-                continue
-            v = obj.get(k)
-            if isinstance(v, dict):
-                for sk in ("score", "points", "value"):
-                    z = num(v.get(sk))
-                    if z is not None:
-                        return z
-            z = num(v)
-            if z is not None:
-                return z
+        number=float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError):
         return None
 
-    containers = []
-    if isinstance(game, dict):
-        for key in ("quarters", "periods", "byQuarter", "ByQuarter", "scoresByQuarter", "partialScores"):
-            v = game.get(key)
-            if isinstance(v, (list, dict)):
-                containers.append(v)
-        for side_key in ("score", "scores", "result"):
-            v = game.get(side_key)
-            if isinstance(v, dict):
-                for key in ("quarters", "periods", "byQuarter", "ByQuarter"):
-                    qv = v.get(key)
-                    if isinstance(qv, (list, dict)):
-                        containers.append(qv)
 
-    for container in containers:
-        items = list(container.values()) if isinstance(container, dict) else list(container)
-        for idx, item in enumerate(items, 1):
+def _eu_quarter_values(block):
+    """EuroLeague v2 home/away.quarters alanını Q1..Q4 listesine çevirir."""
+    if block is None:
+        return []
+    if isinstance(block, (tuple, list)):
+        direct=[_eu_float(v) for v in block]
+        direct=[v for v in direct if v is not None]
+        if len(direct) >= 4:
+            return direct[:4]
+        numbered={}
+        sequential=[]
+        for item in block:
             if not isinstance(item, dict):
                 continue
-            qraw = item.get("quarter") or item.get("period") or item.get("number") or item.get("id") or idx
-            m = re.search(r"([1-4])", str(qraw))
-            if not m:
-                continue
-            q = int(m.group(1))
-            hs, aas = side_score(item, "home"), side_score(item, "away")
-            if hs is not None and aas is not None:
-                result[q] = (hs, aas)
-        if all(q in result for q in range(1, 5)):
-            break
-
-    # Bazı feed sürümlerinde skorlar local/road nesnesinin quarters dizisindedir.
-    if not all(q in result for q in range(1, 5)) and isinstance(game, dict):
-        local = game.get("local") if isinstance(game.get("local"), dict) else {}
-        road = game.get("road") if isinstance(game.get("road"), dict) else {}
-        lq = local.get("quarters") or local.get("periods") or local.get("byQuarter")
-        rq = road.get("quarters") or road.get("periods") or road.get("byQuarter")
-        if isinstance(lq, list) and isinstance(rq, list):
-            for q in range(1, min(4, len(lq), len(rq)) + 1):
-                lv = lq[q-1]; rv = rq[q-1]
-                if isinstance(lv, dict): lv = lv.get("score", lv.get("points", lv.get("value")))
-                if isinstance(rv, dict): rv = rv.get("score", rv.get("points", rv.get("value")))
-                hs, aas = num(lv), num(rv)
-                if hs is not None and aas is not None:
-                    result[q] = (hs, aas)
-
-    # v2 season-wide games endpoint quarter scores can also be flat fields.
-    # Example naming varies by feed revision, so detect semantic key names
-    # containing quarter/period + 1..4 + local/home or road/away.
-    if not all(q in result for q in range(1, 5)) and isinstance(game, dict):
-        flat = {}
-        def walk(obj, prefix=""):
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    key = f"{prefix}_{k}" if prefix else str(k)
-                    if isinstance(v, (dict, list)):
-                        walk(v, key)
-                    else:
-                        flat[key.lower()] = v
-            elif isinstance(obj, list):
-                for i, v in enumerate(obj):
-                    walk(v, f"{prefix}_{i+1}")
-        walk(game)
-
-        def flat_score(q, home=True):
-            side_words = ("local", "home", "teama", "team_a") if home else ("road", "away", "visitor", "teamb", "team_b")
-            candidates=[]
-            for k,v in flat.items():
-                compact=re.sub(r"[^a-z0-9]+", "", k)
-                has_side=any(re.sub(r"[^a-z0-9]+", "", word) in compact for word in side_words)
-                has_period=(f"quarter{q}" in compact or f"period{q}" in compact or f"q{q}" in compact)
-                if has_side and has_period and any(word in compact for word in ("score","point","pts","quarter","period")):
-                    z=num(v)
-                    if z is not None and 0 <= z <= 80:
-                        candidates.append(z)
-            return candidates[0] if candidates else None
-
+            qnum=None
+            for key in ("quarter", "quarterNumber", "number", "period", "periodNumber"):
+                try:
+                    if item.get(key) is not None:
+                        qnum=int(item.get(key)); break
+                except (TypeError, ValueError):
+                    pass
+            score=None
+            for key in ("score", "points", "value", "pts"):
+                if item.get(key) is not None:
+                    score=_eu_float(item.get(key)); break
+            if score is None:
+                # Tek sayısal değer taşıyan küçük objeleri de kabul et.
+                nums=[_eu_float(v) for k,v in item.items() if str(k).lower() not in {"quarter","quarternumber","number","period","periodnumber"}]
+                nums=[v for v in nums if v is not None]
+                if len(nums)==1: score=nums[0]
+            if score is not None:
+                if qnum is not None and 1 <= qnum <= 4: numbered[qnum]=score
+                else: sequential.append(score)
+        if all(q in numbered for q in range(1,5)):
+            return [numbered[q] for q in range(1,5)]
+        if len(sequential) >= 4:
+            return sequential[:4]
+        return []
+    if isinstance(block, dict):
+        # En yaygın v2 biçimi: {quarter1:..., quarter2:...} / {q1:...}
+        norm={re.sub(r"[^a-z0-9]", "", str(k).lower()): v for k,v in block.items()}
+        result=[]
         for q in range(1,5):
-            if q in result:
-                continue
-            h=flat_score(q, True); a=flat_score(q, False)
-            if h is not None and a is not None:
-                result[q]=(h,a)
+            value=None
+            for key in (f"q{q}", f"quarter{q}", f"period{q}", f"scoreq{q}", f"scorequarter{q}"):
+                if key in norm:
+                    value=_eu_float(norm[key]); break
+            if value is None:
+                result=[]; break
+            result.append(value)
+        if len(result)==4:
+            return result
+        # Bazı cevaplarda quarters bir alt objede tekrar sarılı olabilir.
+        for key,value in block.items():
+            if str(key).lower() in ("quarters","byquarter","scores","periods"):
+                nested=_eu_quarter_values(value)
+                if len(nested)>=4: return nested[:4]
+    return []
 
-    if not all(q in result for q in range(1, 5)):
-        return {}
 
-    # Sanity check: regulation quarter points must reconcile with final score
-    # unless the game went to overtime (then Q1-Q4 sum can be lower).
+def _eu_game_quarters(game, side):
+    """v2 games cevabındaki local/road veya home/away takımının periyotlarını okur."""
+    aliases=("local","home") if side=="local" else ("road","away")
+    for alias in aliases:
+        obj=game.get(alias) if isinstance(game,dict) else None
+        if isinstance(obj,dict):
+            for key in ("quarters","quarterScores","byQuarter","periods"):
+                vals=_eu_quarter_values(obj.get(key))
+                if len(vals)>=4: return vals[:4]
+            vals=_eu_quarter_values(obj)
+            if len(vals)>=4: return vals[:4]
+    # Flat alanlar için son emniyet ağı.
+    prefix_aliases=("local","home") if side=="local" else ("road","away")
+    for prefix in prefix_aliases:
+        vals=[]
+        for q in range(1,5):
+            found=None
+            for key in (f"{prefix}Q{q}",f"{prefix}Quarter{q}",f"{prefix}ScoreQ{q}"):
+                if key in game:
+                    found=_eu_float(game.get(key)); break
+            if found is None:
+                vals=[]; break
+            vals.append(found)
+        if len(vals)==4: return vals
+    return []
+
+
+def _eu_boxscore_quarters(season, gamecode, home_score=None, away_score=None):
+    """v2 quarters yoksa resmi live Boxscore/ByQuarter yedeği."""
+    if gamecode in (None, ""):
+        return [], []
     try:
-        qh=sum(result[q][0] for q in range(1,5)); qa=sum(result[q][1] for q in range(1,5))
-        fh=_eu_score(game,"local"); fa=_eu_score(game,"road")
-        if qh <= 0 or qa <= 0 or (fh is not None and qh > fh+0.01) or (fa is not None and qa > fa+0.01):
-            return {}
+        payload=_basket_http_json(
+            "https://live.euroleague.net/api/Boxscore",
+            params={"gamecode": int(gamecode), "seasoncode": str(season)},
+            headers={"Origin":"https://www.euroleaguebasketball.net","Referer":"https://www.euroleaguebasketball.net/"},
+            timeout=20,
+        )
     except Exception:
-        return {}
-    return result
+        return [], []
+    block=payload.get("ByQuarter") if isinstance(payload,dict) else None
+    # ByQuarter çoğunlukla iki takım satırı/kolonu içerir.
+    candidates=[]
+    if isinstance(block,dict):
+        try:
+            frame=pd.DataFrame(block)
+            candidates=[_eu_quarter_values(r) for r in frame.to_dict("records")]
+        except Exception:
+            candidates=[]
+        if not candidates:
+            for value in block.values():
+                vals=_eu_quarter_values(value)
+                if len(vals)>=4: candidates.append(vals[:4])
+    elif isinstance(block,list):
+        if len(block)>=2:
+            candidates=[_eu_quarter_values(item) for item in block]
+        else:
+            vals=_eu_quarter_values(block)
+            if len(vals)>=8: candidates=[vals[:4],vals[4:8]]
+    candidates=[c[:4] for c in candidates if len(c)>=4]
+    if len(candidates)<2:
+        return [], []
+    a,b=candidates[0],candidates[1]
+    # Takım sırası belirsizse final skora en yakın eşleşmeyi seç.
+    if home_score is not None and away_score is not None:
+        direct=abs(sum(a)-float(home_score))+abs(sum(b)-float(away_score))
+        swap=abs(sum(b)-float(home_score))+abs(sum(a)-float(away_score))
+        if swap < direct: a,b=b,a
+    return a,b
 
 
 def basket_euroleague_gecmis_cek(events, days=500):
@@ -1853,13 +1857,19 @@ def basket_euroleague_gecmis_cek(events, days=500):
                 hs=_eu_score(g,"local"); aas=_eu_score(g,"road")
                 if not hn or not an or hs is None or aas is None:continue
                 dt=_deep_get(g,("date",),("startDate",),("startTime",),("utcDate",),("gameDate",))
-                row={"Date":dt,"League":league_name,"HomeTeam":hn,"AwayTeam":an,"HomeScore":hs,"AwayScore":aas,"_season":season,"_gamecode":g.get("gameCode") or g.get("code")}
-                q_scores=_eu_quarter_scores(g)
-                if q_scores:
-                    for q,(qh,qa) in q_scores.items():
-                        row[f"HomeQ{q}"]=qh; row[f"AwayQ{q}"]=qa
-                    row["HomeH1"]=q_scores[1][0]+q_scores[2][0]
-                    row["AwayH1"]=q_scores[1][1]+q_scores[2][1]
+                gamecode=g.get("gameCode") or g.get("code")
+                hq=_eu_game_quarters(g,"local"); aq=_eu_game_quarters(g,"road")
+                # Sezonluk v2 games cevabı normalde home/away.quarters taşır.
+                # Eksik bir şema gelirse yalnız o maç için resmi ByQuarter yedeğini dene.
+                if len(hq)<4 or len(aq)<4:
+                    bhq,baq=_eu_boxscore_quarters(season,gamecode,hs,aas)
+                    if len(bhq)>=4 and len(baq)>=4:
+                        hq,aq=bhq[:4],baq[:4]
+                row={"Date":dt,"League":league_name,"HomeTeam":hn,"AwayTeam":an,"HomeScore":hs,"AwayScore":aas,"_season":season,"_gamecode":gamecode}
+                if len(hq)>=4 and len(aq)>=4:
+                    for q in range(1,5):
+                        row[f"HomeQ{q}"]=hq[q-1]; row[f"AwayQ{q}"]=aq[q-1]
+                    row["HomeH1"]=hq[0]+hq[1]; row["AwayH1"]=aq[0]+aq[1]
                 rows.append(row)
     df=basket_veri_hazirla(pd.DataFrame(rows)) if rows else pd.DataFrame()
     if df.empty:return df,"EuroLeague/EuroCup resmi feed'inden tamamlanmış geçmiş maç alınamadı."
@@ -2054,20 +2064,6 @@ def basketbol_sayfasi():
             ms_pas = combined_conf < 60
             x3.metric("MS Birleşik",f'{combined_pick} %{combined_conf:.1f}' + (" · PAS" if ms_pas else ""))
             x4.metric("Pace",r["pace"] if r["pace"] is not None else "Skor modeli")
-            if r.get("h1_home") is not None:
-                st.markdown(f'**İlk yarı beklenen skor:** {r["h1_home"]:.1f} - {r["h1_away"]:.1f} · toplam {r["h1_total"]:.1f}')
-            if r.get("quarters"):
-                qcols=st.columns(4)
-                qmap={q:(qh,qa) for q,qh,qa in r.get("quarters",[])}
-                for q,col in enumerate(qcols,1):
-                    with col:
-                        if q in qmap:
-                            qh,qa=qmap[q]
-                            st.metric(f"Q{q}",f"{qh:.1f} - {qa:.1f}")
-                        else:
-                            st.metric(f"Q{q}","Veri yok")
-            else:
-                st.caption("İY/periyot tahmini için geçmiş Q1-Q4 verisi bulunamadı; skor uydurulmadı.")
             tm=float(blend.get("team_home_p") or 50.0); pm=blend.get("market_home_p")
             team_pick=home_label if tm>=50 else away_label
             team_conf=max(tm,100-tm)
