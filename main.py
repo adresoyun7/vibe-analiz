@@ -10570,6 +10570,40 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             secilen_imzalar = [ana_imza]
 
+            # KAPSAMA KORUMASI (FIX17): Model bir maçta ikinci/üçüncü sonucu gerçekten
+            # anlamlı görüyorsa, bütün kolonların aynı ana sonucu kopyalamasına izin verme.
+            # Amaç rastgele çeşitlilik değil; model dağılımında kayda değer olasılığı olan
+            # sonuçların en az bir kaliteli senaryoda temsil edilmesi.
+            kapsama_hedefleri = []
+            for idx, r in enumerate(tamam):
+                dag = r.get('spor_toto_dagilim') or {}
+                ana = ana_imza[idx]
+                ana_p = float(dag.get(ana, r.get('guven', 0)) or 0)
+                faz = str(r.get('spor_toto_faz', 'standart'))
+                # Fallback veride biraz daha temkinli davran: dağılım daha gürültülü olabilir.
+                min_alt_p = 24.0 if faz == 'standart' else 27.0
+                max_gap = 18.0 if faz == 'standart' else 14.0
+                for taraf in ('1', 'X', '2'):
+                    if taraf == ana:
+                        continue
+                    p_alt = float(dag.get(taraf, 0) or 0)
+                    gap = ana_p - p_alt
+                    if p_alt >= min_alt_p and gap <= max_gap:
+                        kapsama_hedefleri.append((idx, taraf, p_alt, gap))
+
+            # Her anlamlı alternatif için beam içindeki en kaliteli temsilciyi ekle.
+            # Aynı kolon birden fazla kapsama hedefini karşılayabildiğinden gereksiz
+            # kolon şişmesi olmaz.
+            for idx, taraf, p_alt, gap in sorted(kapsama_hedefleri, key=lambda x: (x[2], -x[3]), reverse=True):
+                if any(imza[idx] == taraf for imza in secilen_imzalar):
+                    continue
+                temsilciler = [a for a in adaylar if a['imza'][idx] == taraf]
+                if not temsilciler:
+                    continue
+                en_iyi_tem = max(temsilciler, key=lambda a: (a['skor'], -a['degisim']))
+                if en_iyi_tem['imza'] not in secilen_imzalar:
+                    secilen_imzalar.append(en_iyi_tem['imza'])
+
             # Ortalama güven düştükçe daha düşük marjinal faydaya sahip kolonlara
             # izin ver. Fallback arttıkça eşik biraz daha gevşer.
             if ort_guven >= 62.0:
@@ -10616,12 +10650,46 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
             kolon_sayisi = len(kolonlar)
 
+            # 8 kolon yeterlilik uyarısı: yalnız kolon sayısına değil, modelin anlamlı
+            # alternatif kapsamına bak. İlk 8 kolon tüm kapsama hedeflerini taşımıyorsa
+            # kullanıcıya daha fazla kolon gerektiğini açıkça söyle.
+            ilk8 = secilen_imzalar[:8]
+            ilk8_kapsanmayan = []
+            for idx, taraf, p_alt, gap in kapsama_hedefleri:
+                if not any(imza[idx] == taraf for imza in ilk8):
+                    ilk8_kapsanmayan.append((idx, taraf, p_alt))
+
+            onerilen_min_kolon = 1
+            if kapsama_hedefleri:
+                for n in range(1, len(secilen_imzalar) + 1):
+                    ilk_n = secilen_imzalar[:n]
+                    if all(any(imza[idx] == taraf for imza in ilk_n) for idx, taraf, _, _ in kapsama_hedefleri):
+                        onerilen_min_kolon = n
+                        break
+                else:
+                    onerilen_min_kolon = len(secilen_imzalar)
+
+            if kolon_sayisi > 8 and (ilk8_kapsanmayan or onerilen_min_kolon > 8):
+                st.warning(
+                    f"⚠️ Bu hafta 8 kolon modelin anlamlı 1/X/2 alternatiflerini tam kapsamıyor. "
+                    f"Kapsama için en az {max(onerilen_min_kolon, 9)} kolon öneriliyor; "
+                    f"model toplam {kolon_sayisi} kaliteli kolon üretti. Bütçen uygunsa daha fazla kolon görüntüleyebilirsin."
+                )
+            elif kolon_sayisi > 8:
+                st.info(
+                    f"Model {kolon_sayisi} kaliteli kolon üretti. İlk 8 kolon çekirdek kapsama için yeterli görünüyor; "
+                    "8'in üzeri kolon ek senaryo çeşitliliği sağlar."
+                )
+            else:
+                st.success(f"Model bu hafta için {kolon_sayisi} kolonluk çekirdek kapsamayı yeterli görüyor.")
+
             iki_farkli_sayisi = sum(
                 1 for imza in secilen_imzalar[1:]
                 if _hamming(imza, ana_imza) >= 2
             )
             st.caption(
                 f"Dinamik sistem {kolon_sayisi} benzersiz kolon seçti. "
+                f"Anlamlı alternatif kapsama hedefi {len(kapsama_hedefleri)} · önerilen çekirdek kolon {onerilen_min_kolon}. "
                 f"Ortalama güven %{ort_guven:.1f} · çekirdek alternatifli maç {alternatifli_mac} · "
                 f"fallback maç {fallback_mac} · arama değişiklik sınırı {MAX_DEGISIKLIK}. "
                 f"1. kolon ana modeldir; diğer {max(0, kolon_sayisi-1)} kolonun "
