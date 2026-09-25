@@ -713,7 +713,7 @@ def backtest_kaydi(row, target, t):
 # ==========================================================
 # BASKETBOL MOTORU 1.0 — FORM + PACE + ORTG/DRTG + LINE + BACKTEST
 # ==========================================================
-BASKET_MODEL_VERSION = "2026.09.22.league-calibrated-score-v3"
+BASKET_MODEL_VERSION = "2026.09.25.fix15-quarter-safe-v1"
 
 
 def basket_veri_hazirla(df):
@@ -1536,7 +1536,13 @@ def basket_guncel_adaylar(df, events, limit=10):
         rows.append({"Saat":e.get("commence_time"),"Maç":f"{ev_api} - {dep_api}","Ana Market":market,"Ana Tahmin":tahmin,
                      "Güven":round(float(guven),1),"Ana Oran":round(float(ana_oran),2) if ana_oran else None,
                      "EV %":round(float(ana_ev)*100,1) if ana_ev is not None else None,
-                     "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',"Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
+                     "Beklenen Skor":f'{r["home_score"]:.1f}-{r["away_score"]:.1f}',
+                     "İY Tahmin":(f'{r["h1_home"]:.1f}-{r["h1_away"]:.1f}' if r.get("h1_home") is not None and r.get("h1_away") is not None else None),
+                     "Q1":(f'{r["quarters"][0][1]:.1f}-{r["quarters"][0][2]:.1f}' if len(r.get("quarters",[]))>=1 else None),
+                     "Q2":(f'{r["quarters"][1][1]:.1f}-{r["quarters"][1][2]:.1f}' if len(r.get("quarters",[]))>=2 else None),
+                     "Q3":(f'{r["quarters"][2][1]:.1f}-{r["quarters"][2][2]:.1f}' if len(r.get("quarters",[]))>=3 else None),
+                     "Q4":(f'{r["quarters"][3][1]:.1f}-{r["quarters"][3][2]:.1f}' if len(r.get("quarters",[]))>=4 else None),
+                     "Model Toplam":r["total"],"Piyasa Toplam":mk["total_line"],
                      "Piyasa Handikapı (Ev)":mk["spread_line"],"MS Ev Oranı":mk["home_odds"],"MS Dep Oranı":mk["away_odds"],
                      "Ev H Oranı":mk.get("home_spread_odds"),"Dep H Oranı":mk.get("away_spread_odds"),
                      "Üst Oranı":mk.get("over_odds"),"Alt Oranı":mk.get("under_odds"),
@@ -1658,10 +1664,23 @@ def _deep_get(d,*paths):
     return None
 
 
+def _eu_side_obj(obj, side):
+    """EuroLeague v2 geçmişinde hem local/road hem home/away şemasını destekle."""
+    if not isinstance(obj, dict):
+        return None
+    keys = ("local", "home") if side == "local" else ("road", "away")
+    for key in keys:
+        value = obj.get(key)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
 def _eu_team_name(obj, side):
-    side_obj=obj.get(side) if isinstance(obj,dict) else None
-    if isinstance(side_obj,dict):
-        v=_deep_get(side_obj,("club","name"),("club","clubName"),("team","name"),("name",),("clubName",),("teamName",))
+    side_obj = _eu_side_obj(obj, side)
+    if isinstance(side_obj, dict):
+        v = _deep_get(side_obj, ("club","name"), ("club","clubName"), ("team","name"),
+                      ("name",), ("clubName",), ("teamName",), ("shortName",))
         if v: return str(v)
     aliases={"local":["localClub","homeClub","homeTeam"],"road":["roadClub","awayClub","awayTeam"]}[side]
     for k in aliases:
@@ -1681,7 +1700,7 @@ def _eu_score(obj,side):
         try:
             if v is not None:return float(v)
         except Exception: pass
-    sobj=obj.get(side) if isinstance(obj,dict) else None
+    sobj=_eu_side_obj(obj, side)
     if isinstance(sobj,dict):
         for k in ("score","points","totalPoints"):
             try:
@@ -1690,148 +1709,53 @@ def _eu_score(obj,side):
     return None
 
 
-def _eu_float(value):
+def _eu_num(value):
     try:
-        if isinstance(value, dict):
-            for key in ("score", "points", "value", "pts"):
-                if key in value:
-                    return _eu_float(value.get(key))
-            return None
-        number=float(value)
-        return number if math.isfinite(number) else None
+        value=float(value)
+        return value if math.isfinite(value) and value >= 0 else None
     except (TypeError, ValueError):
         return None
 
 
-def _eu_quarter_values(block):
-    """EuroLeague v2 home/away.quarters alanını Q1..Q4 listesine çevirir."""
-    if block is None:
-        return []
-    if isinstance(block, (tuple, list)):
-        direct=[_eu_float(v) for v in block]
-        direct=[v for v in direct if v is not None]
-        if len(direct) >= 4:
-            return direct[:4]
-        numbered={}
-        sequential=[]
-        for item in block:
-            if not isinstance(item, dict):
-                continue
-            qnum=None
-            for key in ("quarter", "quarterNumber", "number", "period", "periodNumber"):
-                try:
-                    if item.get(key) is not None:
-                        qnum=int(item.get(key)); break
-                except (TypeError, ValueError):
-                    pass
-            score=None
-            for key in ("score", "points", "value", "pts"):
-                if item.get(key) is not None:
-                    score=_eu_float(item.get(key)); break
-            if score is None:
-                # Tek sayısal değer taşıyan küçük objeleri de kabul et.
-                nums=[_eu_float(v) for k,v in item.items() if str(k).lower() not in {"quarter","quarternumber","number","period","periodnumber"}]
-                nums=[v for v in nums if v is not None]
-                if len(nums)==1: score=nums[0]
-            if score is not None:
-                if qnum is not None and 1 <= qnum <= 4: numbered[qnum]=score
-                else: sequential.append(score)
-        if all(q in numbered for q in range(1,5)):
-            return [numbered[q] for q in range(1,5)]
-        if len(sequential) >= 4:
-            return sequential[:4]
-        return []
-    if isinstance(block, dict):
-        # En yaygın v2 biçimi: {quarter1:..., quarter2:...} / {q1:...}
-        norm={re.sub(r"[^a-z0-9]", "", str(k).lower()): v for k,v in block.items()}
-        result=[]
-        for q in range(1,5):
-            value=None
-            for key in (f"q{q}", f"quarter{q}", f"period{q}", f"scoreq{q}", f"scorequarter{q}"):
-                if key in norm:
-                    value=_eu_float(norm[key]); break
-            if value is None:
-                result=[]; break
-            result.append(value)
-        if len(result)==4:
-            return result
-        # Bazı cevaplarda quarters bir alt objede tekrar sarılı olabilir.
-        for key,value in block.items():
-            if str(key).lower() in ("quarters","byquarter","scores","periods"):
-                nested=_eu_quarter_values(value)
-                if len(nested)>=4: return nested[:4]
-    return []
+def _eu_quarters(obj, side):
+    """v2 games içindeki home/away.quarters alanını Q1-Q4'e çevirir.
 
-
-def _eu_game_quarters(game, side):
-    """v2 games cevabındaki local/road veya home/away takımının periyotlarını okur."""
-    aliases=("local","home") if side=="local" else ("road","away")
-    for alias in aliases:
-        obj=game.get(alias) if isinstance(game,dict) else None
-        if isinstance(obj,dict):
-            for key in ("quarters","quarterScores","byQuarter","periods"):
-                vals=_eu_quarter_values(obj.get(key))
-                if len(vals)>=4: return vals[:4]
-            vals=_eu_quarter_values(obj)
-            if len(vals)>=4: return vals[:4]
-    # Flat alanlar için son emniyet ağı.
-    prefix_aliases=("local","home") if side=="local" else ("road","away")
-    for prefix in prefix_aliases:
-        vals=[]
-        for q in range(1,5):
-            found=None
-            for key in (f"{prefix}Q{q}",f"{prefix}Quarter{q}",f"{prefix}ScoreQ{q}"):
-                if key in game:
-                    found=_eu_float(game.get(key)); break
-            if found is None:
-                vals=[]; break
-            vals.append(found)
-        if len(vals)==4: return vals
-    return []
-
-
-def _eu_boxscore_quarters(season, gamecode, home_score=None, away_score=None):
-    """v2 quarters yoksa resmi live Boxscore/ByQuarter yedeği."""
-    if gamecode in (None, ""):
-        return [], []
-    try:
-        payload=_basket_http_json(
-            "https://live.euroleague.net/api/Boxscore",
-            params={"gamecode": int(gamecode), "seasoncode": str(season)},
-            headers={"Origin":"https://www.euroleaguebasketball.net","Referer":"https://www.euroleaguebasketball.net/"},
-            timeout=20,
-        )
-    except Exception:
-        return [], []
-    block=payload.get("ByQuarter") if isinstance(payload,dict) else None
-    # ByQuarter çoğunlukla iki takım satırı/kolonu içerir.
-    candidates=[]
-    if isinstance(block,dict):
-        try:
-            frame=pd.DataFrame(block)
-            candidates=[_eu_quarter_values(r) for r in frame.to_dict("records")]
-        except Exception:
-            candidates=[]
-        if not candidates:
-            for value in block.values():
-                vals=_eu_quarter_values(value)
-                if len(vals)>=4: candidates.append(vals[:4])
-    elif isinstance(block,list):
-        if len(block)>=2:
-            candidates=[_eu_quarter_values(item) for item in block]
-        else:
-            vals=_eu_quarter_values(block)
-            if len(vals)>=8: candidates=[vals[:4],vals[4:8]]
-    candidates=[c[:4] for c in candidates if len(c)>=4]
-    if len(candidates)<2:
-        return [], []
-    a,b=candidates[0],candidates[1]
-    # Takım sırası belirsizse final skora en yakın eşleşmeyi seç.
-    if home_score is not None and away_score is not None:
-        direct=abs(sum(a)-float(home_score))+abs(sum(b)-float(away_score))
-        swap=abs(sum(b)-float(home_score))+abs(sum(a)-float(away_score))
-        if swap < direct: a,b=b,a
-    return a,b
+    Ana geçmiş maç havuzunu değiştirmez; yalnızca mevcut satıra ek kolon üretir.
+    Upstream şema küçük farklılıklar gösterdiği için liste/dict biçimlerini destekler.
+    """
+    sobj=_eu_side_obj(obj, side)
+    if not isinstance(sobj,dict): return []
+    q=sobj.get("quarters") or sobj.get("quarterScores") or sobj.get("periods")
+    if q is None: return []
+    values=[]
+    if isinstance(q,(list,tuple)):
+        for item in q:
+            if isinstance(item,dict):
+                v=None
+                for key in ("score","points","value","teamScore","pointsScored"):
+                    if key in item:
+                        v=_eu_num(item.get(key));
+                        if v is not None: break
+                if v is None and len(item)==1:
+                    v=_eu_num(next(iter(item.values())))
+                values.append(v)
+            else:
+                values.append(_eu_num(item))
+    elif isinstance(q,dict):
+        for i in range(1,5):
+            v=None
+            for key in (f"q{i}",f"Q{i}",str(i),f"quarter{i}",f"Quarter{i}"):
+                if key in q:
+                    item=q.get(key)
+                    if isinstance(item,dict):
+                        for sk in ("score","points","value","teamScore","pointsScored"):
+                            if sk in item:
+                                v=_eu_num(item.get(sk));
+                                if v is not None: break
+                    else: v=_eu_num(item)
+                    if v is not None: break
+            values.append(v)
+    return values[:4] if len(values)>=4 and all(v is not None for v in values[:4]) else []
 
 
 def basket_euroleague_gecmis_cek(events, days=500):
@@ -1857,18 +1781,12 @@ def basket_euroleague_gecmis_cek(events, days=500):
                 hs=_eu_score(g,"local"); aas=_eu_score(g,"road")
                 if not hn or not an or hs is None or aas is None:continue
                 dt=_deep_get(g,("date",),("startDate",),("startTime",),("utcDate",),("gameDate",))
-                gamecode=g.get("gameCode") or g.get("code")
-                hq=_eu_game_quarters(g,"local"); aq=_eu_game_quarters(g,"road")
-                # Sezonluk v2 games cevabı normalde home/away.quarters taşır.
-                # Eksik bir şema gelirse yalnız o maç için resmi ByQuarter yedeğini dene.
-                if len(hq)<4 or len(aq)<4:
-                    bhq,baq=_eu_boxscore_quarters(season,gamecode,hs,aas)
-                    if len(bhq)>=4 and len(baq)>=4:
-                        hq,aq=bhq[:4],baq[:4]
-                row={"Date":dt,"League":league_name,"HomeTeam":hn,"AwayTeam":an,"HomeScore":hs,"AwayScore":aas,"_season":season,"_gamecode":gamecode}
+                row={"Date":dt,"League":league_name,"HomeTeam":hn,"AwayTeam":an,"HomeScore":hs,"AwayScore":aas,
+                     "_season":season,"_gamecode":g.get("gameCode") or g.get("code")}
+                hq=_eu_quarters(g,"local"); aq=_eu_quarters(g,"road")
                 if len(hq)>=4 and len(aq)>=4:
-                    for q in range(1,5):
-                        row[f"HomeQ{q}"]=hq[q-1]; row[f"AwayQ{q}"]=aq[q-1]
+                    for qi in range(4):
+                        row[f"HomeQ{qi+1}"]=hq[qi]; row[f"AwayQ{qi+1}"]=aq[qi]
                     row["HomeH1"]=hq[0]+hq[1]; row["AwayH1"]=aq[0]+aq[1]
                 rows.append(row)
     df=basket_veri_hazirla(pd.DataFrame(rows)) if rows else pd.DataFrame()
@@ -1880,7 +1798,7 @@ def basket_euroleague_gecmis_cek(events, days=500):
 
 def basket_otomatik_gecmis(league, events, key=None, refresh=False):
     """Anahtarsız geçmiş sağlayıcı. NBA=NBA Stats, EuroLeague=resmi EuroLeague feed."""
-    cache_key=f"basket_auto_history_{league}"
+    cache_key=f"basket_auto_history_fix15_{league}"
     ts_key=cache_key+"_ts"; now=time.time()
     old=st.session_state.get(cache_key); old_ts=float(st.session_state.get(ts_key,0) or 0)
     if (not refresh) and isinstance(old,pd.DataFrame) and not old.empty and now-old_ts<1800:
