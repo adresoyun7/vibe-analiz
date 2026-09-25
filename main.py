@@ -10443,6 +10443,7 @@ FIX21_KOLON_FREKANSI = "probability-frequency-hamilton-v1"
 FIX22_PREFIX_FREKANSI = "probability-balanced-prefix-v1"
 FIX23_SURPRIZ_DENGESI = "row-swap-surprise-load-v1"
 FIX24_PREFIX_SURPRIZ = "prefix-hard-surprise-separation-v1"
+FIX25_FREKANS_GARANTI = "constructive-frequency-first-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10861,40 +10862,49 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             secilen_imzalar = _prefix_frekans_sirala(secilen_imzalar)
 
-            # FIX24: İlk-N kolonlarda ciddi sürprizleri ayır ve frekansı koru.
+            # FIX25: Önce frekansı garanti et, sonra ciddi sürprizleri dağıt.
             CIDDI_SURPRIZ_ESIGI = 0.20
-            _f24_probs=[]
+            _f25_probs=[]
             for r0 in tamam:
                 dag=r0.get('spor_toto_dagilim') or {}
                 vals={t:max(0.0,float(dag.get(t,0) or 0)) for t in ('1','X','2')}
                 s=sum(vals.values()) or 1.0
-                _f24_probs.append({t:vals[t]/s for t in ('1','X','2')})
+                _f25_probs.append({t:vals[t]/s for t in ('1','X','2')})
 
-            def _ciddi_surpriz_sayisi(imza):
-                return sum(1 for i,sec in enumerate(imza)
-                           if _f24_probs[i].get(sec,0.0) < CIDDI_SURPRIZ_ESIGI)
+            def _f25_hedef_adet(pmap,n):
+                raw={t:pmap[t]*n for t in ('1','X','2')}
+                adet={t:int(raw[t]) for t in ('1','X','2')}
+                kalan=n-sum(adet.values())
+                for t in sorted(('1','X','2'),key=lambda t:(raw[t]-adet[t],pmap[t]),reverse=True)[:kalan]:
+                    adet[t]+=1
+                return adet
 
-            def _prefix_surpriz_sirala(imzalar):
-                if len(imzalar)<=2: return imzalar
-                kalan=list(imzalar)
-                secilen=[kalan.pop(0)]
-                while kalan:
-                    n=len(secilen)+1
-                    mevcut=[{t:sum(row[i]==t for row in secilen) for t in ('1','X','2')}
-                            for i in range(len(tamam))]
-                    def score(cand):
-                        fh=0.0
-                        for i,pmap in enumerate(_f24_probs):
-                            for t in ('1','X','2'):
-                                c=mevcut[i][t]+(cand[i]==t)
-                                fh+=(c-pmap[t]*n)**2
-                        cs=_ciddi_surpriz_sayisi(cand)
-                        return fh + 100.0*(max(0,cs-1)**2)
-                    j=min(range(len(kalan)),key=lambda q:score(kalan[q]))
-                    secilen.append(kalan.pop(j))
-                return secilen
-
-            secilen_imzalar=_prefix_surpriz_sirala(secilen_imzalar)
+            def _f25_prefix_uret(n):
+                n=max(1,int(n))
+                rows=[[] for _ in range(n)]
+                yuk=[0]*n
+                for i,pmap in enumerate(_f25_probs):
+                    hedef=_f25_hedef_adet(pmap,n)
+                    ana=max(('1','X','2'),key=lambda t:pmap[t])
+                    h=dict(hedef)
+                    t0=ana if h.get(ana,0)>0 else max(('1','X','2'),key=lambda t:(h.get(t,0),pmap[t]))
+                    rows[0].append(t0); h[t0]-=1
+                    sec=[]
+                    for t in ('1','X','2'): sec += [t]*max(0,h[t])
+                    # ciddi sürprizleri önce yerleştir
+                    sec.sort(key=lambda t:(pmap[t]>=CIDDI_SURPRIZ_ESIGI,pmap[t]))
+                    bos=list(range(1,n))
+                    for t in sec:
+                        ciddi=pmap[t]<CIDDI_SURPRIZ_ESIGI
+                        if ciddi:
+                            aday=sorted(bos,key=lambda j:(yuk[j]>0,yuk[j],j))
+                        else:
+                            aday=sorted(bos,key=lambda j:(yuk[j],j))
+                        j=aday[0]
+                        rows[j].append(t)
+                        if ciddi: yuk[j]+=1
+                        bos.remove(j)
+                return [tuple(r) for r in rows]
 
             kolonlar = {}
             for k, imza in enumerate(secilen_imzalar, start=1):
@@ -10921,32 +10931,40 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             KAPSAMA_HEDEFI = 0.95
 
-            def _prefix_surpriz_cakisma(n):
-                ilk_n=secilen_imzalar[:max(1,min(int(n),len(secilen_imzalar)))]
-                return sum(1 for imza in ilk_n if _ciddi_surpriz_sayisi(imza)>1)
+            def _f25_cakisma(prefix):
+                return sum(1 for imza in prefix if sum(
+                    1 for i,sec in enumerate(imza)
+                    if _f25_probs[i].get(sec,0.0)<CIDDI_SURPRIZ_ESIGI
+                )>1)
 
-            onerilen_min_kolon=len(secilen_imzalar)
-            for n in range(1,len(secilen_imzalar)+1):
-                if _agirlikli_kapsama(n)>=KAPSAMA_HEDEFI and _prefix_surpriz_cakisma(n)==0:
+            def _f25_kapsama(n):
+                toplam=0.0; kap=0.0
+                for idx,taraf,p_alt,gap in kapsama_hedefleri:
+                    w=max(0.0,float(p_alt or 0.0)); toplam+=w
+                    if _f25_hedef_adet(_f25_probs[idx],n).get(taraf,0)>0: kap+=w
+                return kap/toplam if toplam>0 else 1.0
+
+            onerilen_min_kolon=kolon_sayisi
+            for n in range(2,kolon_sayisi+1):
+                if _f25_kapsama(n)>=KAPSAMA_HEDEFI and _f25_cakisma(_f25_prefix_uret(n))==0:
                     onerilen_min_kolon=n
                     break
 
-            kapsama8=_agirlikli_kapsama(min(8,kolon_sayisi))
-            kapsama_oneri=_agirlikli_kapsama(onerilen_min_kolon)
-            surpriz_cakisma8=_prefix_surpriz_cakisma(min(8,kolon_sayisi))
-            surpriz_cakisma_oneri=_prefix_surpriz_cakisma(onerilen_min_kolon)
+            kapsama8=_f25_kapsama(min(8,kolon_sayisi))
+            kapsama_oneri=_f25_kapsama(onerilen_min_kolon)
+            surpriz_cakisma8=_f25_cakisma(_f25_prefix_uret(min(8,kolon_sayisi)))
+            surpriz_cakisma_oneri=_f25_cakisma(_f25_prefix_uret(onerilen_min_kolon))
 
             if onerilen_min_kolon > 8:
                 st.warning(
-                    f"⚠️ İlk 8 kolon: alternatif kapsama %{kapsama8*100:.1f} · "
-                    f"ciddi sürpriz çakışmalı kolon {surpriz_cakisma8}. "
-                    f"%95 kapsama ve aynı kolonda birden fazla %20-altı sürpriz olmaması "
-                    f"şartlarını birlikte sağlayan dinamik öneri: {onerilen_min_kolon} kolon."
+                    f"⚠️ İlk 8 kolon: alternatif kapsama %{kapsama8*100:.1f} · ciddi sürpriz çakışmalı kolon {surpriz_cakisma8}. "
+                    f"Frekansları eksiltmeden %95 kapsama + sıfır ciddi-sürpriz çakışması sağlayan minimum öneri: "
+                    f"{onerilen_min_kolon} kolon."
                 )
             else:
                 st.success(
-                    f"Dinamik öneri {onerilen_min_kolon} kolon · kapsama "
-                    f"%{kapsama_oneri*100:.1f} · ciddi sürpriz çakışması {surpriz_cakisma_oneri}."
+                    f"Dinamik minimum öneri {onerilen_min_kolon} kolon · kapsama %{kapsama_oneri*100:.1f} · "
+                    f"ciddi sürpriz çakışması {surpriz_cakisma_oneri}."
                 )
 
             iki_farkli_sayisi = sum(
@@ -10964,7 +10982,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
-            st.caption("FIX24: %20 altı ciddi sürprizler ilk-N kolonlarda ayrılır; kolon önerisi %95 kapsama + sıfır ciddi-sürpriz çakışması şartıyla hesaplanır.")
+            st.caption("FIX25: Seçilen N için 1/X/2 adetleri önce kesinleştirilir; ardından %20 altı ciddi sürprizler bu adetleri bozmadan farklı kolonlara dağıtılır.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
@@ -10986,6 +11004,13 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"en iyi {gosterilecek_kolon} kolon gösteriliyor."
             )
 
+            # FIX25: Seçilen N için kolonları yeniden kur; frekans hedefleri N'e göre garanti edilir.
+            _goster_prefix = _f25_prefix_uret(int(gosterilecek_kolon))
+            _goster_kolonlar = {
+                k: {no: secim for no, secim in zip(mac_nolari, imza)}
+                for k, imza in enumerate(_goster_prefix, start=1)
+            }
+
             gor = []
             for r in _st_sonuclar:
                 if not str(r.get('durum', '')).startswith('Tamam'):
@@ -10997,7 +11022,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     'Dağılım': dag_txt,
                 }
                 for k in range(1, int(gosterilecek_kolon) + 1):
-                    satir[f'{k}. Kolon'] = kolonlar[k].get(r['no'], '—')
+                    satir[f'{k}. Kolon'] = _goster_kolonlar[k].get(r['no'], '—')
                 gor.append(satir)
             st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
 
