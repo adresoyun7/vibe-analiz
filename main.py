@@ -713,7 +713,7 @@ def backtest_kaydi(row, target, t):
 # ==========================================================
 # BASKETBOL MOTORU 1.0 — FORM + PACE + ORTG/DRTG + LINE + BACKTEST
 # ==========================================================
-BASKET_MODEL_VERSION = "2026.09.22.league-calibrated-score-v3"
+BASKET_MODEL_VERSION = "2026.09.25.quarter-score-v4"
 
 
 def basket_veri_hazirla(df):
@@ -1777,7 +1777,55 @@ def _eu_quarter_scores(game):
                 if hs is not None and aas is not None:
                     result[q] = (hs, aas)
 
+    # v2 season-wide games endpoint quarter scores can also be flat fields.
+    # Example naming varies by feed revision, so detect semantic key names
+    # containing quarter/period + 1..4 + local/home or road/away.
+    if not all(q in result for q in range(1, 5)) and isinstance(game, dict):
+        flat = {}
+        def walk(obj, prefix=""):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    key = f"{prefix}_{k}" if prefix else str(k)
+                    if isinstance(v, (dict, list)):
+                        walk(v, key)
+                    else:
+                        flat[key.lower()] = v
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    walk(v, f"{prefix}_{i+1}")
+        walk(game)
+
+        def flat_score(q, home=True):
+            side_words = ("local", "home", "teama", "team_a") if home else ("road", "away", "visitor", "teamb", "team_b")
+            candidates=[]
+            for k,v in flat.items():
+                compact=re.sub(r"[^a-z0-9]+", "", k)
+                has_side=any(re.sub(r"[^a-z0-9]+", "", word) in compact for word in side_words)
+                has_period=(f"quarter{q}" in compact or f"period{q}" in compact or f"q{q}" in compact)
+                if has_side and has_period and any(word in compact for word in ("score","point","pts","quarter","period")):
+                    z=num(v)
+                    if z is not None and 0 <= z <= 80:
+                        candidates.append(z)
+            return candidates[0] if candidates else None
+
+        for q in range(1,5):
+            if q in result:
+                continue
+            h=flat_score(q, True); a=flat_score(q, False)
+            if h is not None and a is not None:
+                result[q]=(h,a)
+
     if not all(q in result for q in range(1, 5)):
+        return {}
+
+    # Sanity check: regulation quarter points must reconcile with final score
+    # unless the game went to overtime (then Q1-Q4 sum can be lower).
+    try:
+        qh=sum(result[q][0] for q in range(1,5)); qa=sum(result[q][1] for q in range(1,5))
+        fh=_eu_score(game,"local"); fa=_eu_score(game,"road")
+        if qh <= 0 or qa <= 0 or (fh is not None and qh > fh+0.01) or (fa is not None and qa > fa+0.01):
+            return {}
+    except Exception:
         return {}
     return result
 
