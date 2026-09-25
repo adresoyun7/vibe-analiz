@@ -713,7 +713,7 @@ def backtest_kaydi(row, target, t):
 # ==========================================================
 # BASKETBOL MOTORU 1.0 — FORM + PACE + ORTG/DRTG + LINE + BACKTEST
 # ==========================================================
-BASKET_MODEL_VERSION = "2026.09.25.fix16-stable-no-periods"
+BASKET_MODEL_VERSION = "2026.09.25.fix18-spor-toto-national-match"
 
 
 def basket_veri_hazirla(df):
@@ -10104,6 +10104,39 @@ def _spor_toto_takim_benzerlik(a, b):
         "erzurumsporfk": "erzurumspor",
         "bberzurumspor": "erzurumspor",
         "buyuksehirbelediyeerzurumspor": "erzurumspor",
+
+        # Milli takımlar: Spor Toto Türkçe adları <-> The Odds API İngilizce adları
+        "turkiye": "turkey", "turkey": "turkey",
+        "fransa": "france", "france": "france",
+        "italya": "italy", "italy": "italy",
+        "isvec": "sweden", "sweden": "sweden",
+        "romanya": "romania", "romania": "romania",
+        "belcika": "belgium", "belgium": "belgium",
+        "slovenya": "slovenia", "slovenia": "slovenia",
+        "iskocya": "scotland", "scotland": "scotland",
+        "bulgaristan": "bulgaria", "bulgaria": "bulgaria",
+        "luksemburg": "luxembourg", "luxembourg": "luxembourg",
+        "kuzeymakedonya": "northmacedonia",
+        "kuzeymakedonyacumhuriyeti": "northmacedonia",
+        "northmacedonia": "northmacedonia",
+        "isvicre": "switzerland", "switzerland": "switzerland",
+        "cekya": "czechrepublic", "cekrepublic": "czechrepublic",
+        "czechia": "czechrepublic", "czechrepublic": "czechrepublic",
+        "hirvatistan": "croatia", "croatia": "croatia",
+        "ingiltere": "england", "england": "england",
+        "ispanya": "spain", "spain": "spain",
+        "litvanya": "lithuania", "lithuania": "lithuania",
+        "azerbaycan": "azerbaijan", "azerbaijan": "azerbaijan",
+        "avusturya": "austria", "austria": "austria",
+        "kosova": "kosovo", "kosovo": "kosovo",
+        "danimarka": "denmark", "denmark": "denmark",
+        "galler": "wales", "wales": "wales",
+        "sirbistan": "serbia", "serbia": "serbia",
+        "hollanda": "netherlands", "netherlands": "netherlands",
+        "almanya": "germany", "germany": "germany",
+        "yunanistan": "greece", "greece": "greece",
+        "norvec": "norway", "norway": "norway",
+        "portekiz": "portugal", "portugal": "portugal",
     }
     ka = aliaslar.get(ka, ka)
     kb = aliaslar.get(kb, kb)
@@ -10364,18 +10397,58 @@ def _spor_toto_ms_11_hesapla(gecmis_df, mac_row, min_ornek_val, ayni_lig=False):
     }
 
 
+FIX18_SPOR_TOTO = "national-team-auto-slate-v1"
+
+
+def _spor_toto_api_kodlari(api_key, normal_kodlar):
+    """Spor Toto için seçili liglere ek olarak aktif milli takım organizasyonlarını ekle.
+
+    /sports kataloğu kota harcamaz. Sadece katalogda gerçekten bulunan/aktif
+    uluslararası futbol sport key'leri eklenir; uydurma key kullanılmaz.
+    """
+    kodlar = list(dict.fromkeys(list(normal_kodlar or [])))
+    adaylar = {
+        "soccer_uefa_nations_league",
+        "soccer_fifa_world_cup",
+        "soccer_fifa_world_cup_qualifiers_europe",
+        "soccer_fifa_world_cup_qualifiers_south_america",
+        "soccer_uefa_european_championship",
+        "soccer_uefa_euro_qualification",
+        "soccer_concacaf_gold_cup",
+        "soccer_conmebol_copa_america",
+    }
+    try:
+        katalog = odds_spor_katalogu(api_key)
+        aktif = {
+            str(x.get("key", "")).strip()
+            for x in (katalog or [])
+            if isinstance(x, dict)
+            and bool(x.get("active", True))
+            and str(x.get("key", "")).startswith("soccer_")
+        }
+        kodlar.extend(sorted(adaylar & aktif))
+    except Exception:
+        # Katalog geçici olarak okunamazsa belgelenmiş temel milli takım key'lerini dene.
+        kodlar.extend([
+            "soccer_uefa_nations_league",
+            "soccer_fifa_world_cup_qualifiers_europe",
+        ])
+    return list(dict.fromkeys(kodlar))
+
+
 if spor_toto_btn:
     spor_maclar = _spor_toto_satirlari_parse(st.session_state.get('spor_toto_metin', ''))
     if len(spor_maclar) != 15:
         st.warning(f"Spor Toto için 15 geçerli maç bekleniyor; şu an {len(spor_maclar)} satır okundu.")
-    if not API_KEY or not secili_kodlar:
-        st.error("⚠️ Oranları eşleştirmek için API Key ve ilgili ligleri seçin.")
+    if not API_KEY:
+        st.error("⚠️ Spor Toto oranlarını eşleştirmek için API Key gerekli.")
     elif spor_maclar:
         with st.spinner("⚽ Spor Toto maçları bültenle eşleştiriliyor ve 11 hassasiyet taranıyor..."):
             gecmis_st = futbol_veri_motoru(tuple(yillar))
+            spor_toto_kodlari = _spor_toto_api_kodlari(API_KEY, secili_kodlar)
             tarih_bultenleri = []
             for gun in sorted({x["zaman"].date() for x in spor_maclar}):
-                df_gun = bulten_saglam_al(API_KEY, secili_kodlar, gun)
+                df_gun = bulten_saglam_al(API_KEY, spor_toto_kodlari, gun)
                 if isinstance(df_gun, pd.DataFrame) and not df_gun.empty:
                     tarih_bultenleri.append(df_gun)
             st_bulten = pd.concat(tarih_bultenleri, ignore_index=True) if tarih_bultenleri else pd.DataFrame()
@@ -10401,7 +10474,7 @@ if spor_toto_btn:
 
 if st.session_state.get('sayfa_modu') == 'Spor Toto':
     st.markdown("### ⚽ Spor Toto · 15 Maç")
-    st.caption("Maç adları manuel; oranlar seçili liglerin cache'lenmiş The Odds API bülteninden eşleştirilir. MS 1/X/2 için önce 0.00–0.10 taranır; örnek yoksa yalnız Spor Toto'da kontrollü 0.15/0.20 ve en yakın oran fallback uygulanır.")
+    st.caption("Maç adları manuel; Spor Toto seçili liglere ek olarak aktif milli takım organizasyonlarını The Odds API kataloğundan otomatik ekler ve bültenle eşleştirir. MS 1/X/2 için önce 0.00–0.10 taranır; örnek yoksa yalnız Spor Toto'da kontrollü 0.15/0.20 ve en yakın oran fallback uygulanır.")
     _st_sonuclar = st.session_state.get('spor_toto_sonuclar', [])
     if not _st_sonuclar:
         st.info("15 maçı kontrol ettikten sonra **⚽ SPOR TOTO ANALİZ ET** butonuna bas.")
