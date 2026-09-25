@@ -10439,6 +10439,7 @@ def _spor_toto_api_kodlari(api_key, normal_kodlar):
 
 FIX19_SPOR_TOTO = "smart-national-slate-v1"
 FIX20_KOLON_ONERISI = "weighted-coverage-95-v1"
+FIX21_KOLON_FREKANSI = "probability-frequency-hamilton-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10773,6 +10774,50 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 adaylar.remove(en_iyi)
                 son_fayda = fayda
 
+            # FIX21: tüm maçlarda kolon içindeki 1/X/2 frekansını model olasılığına yaklaştır.
+            def _hedef_adetler(dag, n):
+                taraflar = ('1', 'X', '2')
+                vals = [max(0.0, float((dag or {}).get(t, 0) or 0)) for t in taraflar]
+                s = sum(vals)
+                if s <= 0:
+                    return {t: 0 for t in taraflar}
+                raw = [v / s * n for v in vals]
+                base = [int(x) for x in raw]
+                kalan = n - sum(base)
+                sirali = sorted(range(3), key=lambda i: (raw[i] - base[i], vals[i]), reverse=True)
+                for i in sirali[:kalan]:
+                    base[i] += 1
+                return {t: base[i] for i, t in enumerate(taraflar)}
+
+            def _frekans_dengele(imzalar):
+                if not imzalar:
+                    return imzalar
+                out = [list(x) for x in imzalar]
+                n = len(out)
+                for idx, r0 in enumerate(tamam):
+                    hedef = _hedef_adetler(r0.get('spor_toto_dagilim') or {}, n)
+                    mevcut = {t: sum(1 for row in out if row[idx] == t) for t in ('1','X','2')}
+                    for hedef_taraf in ('1','X','2'):
+                        while mevcut[hedef_taraf] < hedef[hedef_taraf]:
+                            donorlar = [t for t in ('1','X','2') if mevcut[t] > hedef[t]]
+                            if not donorlar:
+                                break
+                            donor = max(donorlar, key=lambda t: mevcut[t] - hedef[t])
+                            degisti = False
+                            # 1. kolon ana model olarak korunur.
+                            for row_i in range(n - 1, 0, -1):
+                                if out[row_i][idx] == donor:
+                                    out[row_i][idx] = hedef_taraf
+                                    mevcut[donor] -= 1
+                                    mevcut[hedef_taraf] += 1
+                                    degisti = True
+                                    break
+                            if not degisti:
+                                break
+                return [tuple(x) for x in out]
+
+            secilen_imzalar = _frekans_dengele(secilen_imzalar)
+
             kolonlar = {}
             for k, imza in enumerate(secilen_imzalar, start=1):
                 kolonlar[k] = {no: secim for no, secim in zip(mac_nolari, imza)}
@@ -10836,6 +10881,8 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 "Kolon sayısı artık 4/6/8/10'a sabitlenmez; yalnızca marjinal faydası yeterli "
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
+
+            st.caption("FIX21: Her maçın 1/X/2 kolon frekansı modelin o maça ait olasılık dağılımına göre dengelenmiştir.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
