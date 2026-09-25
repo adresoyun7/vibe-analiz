@@ -10446,6 +10446,7 @@ FIX24_PREFIX_SURPRIZ = "prefix-hard-surprise-separation-v1"
 FIX25_FREKANS_GARANTI = "constructive-frequency-first-v1"
 FIX26_GUVEN_KORUMA = "confidence-aware-frequency-v1"
 FIX27_KOLON_DENGESI = "column-composition-swap-v1"
+FIX28_GUVEN_KARARLILIK = "confidence-stability-protection-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10873,27 +10874,43 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 s=sum(vals.values()) or 1.0
                 _f25_probs.append({t:vals[t]/s for t in ('1','X','2')})
 
-            def _f25_hedef_adet(pmap,n):
-                # FIX26 · Güven koruması:
-                # Kararsız maçlarda gerçek dağılıma yakın kal.
-                # Ana taraf güçlendikçe alternatif toplamını kademeli azalt.
+            def _f25_hedef_adet(pmap,n, mac_idx=None):
+                # FIX28 · Güven + Kararlılık birlikte koruma gücü belirler.
                 ana=max(('1','X','2'),key=lambda t:pmap[t])
                 pmax=float(pmap[ana])
 
-                if pmax >= 0.70:
-                    alt_carpan=0.20
-                elif pmax >= 0.60:
-                    alt_carpan=0.40
-                elif pmax >= 0.55:
-                    alt_carpan=0.60
-                elif pmax >= 0.50:
+                # Kararlılık değerini mevcut Spor Toto analiz satırından oku.
+                # Örn. "11/11", "6/6", "6/11". Bulunamazsa nötr 0.50 kullan.
+                kar_oran=0.50
+                try:
+                    r0=tamam[int(mac_idx)] if mac_idx is not None else None
+                    kv=(r0 or {}).get('kararlilik')
+                    if isinstance(kv,str) and '/' in kv:
+                        aa,bb=kv.split('/',1)
+                        kar_oran=float(aa)/max(1.0,float(bb))
+                    elif isinstance(kv,(int,float)):
+                        kar_oran=max(0.0,min(1.0,float(kv)))
+                except Exception:
+                    kar_oran=0.50
+
+                # Koruma skoru: güven %80 + kararlılık %20.
+                # Bu, uygulamanın ana puanlama yaklaşımıyla da uyumludur.
+                koruma=0.80*pmax + 0.20*kar_oran
+
+                # Yüksek koruma => alternatifleri daha sert küçült.
+                if koruma >= 0.70:
+                    alt_carpan=0.15
+                elif koruma >= 0.62:
+                    alt_carpan=0.30
+                elif koruma >= 0.55:
+                    alt_carpan=0.55
+                elif koruma >= 0.48:
                     alt_carpan=0.80
                 else:
                     alt_carpan=1.00
 
-                agirlik={}
-                for t in ('1','X','2'):
-                    agirlik[t]=float(pmap[t]) if t==ana else float(pmap[t])*alt_carpan
+                agirlik={t:(float(pmap[t]) if t==ana else float(pmap[t])*alt_carpan)
+                         for t in ('1','X','2')}
                 s=sum(agirlik.values()) or 1.0
                 norm={t:agirlik[t]/s for t in ('1','X','2')}
 
@@ -10903,12 +10920,11 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 for t in sorted(('1','X','2'),key=lambda t:(raw[t]-adet[t],norm[t]),reverse=True)[:kalan]:
                     adet[t]+=1
 
-                # %60+ ana seçimlerde küçük N yüzünden iki alternatifin birden
-                # gereğinden fazla çoğalmasını önle; fakat anlamlı alternatifleri
-                # tamamen yok etme. N yeterliyse her alternatif en az 1 kez görünebilir.
-                if pmax >= 0.60 and n >= 8:
-                    anlamli_alt=[t for t in ('1','X','2') if t!=ana and pmap[t]>=0.15]
-                    for t in anlamli_alt:
+                # Çok kararlı/yüksek korumalı maçta alternatif tamamen yok olmasın;
+                # ancak yalnız gerçekten anlamlı alternatif (%15+) N>=8 ise bir kez temsil edilsin.
+                if koruma >= 0.62 and n >= 8:
+                    anlamli=[t for t in ('1','X','2') if t!=ana and pmap[t]>=0.15]
+                    for t in anlamli:
                         if adet[t]==0 and adet[ana]>1:
                             adet[t]=1
                             adet[ana]-=1
@@ -10919,7 +10935,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 rows=[[] for _ in range(n)]
                 yuk=[0]*n
                 for i,pmap in enumerate(_f25_probs):
-                    hedef=_f25_hedef_adet(pmap,n)
+                    hedef=_f25_hedef_adet(pmap,n,i)
                     ana=max(('1','X','2'),key=lambda t:pmap[t])
                     h=dict(hedef)
                     t0=ana if h.get(ana,0)>0 else max(('1','X','2'),key=lambda t:(h.get(t,0),pmap[t]))
@@ -11020,7 +11036,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 toplam=0.0; kap=0.0
                 for idx,taraf,p_alt,gap in kapsama_hedefleri:
                     w=max(0.0,float(p_alt or 0.0)); toplam+=w
-                    if _f25_hedef_adet(_f25_probs[idx],n).get(taraf,0)>0: kap+=w
+                    if _f25_hedef_adet(_f25_probs[idx],n,idx).get(taraf,0)>0: kap+=w
                 return kap/toplam if toplam>0 else 1.0
 
             onerilen_min_kolon=kolon_sayisi
@@ -11061,7 +11077,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
-            st.caption("FIX27: Güçlü tercihler ve maç bazlı 1/X/2 adetleri korunur; aynı maç içi kolon takaslarıyla X/1/2 seçimlerinin tek kolonlarda aşırı kümelenmesi azaltılır. %20 altı ciddi sürprizler ayrı tutulur.")
+            st.caption("FIX28: Çekirdek tercihler Güven %80 + Kararlılık %20 ile korunur; güçlü/kararlı maçlar daha az bölünür, belirsiz maçlar daha geniş dağıtılır. Kolon kompozisyonu ve ciddi sürpriz ayrımı korunur.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
