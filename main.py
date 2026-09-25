@@ -10436,6 +10436,56 @@ def _spor_toto_api_kodlari(api_key, normal_kodlar):
     return list(dict.fromkeys(kodlar))
 
 
+
+FIX19_SPOR_TOTO = "smart-national-slate-v1"
+
+_SPOR_TOTO_MILLI_TAKIMLAR = {
+    "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
+    "bulgaria","luxembourg","northmacedonia","switzerland","czechrepublic","croatia",
+    "england","spain","lithuania","azerbaijan","austria","kosovo","denmark","wales",
+    "serbia","netherlands","germany","greece","norway","portugal",
+}
+
+def _spor_toto_milli_kupon_mu(spor_maclar):
+    """Girilen 15 maçın tamamı milli takım maçıysa True."""
+    if not spor_maclar:
+        return False
+    for m in spor_maclar:
+        ev = _spor_toto_takim_anahtar(m.get("ev", ""))
+        dep = _spor_toto_takim_anahtar(m.get("dep", ""))
+        # _spor_toto_takim_benzerlik içindeki alias mantığını yeniden kullan:
+        ev_ok = any(_spor_toto_takim_benzerlik(m.get("ev",""), x) >= 0.94 for x in _SPOR_TOTO_MILLI_TAKIMLAR)
+        dep_ok = any(_spor_toto_takim_benzerlik(m.get("dep",""), x) >= 0.94 for x in _SPOR_TOTO_MILLI_TAKIMLAR)
+        if not (ev_ok and dep_ok):
+            return False
+    return True
+
+def _spor_toto_kodlari_akilli(api_key, normal_kodlar, spor_maclar):
+    """Milli takım kuponunda yalnız gerekli uluslararası sport key'lerini kullan.
+
+    Böylece 4 gün x onlarca seçili lig sorgusu yerine yalnız ilgili organizasyon
+    sorgulanır. Karma kulüp+milli takım kuponlarında eski geniş davranış korunur.
+    """
+    if _spor_toto_milli_kupon_mu(spor_maclar):
+        katalog = odds_spor_katalogu(api_key)
+        aktif = {
+            str(x.get("key","")).strip()
+            for x in (katalog or [])
+            if isinstance(x, dict) and bool(x.get("active", True))
+        }
+        milli_adaylar = [
+            "soccer_uefa_nations_league",
+            "soccer_fifa_world_cup",
+            "soccer_fifa_world_cup_qualifiers_europe",
+            "soccer_uefa_european_championship",
+            "soccer_uefa_euro_qualification",
+        ]
+        bulunan = [k for k in milli_adaylar if k in aktif]
+        # Bu haftaki bülten Nations League; katalog geçici boşsa belgelenmiş key'i dene.
+        return bulunan or ["soccer_uefa_nations_league"]
+    return _spor_toto_api_kodlari(api_key, normal_kodlar)
+
+
 if spor_toto_btn:
     spor_maclar = _spor_toto_satirlari_parse(st.session_state.get('spor_toto_metin', ''))
     if len(spor_maclar) != 15:
@@ -10445,7 +10495,8 @@ if spor_toto_btn:
     elif spor_maclar:
         with st.spinner("⚽ Spor Toto maçları bültenle eşleştiriliyor ve 11 hassasiyet taranıyor..."):
             gecmis_st = futbol_veri_motoru(tuple(yillar))
-            spor_toto_kodlari = _spor_toto_api_kodlari(API_KEY, secili_kodlar)
+            spor_toto_kodlari = _spor_toto_kodlari_akilli(API_KEY, secili_kodlar, spor_maclar)
+            st.session_state["spor_toto_kullanilan_sport_keys"] = list(spor_toto_kodlari)
             tarih_bultenleri = []
             for gun in sorted({x["zaman"].date() for x in spor_maclar}):
                 df_gun = bulten_saglam_al(API_KEY, spor_toto_kodlari, gun)
@@ -10458,7 +10509,8 @@ if spor_toto_btn:
             for sm in spor_maclar:
                 es, es_skor = _spor_toto_eslestir(sm, st_bulten)
                 if es is None:
-                    sonuclar.append({**sm, "durum": "Eşleşmedi", "es_skor": es_skor})
+                    _durum_es = "API bülteninde henüz yok" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi"
+                    sonuclar.append({**sm, "durum": _durum_es, "es_skor": es_skor})
                     continue
                 # Spor Toto: geçmiş örnekleri lig ayrımı yapmadan tüm seçili geçmiş liglerde ara.
                 # Ana uygulamadaki "sadece_ayni_lig" ayarı Spor Toto'yu etkilemez.
@@ -10475,6 +10527,9 @@ if spor_toto_btn:
 if st.session_state.get('sayfa_modu') == 'Spor Toto':
     st.markdown("### ⚽ Spor Toto · 15 Maç")
     st.caption("Maç adları manuel; Spor Toto seçili liglere ek olarak aktif milli takım organizasyonlarını The Odds API kataloğundan otomatik ekler ve bültenle eşleştirir. MS 1/X/2 için önce 0.00–0.10 taranır; örnek yoksa yalnız Spor Toto'da kontrollü 0.15/0.20 ve en yakın oran fallback uygulanır.")
+    _st_keys = st.session_state.get("spor_toto_kullanilan_sport_keys", [])
+    if _st_keys:
+        st.caption("Spor Toto API kapsamı: " + ", ".join(_st_keys))
     _st_sonuclar = st.session_state.get('spor_toto_sonuclar', [])
     if not _st_sonuclar:
         st.info("15 maçı kontrol ettikten sonra **⚽ SPOR TOTO ANALİZ ET** butonuna bas.")
