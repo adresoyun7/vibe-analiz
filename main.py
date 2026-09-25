@@ -10444,6 +10444,7 @@ FIX22_PREFIX_FREKANSI = "probability-balanced-prefix-v1"
 FIX23_SURPRIZ_DENGESI = "row-swap-surprise-load-v1"
 FIX24_PREFIX_SURPRIZ = "prefix-hard-surprise-separation-v1"
 FIX25_FREKANS_GARANTI = "constructive-frequency-first-v1"
+FIX26_GUVEN_KORUMA = "confidence-aware-frequency-v1"
 
 _SPOR_TOTO_MILLI_TAKIMLAR = {
     "turkey","france","italy","sweden","romania","belgium","slovenia","scotland",
@@ -10872,11 +10873,44 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 _f25_probs.append({t:vals[t]/s for t in ('1','X','2')})
 
             def _f25_hedef_adet(pmap,n):
-                raw={t:pmap[t]*n for t in ('1','X','2')}
+                # FIX26 · Güven koruması:
+                # Kararsız maçlarda gerçek dağılıma yakın kal.
+                # Ana taraf güçlendikçe alternatif toplamını kademeli azalt.
+                ana=max(('1','X','2'),key=lambda t:pmap[t])
+                pmax=float(pmap[ana])
+
+                if pmax >= 0.70:
+                    alt_carpan=0.20
+                elif pmax >= 0.60:
+                    alt_carpan=0.40
+                elif pmax >= 0.55:
+                    alt_carpan=0.60
+                elif pmax >= 0.50:
+                    alt_carpan=0.80
+                else:
+                    alt_carpan=1.00
+
+                agirlik={}
+                for t in ('1','X','2'):
+                    agirlik[t]=float(pmap[t]) if t==ana else float(pmap[t])*alt_carpan
+                s=sum(agirlik.values()) or 1.0
+                norm={t:agirlik[t]/s for t in ('1','X','2')}
+
+                raw={t:norm[t]*n for t in ('1','X','2')}
                 adet={t:int(raw[t]) for t in ('1','X','2')}
                 kalan=n-sum(adet.values())
-                for t in sorted(('1','X','2'),key=lambda t:(raw[t]-adet[t],pmap[t]),reverse=True)[:kalan]:
+                for t in sorted(('1','X','2'),key=lambda t:(raw[t]-adet[t],norm[t]),reverse=True)[:kalan]:
                     adet[t]+=1
+
+                # %60+ ana seçimlerde küçük N yüzünden iki alternatifin birden
+                # gereğinden fazla çoğalmasını önle; fakat anlamlı alternatifleri
+                # tamamen yok etme. N yeterliyse her alternatif en az 1 kez görünebilir.
+                if pmax >= 0.60 and n >= 8:
+                    anlamli_alt=[t for t in ('1','X','2') if t!=ana and pmap[t]>=0.15]
+                    for t in anlamli_alt:
+                        if adet[t]==0 and adet[ana]>1:
+                            adet[t]=1
+                            adet[ana]-=1
                 return adet
 
             def _f25_prefix_uret(n):
@@ -10982,7 +11016,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"senaryolar eklenir. {GUVENLIK_KOLON_TAVANI} kolon yalnız güvenlik tavanıdır, hedef değildir."
             )
 
-            st.caption("FIX25: Seçilen N için 1/X/2 adetleri önce kesinleştirilir; ardından %20 altı ciddi sürprizler bu adetleri bozmadan farklı kolonlara dağıtılır.")
+            st.caption("FIX26: Güçlü ana tercihler korunur; maç belirsizleştikçe 1/X/2 dağılımı genişler. %20 altı ciddi sürprizler frekansları bozmadan ayrı kolonlara dağıtılır.")
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
