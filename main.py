@@ -7587,10 +7587,14 @@ def tahmin_kayitlarini_tekillestir(kayitlar):
             alternatif_tuttu = skor_tahmini_tuttu_mu(
                 secilen.get("alternatif_tahmin"), ev_gol, dep_gol, iy_ev, iy_dep
             )
+            son_tuttu = skor_tahmini_tuttu_mu(
+                secilen.get("son_tahmin", secilen.get("tahmin")), ev_gol, dep_gol, iy_ev, iy_dep
+            )
             secilen.update({
                 "durum": "Tamamlandı" if tuttu is not None else "Bekliyor", "ev_gol": ev_gol, "dep_gol": dep_gol,
                 "iy_ev_gol": iy_ev, "iy_dep_gol": iy_dep,
                 "tuttu": bool(tuttu) if tuttu is not None else None,
+                "son_tuttu": bool(son_tuttu) if son_tuttu is not None else None,
                 "alternatif_tuttu": bool(alternatif_tuttu) if alternatif_tuttu is not None else None,
                 "sonuc_guncelleme": tamamlanan.get("sonuc_guncelleme"),
             })
@@ -7632,11 +7636,26 @@ def tahmin_loguna_baglam_yaz(m, label, baglam):
     return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
 
+def tahmin_degisim_tipi(ilk_label, son_label):
+    """İlk ve güncel ana tahmin arasındaki değişimi sınıflandırır."""
+    ilk = str(ilk_label or "").strip()
+    son = str(son_label or "").strip()
+    if not ilk or not son or ilk == son:
+        return ""
+    zit_ciftler = {
+        frozenset(("2.5 Üst", "2.5 Alt")),
+        frozenset(("KG Var", "KG Yok")),
+        frozenset(("MS 1", "MS 2")),
+    }
+    return "zit" if frozenset((ilk, son)) in zit_ciftler else "degisti"
+
+
 def analiz_tahminlerini_kaydet(final):
-    """Maç öncesi tahmini atomik kaydeder; başlangıçtan sonra bütün tahmin alanları kilitlidir."""
+    """İlk ana tahmini kilitler; maç öncesindeki son ana tahmini ayrıca günceller."""
     def update(kayitlar):
         kayitlar = tahmin_kayitlarini_tekillestir(kayitlar)
         mevcut = {tahmin_kaydi_mac_anahtari(x): x for x in kayitlar}
+        simdi_iso = kayit_zamani_iso()
         for item in final:
             m, t = item.get("m", {}), item.get("t", {})
             label = str(t.get("ana_label", "")).strip()
@@ -7647,10 +7666,34 @@ def analiz_tahminlerini_kaydet(final):
             zaman = m.get("zaman")
             zaman_iso = zaman.isoformat() if hasattr(zaman, "isoformat") else str(zaman)
             mac_anahtari = str(m.get("match_id") or mac_key(m))
-            eski = mevcut.get(mac_anahtari, {})
+            eski = dict(mevcut.get(mac_anahtari, {}) or {})
             if eski.get("durum") == "Tamamlandı":
                 continue
-            aday = {
+
+            guncel_oran = float(t.get("ana_odd")) if t.get("ana_odd") is not None else None
+            guncel_guven = int(t.get("ana_p", 0) or 0)
+            guncel_snapshot = detay_snapshot_olustur(m, t, item.get("b"))
+
+            # Eski FIX30 kayıtlarında ilk alanlar yoksa eldeki en eski değişiklikten
+            # geri kazanmaya çalış; bulunamazsa mevcut resmi tahmini ilk kabul et.
+            if eski:
+                ilk_tahmin = eski.get("ilk_tahmin")
+                ilk_guven = eski.get("ilk_guven")
+                ilk_oran = eski.get("ilk_oran")
+                ilk_zaman = eski.get("ilk_kayit_zamani") or eski.get("kaydedildi")
+                if not ilk_tahmin:
+                    deg = list(eski.get("degisiklikler", []) or [])
+                    en_eski = deg[0] if deg else {}
+                    ilk_tahmin = en_eski.get("tahmin") or eski.get("tahmin") or label
+                    ilk_guven = en_eski.get("guven") if en_eski.get("guven") is not None else eski.get("guven", guncel_guven)
+                    ilk_zaman = en_eski.get("kaydedildi") or ilk_zaman or simdi_iso
+                    # Eski değişiklik kayıtlarında oran yoksa mevcut kaydın oranını kullan.
+                    ilk_oran = eski.get("oran") if ilk_oran is None else ilk_oran
+            else:
+                ilk_tahmin, ilk_guven, ilk_oran, ilk_zaman = label, guncel_guven, guncel_oran, simdi_iso
+
+            kayit = dict(eski)
+            kayit.update({
                 "kayit_id": mac_anahtari,
                 "match_id": str(m.get("match_id", "")),
                 **oran_kayit_bilgisi(m), "sport_key": str(m.get("sport_key", "")),
@@ -7661,8 +7704,19 @@ def analiz_tahminlerini_kaydet(final):
                 "h": float(m.get("h")) if m.get("h") is not None else None,
                 "b": float(m.get("b")) if m.get("b") is not None else None,
                 "a": float(m.get("a")) if m.get("a") is not None else None,
-                "tahmin": label,
-                "guven": int(t.get("ana_p", 0)),
+                # Geriye dönük uyumluluk: tahmin/guven/oran artık İLK tahmini temsil eder.
+                "tahmin": str(ilk_tahmin),
+                "guven": int(ilk_guven or 0),
+                "oran": float(ilk_oran) if ilk_oran is not None else None,
+                "ilk_tahmin": str(ilk_tahmin),
+                "ilk_guven": int(ilk_guven or 0),
+                "ilk_oran": float(ilk_oran) if ilk_oran is not None else None,
+                "ilk_kayit_zamani": ilk_zaman or simdi_iso,
+                "son_tahmin": label,
+                "son_guven": guncel_guven,
+                "son_oran": guncel_oran,
+                "son_kayit_zamani": simdi_iso,
+                "tahmin_degisim_tipi": tahmin_degisim_tipi(ilk_tahmin, label),
                 "alternatif_tahmin": str(t.get("alt_label", "") or ""),
                 "alternatif_guven": int(t.get("alt_p", 0) or 0),
                 "alternatif_ornek": int(t.get("alt_ornek", 0) or 0),
@@ -7675,42 +7729,54 @@ def analiz_tahminlerini_kaydet(final):
                 "ana_kararlilik": int(t.get("stability_count", 0) or 0),
                 "ana_hassasiyetler": list(t.get("stability_tols", []) or []),
                 "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
-                "oran": float(t.get("ana_odd")) if t.get("ana_odd") is not None else None,
-                "alternatif_oran": (
-                    float(market_label_to_odd(m, t.get("alt_label")))
-                    if t.get("alt_label") and market_label_to_odd(m, t.get("alt_label")) is not None
-                    else None
-                ),
-                "kaydedildi": kayit_zamani_iso(),
-                "ilk_kayit_zamani": eski.get("ilk_kayit_zamani", eski.get("kaydedildi", kayit_zamani_iso())),
+                "kaydedildi": simdi_iso,
                 "model_version": MODEL_VERSION,
                 "durum": eski.get("durum", "Bekliyor"),
-                "ev_gol": eski.get("ev_gol"),
-                "dep_gol": eski.get("dep_gol"),
+                "ev_gol": eski.get("ev_gol"), "dep_gol": eski.get("dep_gol"),
                 "iy_ev_gol": eski.get("iy_ev_gol"), "iy_dep_gol": eski.get("iy_dep_gol"),
-                "tuttu": eski.get("tuttu"),
+                "tuttu": eski.get("tuttu"), "son_tuttu": eski.get("son_tuttu"),
                 "alternatif_tuttu": eski.get("alternatif_tuttu"),
                 "sonuc_guncelleme": eski.get("sonuc_guncelleme"),
-                "detay_snapshot": detay_snapshot_olustur(m, t, item.get("b")),
-            }
-            if not eski or _tahmin_kaydi_sirasi(aday) > _tahmin_kaydi_sirasi(eski):
-                aday["degisiklikler"] = list(eski.get("degisiklikler", []))
-                if eski:
-                    aday["degisiklikler"].append({"tahmin": eski.get("tahmin"), "guven": eski.get("guven"), "kaydedildi": eski.get("kaydedildi")})
-                    aday["degisiklikler"] = aday["degisiklikler"][-20:]
-                secilen = aday
-            else:
-                secilen = dict(eski)
-            alt_etiket, alt_guven, alt_oran = _en_iyi_alternatif(
-                secilen.get("tahmin"), [eski, aday]
-            )
-            secilen["alternatif_tahmin"] = alt_etiket
-            secilen["alternatif_guven"] = alt_guven
-            secilen["alternatif_oran"] = alt_oran
-            mevcut[mac_anahtari] = secilen
+                "detay_snapshot": guncel_snapshot,
+            })
+            degisiklikler = list(eski.get("degisiklikler", []) or [])
+            onceki_son = str(eski.get("son_tahmin") or eski.get("tahmin") or "").strip()
+            if eski and onceki_son and onceki_son != label:
+                degisiklikler.append({
+                    "tahmin": onceki_son,
+                    "guven": eski.get("son_guven", eski.get("guven")),
+                    "kaydedildi": eski.get("son_kayit_zamani", eski.get("kaydedildi")),
+                    "yeni_tahmin": label,
+                    "degisim_tipi": tahmin_degisim_tipi(onceki_son, label),
+                })
+            kayit["degisiklikler"] = degisiklikler[-20:]
+            mevcut[mac_anahtari] = kayit
         return tahmin_kayitlarini_tekillestir(list(mevcut.values()))
     return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
+
+def analiz_degisim_bilgisi_ekle(final):
+    """Maç Analizi kartlarına ilk/son tahmin değişim bilgisini ekler."""
+    try:
+        kayitlar = {tahmin_kaydi_mac_anahtari(x): x for x in tahmin_logunu_oku()}
+    except Exception:
+        return final
+    for item in final or []:
+        m, t = item.get("m", {}), item.get("t", {})
+        anahtar = str(m.get("match_id") or mac_key(m))
+        kayit = kayitlar.get(anahtar, {})
+        ilk = str(kayit.get("ilk_tahmin") or kayit.get("tahmin") or "").strip()
+        son = str(t.get("ana_label") or kayit.get("son_tahmin") or "").strip()
+        if not ilk or not son:
+            continue
+        t["takip_ilk_tahmin"] = ilk
+        t["takip_ilk_guven"] = int(kayit.get("ilk_guven", kayit.get("guven", 0)) or 0)
+        t["takip_son_tahmin"] = son
+        t["takip_son_guven"] = int(t.get("ana_p", kayit.get("son_guven", 0)) or 0)
+        t["takip_degisim_tipi"] = tahmin_degisim_tipi(ilk, son)
+        t["takip_ilk_zaman"] = kayit.get("ilk_kayit_zamani") or kayit.get("kaydedildi")
+        t["takip_son_zaman"] = kayit.get("son_kayit_zamani") or kayit.get("kaydedildi")
+    return final
 
 def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol, iy_ev_gol=None, iy_dep_gol=None):
     def side(home, away):
@@ -12651,6 +12717,19 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         st.info("Henüz kayıt yok. Maç Analizi çalıştırıldığında ana tahminler otomatik kaydedilir.")
     else:
         df = pd.DataFrame(takip)
+        # FIX31: Eski kayıtlarla uyumlu ilk/son tahmin alanları.
+        if "ilk_tahmin" not in df.columns:
+            df["ilk_tahmin"] = df.get("tahmin", "")
+        if "ilk_guven" not in df.columns:
+            df["ilk_guven"] = df.get("guven", 0)
+        if "son_tahmin" not in df.columns:
+            df["son_tahmin"] = df.get("tahmin", "")
+        if "son_guven" not in df.columns:
+            df["son_guven"] = df.get("guven", 0)
+        if "son_tuttu" not in df.columns:
+            df["son_tuttu"] = df.get("tuttu", None)
+        if "tahmin_degisim_tipi" not in df.columns:
+            df["tahmin_degisim_tipi"] = ""
         df["zaman_dt"] = pd.to_datetime(df["zaman"], errors="coerce").dt.tz_localize(None)
         baslangic = pd.Timestamp((tr_simdi()).date())
         # Varsayılan olarak bütün kayıtları göster. Böylece sayfa her açıldığında
@@ -12673,6 +12752,11 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         biten = gorunen[gorunen["durum"] == "Tamamlandı"].copy()
         kazanan = int(biten["tuttu"].fillna(False).astype(bool).sum()) if not biten.empty else 0
         basari = kazanan / len(biten) * 100 if len(biten) else 0.0
+        son_biten = biten[biten["son_tuttu"].notna()].copy() if not biten.empty else pd.DataFrame()
+        son_kazanan = int(son_biten["son_tuttu"].astype(bool).sum()) if not son_biten.empty else 0
+        son_basari = son_kazanan / len(son_biten) * 100 if len(son_biten) else None
+        degisen_adet = int(gorunen["tahmin_degisim_tipi"].fillna("").astype(str).ne("").sum()) if not gorunen.empty else 0
+        zit_adet = int(gorunen["tahmin_degisim_tipi"].fillna("").astype(str).eq("zit").sum()) if not gorunen.empty else 0
         alt_biten = biten[
             biten.get("alternatif_tuttu", pd.Series(index=biten.index, dtype=object)).notna()
         ].copy() if not biten.empty else pd.DataFrame()
@@ -12684,12 +12768,13 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             roi = float(oranli["kar"].sum()) / (len(oranli) * 100) * 100
         else:
             roi = None
-        m1, m2, m3, m4, m5 = st.columns(5)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric("Tamamlanan", len(biten))
-        m2.metric("Kazanan", kazanan)
-        m3.metric("Başarı", f"%{basari:.1f}")
-        m4.metric("Bekleyen", int((gorunen["durum"] != "Tamamlandı").sum()))
-        m5.metric("ROI", f"%{roi:.1f}" if roi is not None else "—", help="Oranı bulunan tahminlere eşit tutar yatırıldığı varsayılır.")
+        m2.metric("İlk Kazanan", kazanan)
+        m3.metric("İlk Başarı", f"%{basari:.1f}")
+        m4.metric("Son Başarı", f"%{son_basari:.1f}" if son_basari is not None else "—")
+        m5.metric("Değişen / Zıt", f"{degisen_adet} / {zit_adet}")
+        m6.metric("İlk ROI", f"%{roi:.1f}" if roi is not None else "—", help="İlk tahminin kayıt anındaki oranı bulunan tahminlere eşit tutar yatırıldığı varsayılır.")
         st.caption(
             f"Alternatif tahmin: {len(alt_biten)} tamamlanan · "
             + (f"{alt_kazanan} kazanan · başarı %{alt_basari:.1f}" if alt_basari is not None else "henüz tamamlanan yok")
@@ -12761,6 +12846,14 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 lambda x: "⏳ Bekliyor" if pd.isna(x.get("tuttu")) else "✅ Tuttu" if bool(x.get("tuttu")) else "❌ Tutmadı",
                 axis=1,
             )
+            liste["İlk Durum"] = liste["Durum"]
+            liste["Son Durum"] = liste.apply(
+                lambda x: "⏳ Bekliyor" if pd.isna(x.get("son_tuttu")) else "✅ Tuttu" if bool(x.get("son_tuttu")) else "❌ Tutmadı",
+                axis=1,
+            )
+            liste["Değişim"] = liste["tahmin_degisim_tipi"].fillna("").map(
+                lambda x: "🔴 Zıt" if str(x) == "zit" else "🟠 Değişti" if str(x) == "degisti" else "—"
+            )
             liste["Alternatif Durumu"] = liste.apply(
                 lambda x: "—" if pd.isna(x.get("alternatif_tahmin")) or not str(x.get("alternatif_tahmin", "")).strip()
                 else "⏳ Bekliyor" if pd.isna(x.get("alternatif_tuttu"))
@@ -12775,10 +12868,12 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 lambda x: f"{x:+.1f}" if pd.notna(x) else "—"
             )
             goster = liste[[
-                "Tarih", "lig", "Maç", "tahmin", "guven", "Bağlam", "Sonuç", "Durum",
+                "Tarih", "lig", "Maç", "ilk_tahmin", "ilk_guven", "İlk Durum",
+                "son_tahmin", "son_guven", "Son Durum", "Değişim", "Bağlam", "Sonuç",
                 "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
             ]].rename(columns={
-                "lig":"Lig", "tahmin":"Ana Tahmin", "guven":"Ana Güven %",
+                "lig":"Lig", "ilk_tahmin":"İlk Tahmin", "ilk_guven":"İlk Güven %",
+                "son_tahmin":"Son Tahmin", "son_guven":"Son Güven %",
                 "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
             })
             st.markdown("#### Kaydedilen tahminler")
@@ -13272,6 +13367,7 @@ if analiz_btn:
             "tolerans": float(TOLERANS or 0.0),
         }
         analiz_tahminlerini_kaydet(final)
+        analiz_degisim_bilgisi_ekle(final)
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
         # Bu hem manuel hassasiyet mantığını net tutar hem de analizi hızlandırır.
@@ -13773,6 +13869,17 @@ def detay_ana_icerik():
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    _det_degisim = str(t.get("takip_degisim_tipi", "") or "")
+    if _det_degisim:
+        _det_ilk = str(t.get("takip_ilk_tahmin", "") or "")
+        _det_ilk_g = int(t.get("takip_ilk_guven", 0) or 0)
+        _det_son = str(t.get("ana_label", "") or "")
+        _det_son_g = int(t.get("ana_p", 0) or 0)
+        if _det_degisim == "zit":
+            st.error(f"⚠️ ZIT TAHMİN: İlk {_det_ilk} %{_det_ilk_g} → Güncel {_det_son} %{_det_son_g}")
+        else:
+            st.warning(f"⚠️ Tahmin değişti: İlk {_det_ilk} %{_det_ilk_g} → Güncel {_det_son} %{_det_son_g}")
 
     st.markdown(f"""
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:14px 18px;margin-bottom:14px">
@@ -14493,6 +14600,24 @@ else:
         ai_comment_html = ""
         durum_bg, durum_lbl = mac_durum_badge(m["zaman"])
         belirsiz_html = '<div class="mk-mini" style="color:#ff8b8b">⚠️ Maç sonucu tarafı net değil</div>' if t.get("belirsiz") and t.get("ana_label") in ["MS 1", "Beraberlik", "MS 2"] else ''
+        _degisim_tipi = str(t.get("takip_degisim_tipi", "") or "")
+        _ilk_tahmin = str(t.get("takip_ilk_tahmin", "") or "")
+        _ilk_guven = int(t.get("takip_ilk_guven", 0) or 0)
+        _son_guven = int(t.get("takip_son_guven", t.get("ana_p", 0)) or 0)
+        if _degisim_tipi == "zit":
+            tahmin_degisim_html = (
+                f'<div style="margin-top:7px;padding:6px 8px;border-radius:8px;background:#451a1a;'
+                f'border:1px solid #ef4444;color:#fecaca;font-size:.74rem;font-weight:800">'
+                f'⚠️ ZIT TAHMİN: İlk {_ilk_tahmin} %{_ilk_guven} → Güncel {escape(str(t.get("ana_label", "")))} %{_son_guven}</div>'
+            )
+        elif _degisim_tipi == "degisti":
+            tahmin_degisim_html = (
+                f'<div style="margin-top:7px;padding:6px 8px;border-radius:8px;background:#422006;'
+                f'border:1px solid #f59e0b;color:#fde68a;font-size:.74rem;font-weight:800">'
+                f'⚠️ TAHMİN DEĞİŞTİ: İlk {_ilk_tahmin} %{_ilk_guven} → Güncel {escape(str(t.get("ana_label", "")))} %{_son_guven}</div>'
+            )
+        else:
+            tahmin_degisim_html = ''
         _filtre_tipi = str(t.get("filtre_secim_tipi", "") or "").strip()
         _filtre_tahmini = bool(t.get("filtre_secim_oran_tahmini", False))
         if _filtre_tipi:
@@ -14633,6 +14758,7 @@ else:
                 <div class="mk-label">ANA TAHMİN</div>
                 <span class="ana-pill {pill_cls}">{t['ana_label']}</span>
                 {filtre_secim_html}
+                {tahmin_degisim_html}
                 {skor_html}
                 <div style="margin-top:10px">
                   <div class="mk-label">GÜVEN</div>
