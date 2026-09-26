@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 
 MODEL_VERSION = "2026.09.13.2"
-FIX29_BROWSER_KEY_MEMORY = "localStorage-v1"
+FIX30_API_KEY_MEMORY_TOP = "sqlite-settings-v1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -1733,11 +1733,12 @@ def basketbol_sayfasi():
         with bk1:
             if st.button("Kaydet", use_container_width=True, key="basket_api_save_main"):
                 st.session_state["user_api_key"] = basket_key_input.strip()
+                kalici_api_key_yaz("odds_api_key", basket_key_input)
                 st.rerun()
         with bk2:
             if st.button("Temizle", use_container_width=True, key="basket_api_clear_main"):
                 st.session_state.pop("user_api_key", None)
-                st.session_state["_clear_odds_browser_memory"] = True
+                kalici_api_key_sil("odds_api_key")
                 st.rerun()
         if get_app_api_key():
             st.caption("✅ Odds API key aktif")
@@ -2009,104 +2010,64 @@ st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 
 
 # ==========================================================
-# FIX29 · TARAYICI API KEY HAFIZASI (localStorage)
+# FIX30 · KALICI API KEY HAFIZASI (SQLite)
 # ==========================================================
 # Amaç: ODDS API ve API-Football anahtarları F5 / sayfa yenilemesinde
-# kaybolmasın. Anahtarlar kaynak koda veya GitHub'a yazılmaz; yalnızca
-# bu tarayıcının localStorage alanında tutulur. "Temizle" butonları ilgili
-# tarayıcı kaydını da siler.
+# kaybolmasın. Anahtarlar kaynak koda veya GitHub'a yazılmaz; uygulamanın
+# mevcut veri dizinindeki yapaikupon.sqlite3 içinde app_settings tablosunda
+# saklanır. Streamlit Cloud'da deploy/restart sonrası yerel disk kalıcılığı
+# garanti değildir; bu durumda st.secrets kalıcı sunucu seçeneği olmaya devam eder.
 
-def browser_api_key_memory_bridge():
-    clear_odds = bool(st.session_state.pop("_clear_odds_browser_memory", False))
-    clear_af = bool(st.session_state.pop("_clear_af_browser_memory", False))
-    clear_payload = json.dumps({"odds": clear_odds, "af": clear_af})
-    components.html(
-        f"""
-<script>
-(() => {{
-  const CLEAR = {clear_payload};
-  const ODDS_STORE = "yapaikupon_odds_api_key";
-  const AF_STORE   = "yapaikupon_api_football_key";
+FIX30_API_KEY_MEMORY = "sqlite-settings-v1"
 
-  function storage() {{
-    try {{ return window.parent.localStorage; }} catch (e) {{
-      try {{ return window.localStorage; }} catch (_) {{ return null; }}
-    }}
-  }}
-  const ls = storage();
-  if (!ls) return;
-  if (CLEAR.odds) ls.removeItem(ODDS_STORE);
-  if (CLEAR.af) ls.removeItem(AF_STORE);
+def _api_ayar_baglantisi():
+    path = APP_DATA_DIR / "yapaikupon.sqlite3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path, timeout=15)
+    con.execute("PRAGMA busy_timeout=15000")
+    con.execute("CREATE TABLE IF NOT EXISTS app_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    return con
 
-  function findInput(labelText) {{
-    const doc = window.parent.document;
-    const labels = Array.from(doc.querySelectorAll('label'));
-    for (const label of labels) {{
-      const txt = (label.innerText || label.textContent || '').trim().toUpperCase();
-      if (txt.includes(labelText.toUpperCase())) {{
-        const inp = label.querySelector('input') ||
-          (label.parentElement && label.parentElement.querySelector('input')) ||
-          (label.parentElement && label.parentElement.parentElement && label.parentElement.parentElement.querySelector('input'));
-        if (inp) return inp;
-      }}
-    }}
-    return null;
-  }}
+def kalici_api_key_oku(name):
+    try:
+        with _api_ayar_baglantisi() as con:
+            row = con.execute("SELECT value FROM app_settings WHERE name=?", (str(name),)).fetchone()
+        return str(row[0]).strip() if row and row[0] else ""
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        LOGGER.warning("API key ayarı okunamadı (%s): %s", name, type(exc).__name__)
+        return ""
 
-  function setReactInputValue(input, value) {{
-    if (!input || !value || input.value) return;
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    setter.call(input, value);
-    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-    input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-  }}
+def kalici_api_key_yaz(name, value):
+    value = str(value or "").strip()
+    try:
+        with _api_ayar_baglantisi() as con:
+            if value:
+                con.execute(
+                    "INSERT INTO app_settings(name,value,updated_at) VALUES(?,?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+                    (str(name), value, kayit_zamani_iso()),
+                )
+            else:
+                con.execute("DELETE FROM app_settings WHERE name=?", (str(name),))
+            con.commit()
+        return True
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        LOGGER.error("API key ayarı kaydedilemedi (%s): %s", name, type(exc).__name__)
+        return False
 
-  function wire(input, storeKey) {{
-    if (!input || input.dataset.ykMemoryWired === storeKey) return;
-    input.dataset.ykMemoryWired = storeKey;
-    const saved = ls.getItem(storeKey) || '';
-    if (saved && !input.value) setReactInputValue(input, saved);
-    input.addEventListener('input', () => {{
-      const value = (input.value || '').trim();
-      if (value) ls.setItem(storeKey, value);
-    }});
-    input.addEventListener('change', () => {{
-      const value = (input.value || '').trim();
-      if (value) ls.setItem(storeKey, value);
-    }});
-  }}
+def kalici_api_key_sil(name):
+    return kalici_api_key_yaz(name, "")
 
-  function sync() {{
-    // Sayfada aynı ODDS alanı farklı bölümlerde bulunabildiği için hepsini bağla.
-    const doc = window.parent.document;
-    const labels = Array.from(doc.querySelectorAll('label'));
-    labels.forEach(label => {{
-      const txt = (label.innerText || label.textContent || '').trim().toUpperCase();
-      let key = null;
-      if (txt.includes('ODDS API KEY')) key = ODDS_STORE;
-      else if (txt.includes('API-FOOTBALL KEY')) key = AF_STORE;
-      if (!key) return;
-      const box = label.parentElement;
-      const input = label.querySelector('input') || (box && box.querySelector('input')) ||
-        (box && box.parentElement && box.parentElement.querySelector('input'));
-      wire(input, key);
-    }});
-  }}
-
-  sync();
-  const observer = new MutationObserver(sync);
-  observer.observe(window.parent.document.body, {{childList:true, subtree:true}});
-  setTimeout(sync, 150);
-  setTimeout(sync, 600);
-  setTimeout(sync, 1500);
-}})();
-</script>
-        """,
-        height=0,
-        width=0,
-    )
-
-browser_api_key_memory_bridge()
+# Her tam sayfa çalışmasında (F5 dahil) SQLite'daki son değerleri session_state'e geri yükle.
+# Session içinde kullanıcı tarafından yeni bir değer varsa onu ezmeyiz.
+if not str(st.session_state.get("user_api_key", "") or "").strip():
+    _saved_odds_key = kalici_api_key_oku("odds_api_key")
+    if _saved_odds_key:
+        st.session_state["user_api_key"] = _saved_odds_key
+if not str(st.session_state.get("user_api_football_key", "") or "").strip():
+    _saved_af_key = kalici_api_key_oku("api_football_key")
+    if _saved_af_key:
+        st.session_state["user_api_football_key"] = _saved_af_key
 
 
 # ==========================================================
@@ -2161,13 +2122,16 @@ def api_key_panel():
         with c1:
             if st.button("Kaydet", use_container_width=True, key="save_api_key_btn"):
                 st.session_state["user_api_key"] = api_key_input.strip()
-                st.success("API Key kaydedildi ✅")
+                if kalici_api_key_yaz("odds_api_key", api_key_input):
+                    st.success("API Key kalıcı kaydedildi ✅")
+                else:
+                    st.error("API Key kalıcı kaydedilemedi")
                 st.rerun()
 
         with c2:
             if st.button("Temizle", use_container_width=True, key="clear_api_key_btn"):
                 st.session_state.pop("user_api_key", None)
-                st.session_state["_clear_odds_browser_memory"] = True
+                kalici_api_key_sil("odds_api_key")
                 st.success("API Key temizlendi")
                 st.rerun()
 
@@ -2189,12 +2153,15 @@ def api_key_panel():
         with af1:
             if st.button("AF Kaydet", use_container_width=True, key="save_api_football_key_btn"):
                 st.session_state["user_api_football_key"] = af_input.strip()
-                st.success("API-Football key kaydedildi ✅")
+                if kalici_api_key_yaz("api_football_key", af_input):
+                    st.success("API-Football key kalıcı kaydedildi ✅")
+                else:
+                    st.error("API-Football key kalıcı kaydedilemedi")
                 st.rerun()
         with af2:
             if st.button("AF Temizle", use_container_width=True, key="clear_api_football_key_btn"):
                 st.session_state.pop("user_api_football_key", None)
-                st.session_state["_clear_af_browser_memory"] = True
+                kalici_api_key_sil("api_football_key")
                 st.rerun()
         if get_api_football_key():
             st.caption("API-Football fallback aktif ✅")
@@ -9879,12 +9846,15 @@ with st.sidebar:
         with a1:
             if st.button("Kaydet", use_container_width=True, key="save_api_key_sidebar_clean"):
                 st.session_state["user_api_key"] = api_key_input.strip()
-                st.success("API Key kaydedildi ✅")
+                if kalici_api_key_yaz("odds_api_key", api_key_input):
+                    st.success("API Key kalıcı kaydedildi ✅")
+                else:
+                    st.error("API Key kalıcı kaydedilemedi")
                 st.rerun()
         with a2:
             if st.button("Temizle", use_container_width=True, key="clear_api_key_sidebar_clean"):
                 st.session_state.pop("user_api_key", None)
-                st.session_state["_clear_odds_browser_memory"] = True
+                kalici_api_key_sil("odds_api_key")
                 st.success("API Key temizlendi")
                 st.rerun()
         if get_app_api_key():
@@ -9905,11 +9875,12 @@ with st.sidebar:
         with af1:
             if st.button("AF Kaydet", use_container_width=True, key="save_api_football_key_sidebar_clean"):
                 st.session_state["user_api_football_key"] = af_input.strip()
+                kalici_api_key_yaz("api_football_key", af_input)
                 st.rerun()
         with af2:
             if st.button("AF Temizle", use_container_width=True, key="clear_api_football_key_sidebar_clean"):
                 st.session_state.pop("user_api_football_key", None)
-                st.session_state["_clear_af_browser_memory"] = True
+                kalici_api_key_sil("api_football_key")
                 st.rerun()
         if get_api_football_key():
             st.caption("✅ API-Football fallback aktif · yalnızca yerel bağlam eksikse çağrılır")
