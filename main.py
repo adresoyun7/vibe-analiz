@@ -8488,6 +8488,45 @@ def gecmis_ornek_teshisi(gecmis_df, m_row, tolerans, sadece_ayni_lig=False):
     return sonuc
 
 
+# FIX33: Tek lig görünümünde örnek çıkmayan maç için gereken en düşük hassasiyet.
+def minimum_gerekli_hassasiyet(gecmis_df, m_row, gerekli_ornek=1, sadece_ayni_lig=False):
+    try:
+        gerekli = max(1, int(gerekli_ornek or 1))
+        lig_df = ayni_lig_gecmisi(gecmis_df, m_row, sadece_ayni_lig)
+        evre_df = zaman_uyumlu_gecmis(lig_df, m_row)
+        tarih_df = tarih_oncesi_gecmis(evre_df, m_row.get("zaman"))
+        if tarih_df is None or tarih_df.empty:
+            return None, 0
+        values, target = eslesme_oranlari(tarih_df, m_row)
+        max_fark = pd.to_numeric(values.sub(target, axis=1).abs().max(axis=1), errors="coerce").dropna().sort_values()
+        if max_fark.empty or len(max_fark) < gerekli:
+            return None, int(len(max_fark))
+        ham = float(max_fark.iloc[gerekli - 1])
+        return max(0.0, math.ceil((ham - 1e-12) * 100.0) / 100.0), int(len(max_fark))
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None, 0
+
+
+def _tek_lig_fikstur_placeholder(m_row, neden, gecmis_df=None, min_ornek=1, sadece_ayni_lig=False, t=None, b_det=None):
+    m_dict = m_row.to_dict() if hasattr(m_row, "to_dict") else dict(m_row)
+    m_dict["durum"] = mac_canli_durumu(m_dict.get("zaman"))
+    min_tol, havuz = (None, 0)
+    if neden in {"tahmin_yok", "ornek_yetersiz"} and gecmis_df is not None:
+        min_tol, havuz = minimum_gerekli_hassasiyet(gecmis_df, m_row, min_ornek, sadece_ayni_lig)
+    try: bulunan = len(b_det) if b_det is not None else 0
+    except Exception: bulunan = int((t or {}).get("ornek", 0) or 0)
+    t0 = dict(t or {})
+    return {"m": m_dict, "t": {
+        "_tek_lig_tum_fikstur_placeholder": True, "_filtre_nedeni": str(neden),
+        "_min_gerekli_hassasiyet": min_tol, "_min_gerekli_ornek": max(1, int(min_ornek or 1)),
+        "_bulunan_ornek": int(bulunan or 0), "_uygun_gecmis_havuzu": int(havuz or 0),
+        "_filtre_ana_label": str(t0.get("ana_label", "") or ""), "_filtre_ana_p": int(t0.get("ana_p", 0) or 0),
+        "ana_label": "Analiz dışı", "ana_p": 0, "ana_odd": None, "ornek": int(bulunan or 0),
+        "score": 0.0, "playable_score": 0.0, "match_type": "—", "goal_profile": "—",
+        "combo_var": False, "combo_label": "", "alt_label": ""},
+        "b": b_det if b_det is not None else pd.DataFrame()}
+
+
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
                          filtre_cift_yari_15=False, limit=25):
@@ -13295,6 +13334,10 @@ if analiz_btn:
         _sayac_ornek = 0
         _sayac_guven = 0
         _sayac_gecen = 0
+        # FIX33: Sadece Maç Analizi + tek lig seçiliyken tüm fikstürü görünür tut.
+        _tek_lig_tum_fikstur = (st.session_state.get("sayfa_modu") == "Maç Analizi"
+                                 and len(secili_kodlar or []) == 1
+                                 and not _sonuc_reset_genis_tarama)
 
         if not bulten.empty and not gecmis.empty and st.session_state.get("sayfa_modu") != "Top 50 Market":
             for _, m in bulten.iterrows():
@@ -13323,6 +13366,8 @@ if analiz_btn:
                     )
                 if t is None:
                     _sayac_t_none += 1
+                    if _tek_lig_tum_fikstur:
+                        final.append(_tek_lig_fikstur_placeholder(m, "tahmin_yok", gecmis, min_ornek, sadece_ayni_lig, None, b_det))
                     continue
 
                 # Minimum Örnek Sayısı gerçek benzer maç sayısına uygulanır.
@@ -13334,10 +13379,14 @@ if analiz_btn:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
                 if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
                     _sayac_ornek += 1
+                    if _tek_lig_tum_fikstur:
+                        final.append(_tek_lig_fikstur_placeholder(m, "ornek_yetersiz", gecmis, min_ornek, sadece_ayni_lig, t, b_det))
                     continue
 
                 if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
                     _sayac_guven += 1
+                    if _tek_lig_tum_fikstur:
+                        final.append(_tek_lig_fikstur_placeholder(m, "guven_yetersiz", gecmis, min_ornek, sadece_ayni_lig, t, b_det))
                     continue
 
                 # Kartta toplam benzer örneğin kaçının aynı ligden geldiğini göster.
@@ -13398,6 +13447,8 @@ if analiz_btn:
                         _ilk_ana_registry_degisti = True
                     if not _ilk_ok:
                         _sayac_ilk_tahmin_kararsiz += 1
+                        if _tek_lig_tum_fikstur:
+                            final.append(_tek_lig_fikstur_placeholder(m, "ilk_tahmin_kararsiz", gecmis, min_ornek, sadece_ayni_lig, t, b_det))
                         continue
 
                 m_dict = m.to_dict()
@@ -13427,8 +13478,9 @@ if analiz_btn:
             "oynanabilir_esik": int(oynanabilir_esik or 0),
             "tolerans": float(TOLERANS or 0.0),
         }
-        analiz_tahminlerini_kaydet(final)
-        analiz_degisim_bilgisi_ekle(final)
+        _takip_final = [x for x in final if not (x.get("t", {}) or {}).get("_tek_lig_tum_fikstur_placeholder", False)]
+        analiz_tahminlerini_kaydet(_takip_final)
+        analiz_degisim_bilgisi_ekle(_takip_final)
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
         # Bu hem manuel hassasiyet mantığını net tutar hem de analizi hızlandırır.
@@ -14337,9 +14389,9 @@ if not fl and aktif_sayfa_modu != "Top 50 Market":
     """, unsafe_allow_html=True)
 else:
     indexed_fl = list(_filtreli_indexed_fl)
-    yuksek = [(idx, x) for idx, x in indexed_fl if x["t"]["ana_p"] >= 70]
-    orta = [(idx, x) for idx, x in indexed_fl if 55 <= x["t"]["ana_p"] < 70]
-    kombolu = [(idx, x) for idx, x in indexed_fl if x["t"].get("combo_var", False)]
+    yuksek = [(idx, x) for idx, x in indexed_fl if not x["t"].get("_tek_lig_tum_fikstur_placeholder") and x["t"]["ana_p"] >= 70]
+    orta = [(idx, x) for idx, x in indexed_fl if not x["t"].get("_tek_lig_tum_fikstur_placeholder") and 55 <= x["t"]["ana_p"] < 70]
+    kombolu = [(idx, x) for idx, x in indexed_fl if not x["t"].get("_tek_lig_tum_fikstur_placeholder") and x["t"].get("combo_var", False)]
 
     # ==========================================================
     # GUNUN EN IYI 10 MACI - HASSASIYETTEN BAGIMSIZ
@@ -14508,6 +14560,8 @@ else:
         real_i, item = pair
         m = item["m"]
         t0 = item["t"]
+        if t0.get("_tek_lig_tum_fikstur_placeholder"):
+            return pair
 
         try:
             min_odd = float(gosterilecek_min_oran)
@@ -14646,6 +14700,34 @@ else:
 
     for i, (real_i, item) in enumerate(goster):
         m, t = item["m"], item["t"]
+        if t.get("_tek_lig_tum_fikstur_placeholder"):
+            _neden = str(t.get("_filtre_nedeni", "filtre") or "filtre")
+            _neden_map = {"tahmin_yok": ("⚪ Tahmin üretilemedi", "#64748b"), "ornek_yetersiz": ("🟠 Minimum örnek yetersiz", "#f59e0b"), "guven_yetersiz": ("🟡 Güven eşiğinin altında", "#eab308"), "ilk_tahmin_kararsiz": ("🔴 İlk/güncel tahmin kararsız", "#ef4444")}
+            _neden_lbl, _neden_renk = _neden_map.get(_neden, ("⚪ Analiz filtresi dışında", "#64748b"))
+            _min_tol = t.get("_min_gerekli_hassasiyet")
+            _gerekli = int(t.get("_min_gerekli_ornek", 1) or 1)
+            _bulunan = int(t.get("_bulunan_ornek", 0) or 0)
+            if _neden in {"tahmin_yok", "ornek_yetersiz"}:
+                if _min_tol is None:
+                    _hass_not = f"Bu geçmiş havuzunda {_gerekli} örneğe ulaşacak yeterli maç yok."
+                elif float(_min_tol) <= .10:
+                    _hass_not = f"En az {_gerekli} örnek için gereken minimum hassasiyet: {float(_min_tol):.2f}"
+                else:
+                    _hass_not = f"En az {_gerekli} örnek için gereken minimum hassasiyet: {float(_min_tol):.2f} (0.00–0.10 taramasının dışında)"
+            elif _neden == "guven_yetersiz":
+                _hass_not = f"Tahmin: {escape(str(t.get('_filtre_ana_label') or '—'))} · Güven %{int(t.get('_filtre_ana_p',0) or 0)}"
+            else:
+                _hass_not = f"Son hesaplanan tahmin: {escape(str(t.get('_filtre_ana_label') or '—'))} · Güven %{int(t.get('_filtre_ana_p',0) or 0)}"
+            _saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+            _ph = (f'<div style="background:#101827;border:1px solid {_neden_renk};border-radius:14px;padding:14px 16px;margin:8px 0">'
+                   f'<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><div>'
+                   f'<div style="font-size:.76rem;color:#94a3b8">{escape(str(m.get("lig","")))} · {_saat}</div>'
+                   f'<div style="font-size:1rem;font-weight:850;color:#f8fafc;margin-top:3px">{escape(str(m.get("ev","")))} - {escape(str(m.get("dep","")))}</div></div>'
+                   f'<div style="font-size:.78rem;font-weight:850;color:{_neden_renk};text-align:right">{_neden_lbl}</div></div>'
+                   f'<div style="margin-top:9px;font-size:.78rem;color:#cbd5e1">{_hass_not}</div>'
+                   f'<div style="margin-top:4px;font-size:.70rem;color:#64748b">Bulunan örnek: {_bulunan} · İstenen minimum: {_gerekli}</div></div>')
+            st.markdown(_ph, unsafe_allow_html=True)
+            continue
         gc, _, _ = guven_renk(t["ana_p"])
 
         pill_cls = ""
