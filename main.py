@@ -6454,6 +6454,10 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     ms25_raw = agirlikli_oran((toplam_gol >= 3), goal_weights)
     ms35_raw = agirlikli_oran((toplam_gol >= 4), goal_weights)
     ms15_raw = agirlikli_oran((toplam_gol >= 2), goal_weights)
+    # FIX34: Takım 1.5 Üst marketleri geçmiş skorların doğrudan gerçekleşme
+    # oranından hesaplanır. Şimdilik ana tahmin / Aday Listesi yarışına sokulmaz.
+    ev15_raw = agirlikli_oran((b["FTHG"] >= 2), goal_weights)
+    dep15_raw = agirlikli_oran((b["FTAG"] >= 2), goal_weights)
     kg_raw = agirlikli_oran(((b["FTHG"] > 0) & (b["FTAG"] > 0)), goal_weights)
 
     # İlk-yarı/HTFT yalnızca gerçekten HT verisi bulunan alt kümeden hesaplanır.
@@ -6615,7 +6619,18 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     cond_alt25 = (toplam_gol <= 2)
     cond_kg_var = ((b["FTHG"] > 0) & (b["FTAG"] > 0))
     cond_kg_yok = ~cond_kg_var
+    cond_ev15 = (b["FTHG"] >= 2)
+    cond_dep15 = (b["FTAG"] >= 2)
     htft_series = htft_s
+
+    # FIX34 deneysel takım-gol kombinasyonları. Bunlar görünür/ölçülür ama
+    # mevcut ana tahmin, Top 50 ve otomatik kupon seçimine henüz katılmaz.
+    experimental_combo_defs = [
+        ("MS1 + Ev 1.5 Üst", cond_ms1 & cond_ev15),
+        ("MS2 + Dep 1.5 Üst", cond_ms2 & cond_dep15),
+        ("MS1 + 2.5 Üst", cond_ms1 & cond_ust25),
+        ("MS2 + 2.5 Üst", cond_ms2 & cond_ust25),
+    ]
 
     # İlk yarı koşullarını tam veri indeksine taşı; HT verisi olmayan satırlar False kalır.
     cond_iy15 = pd.Series(False, index=b.index)
@@ -6906,6 +6921,8 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
         "ms25_p": int(round(_adj(ms25_raw, goal_bias, "2.5 Üst") * 100)),
         "ms25a_p": int(round(_adj(1-ms25_raw, goal_bias, "2.5 Alt") * 100)),
         "ms15_p": int(round(_adj(ms15_raw, goal_bias, "1.5 Üst") * 100)),
+        "ev15_p": int(round(_adj(ev15_raw, goal_bias, "Ev 1.5 Üst") * 100)),
+        "dep15_p": int(round(_adj(dep15_raw, goal_bias, "Dep 1.5 Üst") * 100)),
         "ms35_p": int(round(_adj(ms35_raw, goal_bias, "3.5 Üst") * 100)),
         "kg_var_p": int(round(_adj(kg_raw, goal_bias, "KG Var") * 100)),
         "kg_yok_p": int(round(_adj(1-kg_raw, goal_bias, "KG Yok") * 100)),
@@ -7001,6 +7018,18 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
             "raw_p": round(candidate["raw_prob"] * 100, 2), "hit": candidate["hit"],
             "eligible": candidate["eligible"],
         })
+    # FIX34: Takım 1.5 Üst ve ilgili kombinasyonlar yalnız izleme/analiz katmanında.
+    sonuc["experimental_team15_combos"] = []
+    for exp_label, exp_cond in experimental_combo_defs:
+        exp_raw = agirlikli_oran(exp_cond, goal_weights)
+        exp_conf = _adj(exp_raw, goal_bias, exp_label)
+        sonuc["experimental_team15_combos"].append({
+            "label": exp_label,
+            "guven": max(0, min(99, int(round(exp_conf * 100)))),
+            "raw_p": round(exp_raw * 100, 2),
+            "hit": int(exp_cond.sum()),
+        })
+
     if sonuc["combo_var"]:
         combo_parts = [{"MS1": "MS 1", "MSX": "Beraberlik", "MS2": "MS 2"}.get(part.strip(), part.strip())
                        for part in sonuc["combo_label"].split("+")]
@@ -7022,7 +7051,7 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     guven_alanlari = {
         "ana_p", "ana_raw_p", "alt_p", "kg_p", "combo_p", "combo_raw_p",
         "canli_p", "ms_p", "ms1_p", "msx_p", "ms2_p", "ms25_p",
-        "ms25a_p", "ms15_p", "ms35_p", "kg_var_p", "kg_yok_p",
+        "ms25a_p", "ms15_p", "ev15_p", "dep15_p", "ms35_p", "kg_var_p", "kg_yok_p",
         "iy05_p", "iy05a_p", "iy15_p", "iy1_p", "iyx_p", "iy2_p", "htft_p",
     }
     for alan in guven_alanlari:
@@ -7083,12 +7112,40 @@ def market_gecmis_guven_duzeltmesi(etiket, ham_guven, kayitlar=None):
     return duzeltilmis, shrunk_success, n, delta
 
 
+def _fix34_takim15_kararlilik_ekle(t, taramalar, min_ornek):
+    """Takım 1.5 Üst için 0.00-0.10 hassasiyet desteğini yalnız raporlar."""
+    if not t or not taramalar:
+        return t
+    for alan, prefix in (("ev15_p", "ev15"), ("dep15_p", "dep15")):
+        destek = []
+        degerler = []
+        for tol, pair in sorted(taramalar.items()):
+            tt, bb = pair
+            if tt is None or bb is None:
+                continue
+            if len(bb) < max(int(min_ornek), dinamik_min_mac(float(tol))):
+                continue
+            val = int(tt.get(alan, 0) or 0)
+            degerler.append(val)
+            if val > 60:
+                destek.append(f"{float(tol):.2f}")
+        t[f"{prefix}_stability_count"] = len(destek)
+        t[f"{prefix}_stability_tols"] = destek
+        t[f"{prefix}_stability_text"] = " · ".join(destek)
+        t[f"{prefix}_confidence_spread"] = round(float(pd.Series(degerler).std(ddof=0)), 1) if degerler else 0.0
+    return t
+
+
 def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False,
                                market_gecmis_kayitlari=None, taramalar=None):
     havuz = birlesik_market_havuzu(b_df, m_row, min_ornek, sadece_ayni_lig,
                                  market_gecmis_kayitlari, taramalar=taramalar)
     ana = next((candidate for candidate in havuz if "+" not in candidate["label"]), None)
-    return birlesik_tahmin_olustur(ana, havuz, m_row) if ana else (None, pd.DataFrame())
+    if not ana:
+        return (None, pd.DataFrame())
+    t, b = birlesik_tahmin_olustur(ana, havuz, m_row)
+    _fix34_takim15_kararlilik_ekle(t, taramalar, min_ornek)
+    return t, b
 
 def kombo_tahmini_oran(label, ana_odd=None):
     """Eski çağrılar için uyumluluk: gerçek kombo fiyatı yoksa oran türetilmez."""
@@ -14010,6 +14067,26 @@ def detay_ana_icerik():
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # FIX34 · Takım 1.5 Üst deneysel paneli. Ana tahmini etkilemez.
+    _ev15 = int(t.get("ev15_p", 0) or 0)
+    _dep15 = int(t.get("dep15_p", 0) or 0)
+    _ev15_st = int(t.get("ev15_stability_count", 0) or 0)
+    _dep15_st = int(t.get("dep15_stability_count", 0) or 0)
+    st.markdown(f"""
+    <div style="background:#13151e;border:1px solid #273044;border-radius:16px;padding:14px 18px;margin-bottom:14px">
+      <div style="font-weight:800;margin-bottom:8px">⚽ Takım 1.5 Üst · Deneysel İzleme</div>
+      <div style="display:flex;flex-wrap:wrap;gap:18px;font-size:.84rem">
+        <span><b>{m.get('ev','Ev')}</b> 1.5 Üst: <b>%{_ev15}</b> · Kararlılık <b>{_ev15_st}/11</b></span>
+        <span><b>{m.get('dep','Dep')}</b> 1.5 Üst: <b>%{_dep15}</b> · Kararlılık <b>{_dep15_st}/11</b></span>
+      </div>
+      <div style="margin-top:7px;color:#8f98ab;font-size:.75rem">Bu marketler şimdilik Ana Tahmin, Aday Listesi ve otomatik kupon seçimini değiştirmez.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    _exp = t.get("experimental_team15_combos", []) or []
+    if _exp:
+        _exp_txt = " · ".join(f"{x.get('label')}: %{int(x.get('guven',0))}" for x in _exp)
+        st.caption("🧪 Kombinasyon takibi: " + _exp_txt)
 
     st.caption(f"Oran karşılaştırması: {t.get('odds_basis', 'Zaman bilgisi yok')} · "
                f"{t.get('goal_matching', '')}")
