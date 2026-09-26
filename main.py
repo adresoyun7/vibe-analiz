@@ -4563,9 +4563,9 @@ def _h2h_baglam_destegi(gecmis_df, m, label, limit=5):
 def _saha_form_ozeti(maclar, takim):
     """Önceden saha bazlı süzülmüş maçlardan basit form/market özeti üretir."""
     if maclar is None or maclar.empty:
-        return {"mac": 0, "puan_orani": 0.5, "over25": 0.5, "btts": 0.5, "draw_rate": 0.33}
+        return {"mac": 0, "puan_orani": 0.5, "over25": 0.5, "btts": 0.5, "draw_rate": 0.33, "gf": 0.0, "ga": 0.0}
     hedef = takim_adi_norm(takim)
-    pts = n = draws = overs = btts = 0
+    pts = n = draws = overs = btts = gf_sum = ga_sum = 0
     for _, r in maclar.iterrows():
         try:
             hg, ag = int(float(r.get("FTHG"))), int(float(r.get("FTAG")))
@@ -4574,13 +4574,15 @@ def _saha_form_ozeti(maclar, takim):
         row_home = takim_adi_norm(r.get("HomeTeam", "")) == hedef
         gf, ga = (hg, ag) if row_home else (ag, hg)
         n += 1
+        gf_sum += gf
+        ga_sum += ga
         pts += 3 if gf > ga else 1 if gf == ga else 0
         draws += int(gf == ga)
         overs += int(hg + ag >= 3)
         btts += int(hg > 0 and ag > 0)
     if not n:
-        return {"mac": 0, "puan_orani": 0.5, "over25": 0.5, "btts": 0.5, "draw_rate": 0.33}
-    return {"mac": n, "puan_orani": pts/(3*n), "over25": overs/n, "btts": btts/n, "draw_rate": draws/n}
+        return {"mac": 0, "puan_orani": 0.5, "over25": 0.5, "btts": 0.5, "draw_rate": 0.33, "gf": 0.0, "ga": 0.0}
+    return {"mac": n, "puan_orani": pts/(3*n), "over25": overs/n, "btts": btts/n, "draw_rate": draws/n, "gf": gf_sum/n, "ga": ga_sum/n}
 
 
 def _saha_baglam_destegi(gecmis_df, m, label, limit=5):
@@ -8776,6 +8778,41 @@ def _tek_lig_fikstur_placeholder(m_row, neden, gecmis_df=None, min_ornek=1, sade
         "b": b_det if b_det is not None else pd.DataFrame()}
 
 
+# FIX41: Günün Tahminleri hiçbir maçı boş bırakmaz. Oran-benzerliği modeli hiç
+# örnek üretemezse yalnızca bu görünümde 1-X-2 piyasa olasılıklarından şeffaf
+# bir fallback tahmin oluşturulur. Bu fallback normal Maç Analizi/Aday sistemi
+# veya Sonuç Takibi model performansına karıştırılmaz.
+def gunun_zorunlu_fallback_t(m_row, neden="oran modeli örnek bulamadı"):
+    try:
+        h, d, a = (float(m_row.get("h")), float(m_row.get("b")), float(m_row.get("a")))
+        inv = [1.0/max(h, 1.0001), 1.0/max(d, 1.0001), 1.0/max(a, 1.0001)]
+        z = sum(inv) or 1.0
+        probs = [x/z*100.0 for x in inv]
+        labels = ["MS 1", "Beraberlik", "MS 2"]
+        k = max(range(3), key=lambda i: probs[i])
+        order = sorted(range(3), key=lambda i: probs[i], reverse=True)
+        return {
+            "ana_label": labels[k], "ana_p": int(round(probs[k])),
+            "ana_odd": [h,d,a][k], "alt_label": labels[order[1]],
+            "alt_p": int(round(probs[order[1]])), "ornek": 0,
+            "score": 0.0, "playable_score": 0.0,
+            "match_type": "Piyasa fallback", "goal_profile": "Takım modeli ayrıca gösterilir",
+            "combo_var": False, "combo_label": "", "combo_p": 0,
+            "eg": 1, "dg": 1, "belirsiz": True,
+            "gunun_zorunlu_fallback": True, "gunun_fallback_nedeni": str(neden),
+            "ayni_lig_ornek": 0,
+        }
+    except Exception:
+        return {
+            "ana_label":"Tahmin üretilemedi", "ana_p":0, "ana_odd":None,
+            "alt_label":"", "alt_p":0, "ornek":0, "score":0.0,
+            "playable_score":0.0, "match_type":"Veri yetersiz", "goal_profile":"—",
+            "combo_var":False, "combo_label":"", "combo_p":0, "eg":1, "dg":1,
+            "gunun_zorunlu_fallback":True, "gunun_fallback_nedeni":str(neden),
+            "ayni_lig_ornek":0,
+        }
+
+
 def gecmis_ornekleri_bul(gecmis_df, m_row, tolerans, sadece_ayni_lig=False,
                          filtre_12=False, filtre_21=False, filtre_cift_yari_kg=False,
                          filtre_cift_yari_15=False, limit=25):
@@ -10306,7 +10343,7 @@ with st.sidebar:
     # Futbol görünümü yalnızca Futbol seçiliyken oluşturulur.
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "⚡ Günün Tahminleri", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "Günün Tahminleri", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -13523,12 +13560,12 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     st.stop()
 
 
-# FIX40 · ⚡ Günün Tahminleri
+# FIX41 · Günün Tahminleri + zorunlu tahmin + Takım Modeli v2
 # Bu görünüm seçildiğinde ayrıca ANALİZİ BAŞLAT düğmesine basmak gerekmez.
 # Seçili tarih + lig kümesi değiştiğinde bir kez otomatik çalışır. Her maç için
 # 0.00–0.10 hassasiyet taraması kullanılır; tahmin üretilemeyen fikstürler de
 # nedenleriyle listede tutulur.
-if st.session_state.get("sayfa_modu") == "⚡ Günün Tahminleri":
+if st.session_state.get("sayfa_modu") == "Günün Tahminleri":
     _gt_imza = f"{secili_tarih}|{'|'.join(sorted(str(x) for x in (secili_kodlar or [])))}|{int(min_ornek or 0)}"
     if API_KEY and secili_kodlar and st.session_state.get("gunun_tahminleri_son_imza") != _gt_imza:
         analiz_btn = True
@@ -13597,7 +13634,7 @@ if analiz_btn:
         # FIX33: Sadece Maç Analizi + tek lig seçiliyken tüm fikstürü görünür tut.
         _tek_lig_tum_fikstur = (
             (st.session_state.get("sayfa_modu") == "Maç Analizi" and len(secili_kodlar or []) == 1)
-            or st.session_state.get("sayfa_modu") == "⚡ Günün Tahminleri"
+            or st.session_state.get("sayfa_modu") == "Günün Tahminleri"
         ) and not _sonuc_reset_genis_tarama
 
         if not bulten.empty and not gecmis.empty and st.session_state.get("sayfa_modu") != "Top 50 Market":
@@ -13612,7 +13649,7 @@ if analiz_btn:
                     t, b_det = hassasiyet_birlesik_hesapla(
                         gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
                     )
-                elif st.session_state.get("sayfa_modu") == "⚡ Günün Tahminleri":
+                elif st.session_state.get("sayfa_modu") == "Günün Tahminleri":
                     # Ayar istemeyen görünüm: 11 hassasiyeti otomatik birleştir.
                     t, b_det = hassasiyet_birlesik_hesapla(
                         gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
@@ -13632,9 +13669,13 @@ if analiz_btn:
                     )
                 if t is None:
                     _sayac_t_none += 1
-                    if _tek_lig_tum_fikstur:
-                        final.append(_tek_lig_fikstur_placeholder(m, "tahmin_yok", gecmis, min_ornek, sadece_ayni_lig, None, b_det))
-                    continue
+                    if st.session_state.get("sayfa_modu") == "Günün Tahminleri":
+                        t = gunun_zorunlu_fallback_t(m, "0.00–0.10 oran benzerliği taramasında örnek bulunamadı")
+                        b_det = pd.DataFrame()
+                    else:
+                        if _tek_lig_tum_fikstur:
+                            final.append(_tek_lig_fikstur_placeholder(m, "tahmin_yok", gecmis, min_ornek, sadece_ayni_lig, None, b_det))
+                        continue
 
                 # Minimum Örnek Sayısı gerçek benzer maç sayısına uygulanır.
                 # Manuel hassasiyet hesapla() içinde aday havuzu oluşsa bile, seçilen
@@ -13645,11 +13686,16 @@ if analiz_btn:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
                 if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
                     _sayac_ornek += 1
-                    if _tek_lig_tum_fikstur:
-                        final.append(_tek_lig_fikstur_placeholder(m, "ornek_yetersiz", gecmis, min_ornek, sadece_ayni_lig, t, b_det))
-                    continue
+                    # Günün Tahminleri'nde minimum örnek bir ELEME kriteri değildir.
+                    # Tahmin gösterilir, yalnızca kartta örnek sayısı bilgi olarak kalır.
+                    if st.session_state.get("sayfa_modu") != "Günün Tahminleri":
+                        if _tek_lig_tum_fikstur:
+                            final.append(_tek_lig_fikstur_placeholder(m, "ornek_yetersiz", gecmis, min_ornek, sadece_ayni_lig, t, b_det))
+                        continue
 
-                if oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
+                # FIX41: Günün Tahminleri'nde güven eşiği tamamen devre dışıdır.
+                # Güven yüzdesi yalnızca bilgi olarak görünür; hiçbir maçı elemez.
+                if st.session_state.get("sayfa_modu") != "Günün Tahminleri" and oynanabilir_esik and t.get("ana_p", 0) < oynanabilir_esik:
                     _sayac_guven += 1
                     if _tek_lig_tum_fikstur:
                         final.append(_tek_lig_fikstur_placeholder(m, "guven_yetersiz", gecmis, min_ornek, sadece_ayni_lig, t, b_det))
@@ -13745,8 +13791,9 @@ if analiz_btn:
             "tolerans": float(TOLERANS or 0.0),
         }
         _takip_final = [x for x in final if not (x.get("t", {}) or {}).get("_tek_lig_tum_fikstur_placeholder", False)]
-        analiz_tahminlerini_kaydet(_takip_final)
-        analiz_degisim_bilgisi_ekle(_takip_final)
+        if st.session_state.get("sayfa_modu") != "Günün Tahminleri":
+            analiz_tahminlerini_kaydet(_takip_final)
+            analiz_degisim_bilgisi_ekle(_takip_final)
         st.session_state.top10_list = []
         # Normal Maç Analizi sırasında 11 hassasiyetli Top 50 taramasını boşuna çalıştırma.
         # Bu hem manuel hassasiyet mantığını net tutar hem de analizi hızlandırır.
@@ -14085,11 +14132,11 @@ def baglam_analizi_goster(item):
         st.caption("💹 2.5 piyasa: seçilen market 2.5 Alt/Üst olmadığı için bu doğrulama uygulanmıyor.")
 
 def takim_modeli_hesapla(gecmis_df, m, genel_limit=10, saha_limit=5):
-    """Oran modelinden bağımsız takım performansı doğrulaması.
+    """Oranlardan bağımsız futbol takım performans modeli v2.
 
-    Ana tahmini veya güven yüzdesini DEĞİŞTİRMEZ. Hedef maçtan önceki takım
-    maçlarından genel + iç/dış saha KG ve 2.5 profili üretir. Yüzdeler
-    kalibre edilmiş olasılık değil, geçmiş frekanslardan türetilen destek skorudur.
+    Son maçlardaki atılan/yenen gol + iç/dış saha verisini birleştirir; basit
+    Poisson dağılımıyla MS, KG, 2.5 ve takım 1.5 olasılıkları üretir. Bunlar
+    kalibre edilmiş bookmaker olasılıkları değildir ve oran modelini değiştirmez.
     """
     bos = {"aktif": False, "neden": "Yeterli takım geçmişi yok"}
     if gecmis_df is None or getattr(gecmis_df, "empty", True):
@@ -14124,26 +14171,54 @@ def takim_modeli_hesapla(gecmis_df, m, genel_limit=10, saha_limit=5):
         dep_saha = _saha_form_ozeti(dep_saha_df, dep_ad)
         saha_aktif = ev_saha.get("mac", 0) >= 3 and dep_saha.get("mac", 0) >= 3
 
-        genel_kg = (float(ev["btts"]) + float(dep["btts"])) / 2
-        genel_u25 = (float(ev["over25"]) + float(dep["over25"])) / 2
+        # Hücum ile rakip savunmasını eşit ağırlıkta eşleştir; yeterli saha verisi
+        # varsa genel profil %60, iç/dış saha profili %40 ağırlık alır.
+        ev_xg_genel = (float(ev.get("gf", 0)) + float(dep.get("ga", 0))) / 2.0
+        dep_xg_genel = (float(dep.get("gf", 0)) + float(ev.get("ga", 0))) / 2.0
         if saha_aktif:
-            saha_kg = (float(ev_saha["btts"]) + float(dep_saha["btts"])) / 2
-            saha_u25 = (float(ev_saha["over25"]) + float(dep_saha["over25"])) / 2
-            kg = .60 * genel_kg + .40 * saha_kg
-            u25 = .60 * genel_u25 + .40 * saha_u25
+            ev_xg_saha = (float(ev_saha.get("gf", 0)) + float(dep_saha.get("ga", 0))) / 2.0
+            dep_xg_saha = (float(dep_saha.get("gf", 0)) + float(ev_saha.get("ga", 0))) / 2.0
+            lam_h = .60 * ev_xg_genel + .40 * ev_xg_saha
+            lam_a = .60 * dep_xg_genel + .40 * dep_xg_saha
         else:
-            saha_kg = saha_u25 = None
-            kg, u25 = genel_kg, genel_u25
+            lam_h, lam_a = ev_xg_genel, dep_xg_genel
+        lam_h = max(.15, min(4.0, lam_h))
+        lam_a = max(.15, min(4.0, lam_a))
 
+        def pois(lam, k): return math.exp(-lam) * (lam ** k) / math.factorial(k)
+        maxg = 8
+        ph = [pois(lam_h, k) for k in range(maxg+1)]
+        pa = [pois(lam_a, k) for k in range(maxg+1)]
+        z = sum(ph)*sum(pa) or 1.0
+        p1 = px = p2 = p_over = p_btts = 0.0
+        for i in range(maxg+1):
+            for j in range(maxg+1):
+                q = ph[i]*pa[j]/z
+                if i > j: p1 += q
+                elif i == j: px += q
+                else: p2 += q
+                if i+j >= 3: p_over += q
+                if i > 0 and j > 0: p_btts += q
+        ev15 = 1.0 - (ph[0] + ph[1]) / max(sum(ph), 1e-9)
+        dep15 = 1.0 - (pa[0] + pa[1]) / max(sum(pa), 1e-9)
         def pct(x): return round(max(0.0, min(1.0, float(x))) * 100, 1)
+        probs = {
+            "MS 1": pct(p1), "Beraberlik": pct(px), "MS 2": pct(p2),
+            "2.5 Üst": pct(p_over), "2.5 Alt": pct(1-p_over),
+            "KG Var": pct(p_btts), "KG Yok": pct(1-p_btts),
+            "Ev 1.5 Üst": pct(ev15), "Dep 1.5 Üst": pct(dep15),
+        }
+        # Tek bir özet görüş: her market ailesinin güçlü tarafı yarışır.
+        aday = ["MS 1", "Beraberlik", "MS 2", "2.5 Üst", "2.5 Alt", "KG Var", "KG Yok", "Ev 1.5 Üst", "Dep 1.5 Üst"]
+        ana = max(aday, key=lambda x: probs[x])
         return {
-            "aktif": True, "ev": ev, "dep": dep,
-            "ev_saha": ev_saha, "dep_saha": dep_saha, "saha_aktif": saha_aktif,
-            "kg_var": pct(kg), "kg_yok": pct(1-kg),
-            "ust25": pct(u25), "alt25": pct(1-u25),
-            "genel_kg": pct(genel_kg), "genel_u25": pct(genel_u25),
-            "saha_kg": pct(saha_kg) if saha_kg is not None else None,
-            "saha_u25": pct(saha_u25) if saha_u25 is not None else None,
+            "aktif": True, "ev": ev, "dep": dep, "ev_saha": ev_saha, "dep_saha": dep_saha,
+            "saha_aktif": saha_aktif, "xg_ev": round(lam_h,2), "xg_dep": round(lam_a,2),
+            "ms1": probs["MS 1"], "msx": probs["Beraberlik"], "ms2": probs["MS 2"],
+            "kg_var": probs["KG Var"], "kg_yok": probs["KG Yok"],
+            "ust25": probs["2.5 Üst"], "alt25": probs["2.5 Alt"],
+            "ev15": probs["Ev 1.5 Üst"], "dep15": probs["Dep 1.5 Üst"],
+            "ana_label": ana, "ana_p": probs[ana], "probs": probs,
         }
     except Exception as exc:
         return {**bos, "neden": f"Takım modeli hesaplanamadı: {exc}"}
@@ -14173,24 +14248,17 @@ def takim_modeli_goster(gecmis_df, m, t):
     model = takim_modeli_hesapla(gecmis_df, m)
     label = str(t.get("ana_label", "") or "")
     durum, durum_yazi, ana_skor = takim_modeli_ana_tahmin_uyumu(model, label)
-    st.markdown("### 🧠 Takım Modeli · Oranlardan bağımsız doğrulama")
+    st.markdown("### 🧠 Takım Modeli · Oranlardan bağımsız")
     if not model.get("aktif"):
         st.caption("Takım modeli: " + str(model.get("neden", "Yeterli veri yok")))
         return
+    st.markdown(f"**Takım görüşü:** {model['ana_label']} · %{model['ana_p']:.1f} &nbsp; | &nbsp; **Beklenen gol:** {model['xg_ev']:.2f} – {model['xg_dep']:.2f}")
     c1, c2, c3 = st.columns(3, gap="small")
-    with c1:
-        st.metric("KG Var desteği", f"%{model['kg_var']:.1f}", help="Son takım maçlarındaki KG sıklığı; kalibre edilmiş kazanma olasılığı değildir.")
-    with c2:
-        st.metric("2.5 Üst desteği", f"%{model['ust25']:.1f}", help="Son takım maçlarındaki 2.5 Üst sıklığı; kalibre edilmiş kazanma olasılığı değildir.")
-    with c3:
-        st.metric("Ana tahmin uyumu", durum_yazi, delta=(f"%{ana_skor:.1f} destek" if ana_skor is not None else None), delta_color="off")
-    ev, dep = model.get("ev", {}), model.get("dep", {})
-    saha_txt = "İç/dış saha verisi dahil" if model.get("saha_aktif") else "İç/dış saha örneği yetersiz; genel form kullanıldı"
-    st.caption(
-        f"{m.get('ev','')}: son {int(ev.get('mac',0))} maç · KG %{float(ev.get('btts',0))*100:.0f} · 2.5 Üst %{float(ev.get('over25',0))*100:.0f} · "
-        f"{m.get('dep','')}: son {int(dep.get('mac',0))} maç · KG %{float(dep.get('btts',0))*100:.0f} · 2.5 Üst %{float(dep.get('over25',0))*100:.0f} · {saha_txt}."
-    )
-    st.caption("ℹ️ v1 yalnızca bağımsız doğrulama katmanıdır; mevcut oran modeli, % güven ve 0.00–0.10 hassasiyet hesaplarını değiştirmez.")
+    with c1: st.metric("MS", f"1 %{model['ms1']:.0f} · X %{model['msx']:.0f} · 2 %{model['ms2']:.0f}")
+    with c2: st.metric("Gol", f"Üst %{model['ust25']:.0f} · KG %{model['kg_var']:.0f}")
+    with c3: st.metric("Oran modeli uyumu", durum_yazi, delta=(f"%{ana_skor:.1f} destek" if ana_skor is not None else None), delta_color="off")
+    st.caption(f"Takım 1.5 Üst: {m.get('ev','')} %{model['ev15']:.0f} · {m.get('dep','')} %{model['dep15']:.0f}. İç/dış saha verisi " + ("dahil." if model.get("saha_aktif") else "yetersiz; genel performans kullanıldı."))
+    st.caption("ℹ️ Takım Modeli bağımsız izleme katmanıdır; oran modeli, güven yüzdesi ve hassasiyet hesabını değiştirmez.")
 
 
 def detay_ana_icerik():
@@ -14711,18 +14779,18 @@ st.markdown("<br>", unsafe_allow_html=True)
 # Top 50 kendi 0.00–0.10 taramasını kullanarak gösterilmeye devam eder.
 aktif_sayfa_modu = st.session_state.get("sayfa_modu", "Maç Analizi")
 
-if aktif_sayfa_modu == "⚡ Günün Tahminleri":
-    st.markdown("### ⚡ Günün Tahminleri")
-    st.caption("Seçili liglerde bugünün bülteni otomatik taranır. Her maç 0.00–0.10 hassasiyet aralığında değerlendirilir; ayrıca Analizi Başlat'a basman gerekmez.")
+if aktif_sayfa_modu == "Günün Tahminleri":
+    st.markdown("### Günün Tahminleri")
+    st.caption("Seçili liglerde günün tüm maçları otomatik taranır. Güven eşiği bu görünümde eleme yapmaz; her maç için tahmin gösterilir. Oran modeli örnek bulamazsa şeffaf piyasa fallback'i kullanılır ve Takım Modeli ayrıca gösterilir.")
 
 if not fl and aktif_sayfa_modu != "Top 50 Market":
-    if aktif_sayfa_modu == "⚡ Günün Tahminleri":
+    if aktif_sayfa_modu == "Günün Tahminleri":
         if not API_KEY:
-            st.info("⚡ Günün Tahminleri için yalnızca API Key gerekli. Key'i girdikten sonra sayfa otomatik hazırlanır.")
+            st.info("Günün Tahminleri için yalnızca API Key gerekli. Key'i girdikten sonra sayfa otomatik hazırlanır.")
         elif not secili_kodlar:
-            st.info("⚡ En az bir lig seçildiğinde günün tahminleri otomatik hazırlanır.")
+            st.info("En az bir lig seçildiğinde günün tahminleri otomatik hazırlanır.")
         else:
-            st.info("⚡ Bu tarih ve seçili ligler için gösterilecek maç bulunamadı.")
+            st.info("Bu tarih ve seçili ligler için gösterilecek maç bulunamadı.")
     else:
         st.markdown("""
         <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
@@ -15128,6 +15196,10 @@ else:
                 f'{_kar_lbl} · Güven değişimi {_gf} puan</div>'
             )
         _filtre_tipi = str(t.get("filtre_secim_tipi", "") or "").strip()
+        if t.get("gunun_zorunlu_fallback"):
+            filtre_secim_html = '<div class="mk-mini" style="color:#f59e0b;margin-top:4px">Oran modeli örnek bulamadı · zorunlu piyasa fallback tahmini</div>'
+        else:
+            filtre_secim_html = ''
         _filtre_tahmini = bool(t.get("filtre_secim_oran_tahmini", False))
         if _filtre_tipi:
             _oran_notu = " · tahmini oran" if _filtre_tahmini else ""
@@ -15135,7 +15207,7 @@ else:
                 f'<div class="mk-mini" style="color:#7fb3ff;margin-top:4px">'
                 f'↪ Minimum oran nedeniyle {_filtre_tipi.lower()} gösteriliyor{_oran_notu}</div>'
             )
-        else:
+        elif not t.get("gunun_zorunlu_fallback"):
             filtre_secim_html = ''
         combo_html = ''
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
@@ -15244,6 +15316,21 @@ else:
         except (TypeError, ValueError):
             _kg_oran_txt = "—"
 
+        # FIX41: Oran modeliyle aynı anda bağımsız Takım Modeli kart özeti.
+        _tm_kaynak = st.session_state.get("last_gecmis_df")
+        _tm = takim_modeli_hesapla(_tm_kaynak, m) if _tm_kaynak is not None else {"aktif": False}
+        if _tm.get("aktif"):
+            _tm_durum, _tm_durum_yazi, _tm_destek = takim_modeli_ana_tahmin_uyumu(_tm, t.get("ana_label"))
+            _tm_color = "#22c55e" if _tm_durum == "destek" else "#ef4444" if _tm_durum == "celiski" else "#f59e0b"
+            _tm_html = (f'<div style="margin-top:8px;padding:7px 9px;border-radius:9px;background:#0b1220;border:1px solid #263247;font-size:.70rem;color:#cbd5e1">'
+                        f'<b style="color:#e2e8f0">Takım Modeli:</b> <b>{escape(str(_tm.get("ana_label","—")))}</b> %{float(_tm.get("ana_p",0)):.0f} · '
+                        f'Beklenen gol <b>{float(_tm.get("xg_ev",0)):.2f}-{float(_tm.get("xg_dep",0)):.2f}</b> · '
+                        f'MS 1/X/2 %{float(_tm.get("ms1",0)):.0f}/%{float(_tm.get("msx",0)):.0f}/%{float(_tm.get("ms2",0)):.0f} · '
+                        f'Üst %{float(_tm.get("ust25",0)):.0f} · KG %{float(_tm.get("kg_var",0)):.0f} · '
+                        f'<span style="color:{_tm_color};font-weight:800">{escape(_tm_durum_yazi)}</span></div>')
+        else:
+            _tm_html = '<div style="margin-top:8px;font-size:.69rem;color:#64748b">Takım Modeli: yeterli takım geçmişi yok</div>'
+
         kc, bc = st.columns([9, 1.4])
         with kc:
             card_html = f"""
@@ -15261,6 +15348,7 @@ else:
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
                 {belirsiz_html}
                 {ai_comment_html}
+                {_tm_html}
               </div>
 
               <div>
