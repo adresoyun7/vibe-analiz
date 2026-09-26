@@ -7750,6 +7750,23 @@ def analiz_tahminlerini_kaydet(final):
                     "degisim_tipi": tahmin_degisim_tipi(onceki_son, label),
                 })
             kayit["degisiklikler"] = degisiklikler[-20:]
+
+            # FIX32: Her analiz anını sakla. Böylece yalnız ilk/son değil,
+            # maçın tüm tahmin yolculuğu ve güven değişimi ölçülebilir.
+            analiz_gecmisi = list(eski.get("analiz_gecmisi", []) or [])
+            analiz_gecmisi.append({
+                "tahmin": label,
+                "guven": guncel_guven,
+                "oran": guncel_oran,
+                "kaydedildi": simdi_iso,
+                "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
+            })
+            kayit["analiz_gecmisi"] = analiz_gecmisi[-50:]
+            kayit["analiz_sayisi"] = len(kayit["analiz_gecmisi"])
+            kayit["yon_degisim_sayisi"] = sum(
+                1 for a, b in zip(kayit["analiz_gecmisi"], kayit["analiz_gecmisi"][1:])
+                if str(a.get("tahmin", "")) != str(b.get("tahmin", ""))
+            )
             mevcut[mac_anahtari] = kayit
         return tahmin_kayitlarini_tekillestir(list(mevcut.values()))
     return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
@@ -7776,6 +7793,10 @@ def analiz_degisim_bilgisi_ekle(final):
         t["takip_degisim_tipi"] = tahmin_degisim_tipi(ilk, son)
         t["takip_ilk_zaman"] = kayit.get("ilk_kayit_zamani") or kayit.get("kaydedildi")
         t["takip_son_zaman"] = kayit.get("son_kayit_zamani") or kayit.get("kaydedildi")
+        _ag = list(kayit.get("analiz_gecmisi", []) or [])
+        t["takip_analiz_sayisi"] = int(kayit.get("analiz_sayisi", len(_ag)) or len(_ag))
+        t["takip_yon_degisim_sayisi"] = int(kayit.get("yon_degisim_sayisi", 0) or 0)
+        t["takip_guven_farki"] = int(t.get("ana_p", 0) or 0) - int(kayit.get("ilk_guven", kayit.get("guven", 0)) or 0)
     return final
 
 def skor_tahmini_tuttu_mu(label, ev_gol, dep_gol, iy_ev_gol=None, iy_dep_gol=None):
@@ -12782,6 +12803,45 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         )
 
         if not biten.empty:
+            # FIX32: İlk / son / hiç değişmeyen tahmin performansı.
+            _deg_mask = biten["tahmin_degisim_tipi"].fillna("").astype(str).ne("")
+            _sabit = biten[~_deg_mask].copy()
+            _deg = biten[_deg_mask].copy()
+            _sabit_bas = (float(_sabit["tuttu"].fillna(False).astype(bool).mean()) * 100) if not _sabit.empty else None
+            _deg_ilk_bas = (float(_deg["tuttu"].fillna(False).astype(bool).mean()) * 100) if not _deg.empty else None
+            _deg_son = _deg[_deg["son_tuttu"].notna()].copy() if not _deg.empty else pd.DataFrame()
+            _deg_son_bas = (float(_deg_son["son_tuttu"].astype(bool).mean()) * 100) if not _deg_son.empty else None
+            st.markdown("#### 🔬 İlk / Son / Değişmeyen karşılaştırması")
+            _p1, _p2, _p3, _p4 = st.columns(4)
+            _p1.metric("İlk Tahmin", f"%{basari:.1f}", help=f"{len(biten)} tamamlanan maç")
+            _p2.metric("Son Tahmin", f"%{son_basari:.1f}" if son_basari is not None else "—", help=f"{len(son_biten)} tamamlanan maç")
+            _p3.metric("Hiç Değişmeyen", f"%{_sabit_bas:.1f}" if _sabit_bas is not None else "—", help=f"{len(_sabit)} maç")
+            _p4.metric("Değişenlerde Son", f"%{_deg_son_bas:.1f}" if _deg_son_bas is not None else "—", help=f"{len(_deg_son)} maç · değişenlerde ilk: " + (f"%{_deg_ilk_bas:.1f}" if _deg_ilk_bas is not None else "—"))
+
+            # FIX32: İlk tahminin maç başlangıcına ne kadar kala kaydedildiğine göre performans.
+            def _fix32_kalan_saat(row):
+                try:
+                    _ko = pd.to_datetime(row.get("zaman"), errors="coerce", utc=True)
+                    _ka = pd.to_datetime(row.get("ilk_kayit_zamani"), errors="coerce", utc=True)
+                    if pd.isna(_ko) or pd.isna(_ka):
+                        return None
+                    return (_ko - _ka).total_seconds() / 3600.0
+                except Exception:
+                    return None
+            _z = biten.copy()
+            _z["_kalan_saat"] = _z.apply(_fix32_kalan_saat, axis=1)
+            _z = _z[pd.to_numeric(_z["_kalan_saat"], errors="coerce").notna() & (_z["_kalan_saat"] >= 0)].copy()
+            if not _z.empty:
+                _z["Zaman Grubu"] = pd.cut(_z["_kalan_saat"], bins=[-0.001, 1, 6, 24, float("inf")], labels=["<1 saat", "1–6 saat", "6–24 saat", "24+ saat"], right=False)
+                _zo = (_z.groupby("Zaman Grubu", observed=False)
+                    .agg(Tahmin=("tuttu", "size"), Kazanan=("tuttu", lambda v: int(v.fillna(False).astype(bool).sum())))
+                    .reset_index())
+                _zo = _zo[_zo["Tahmin"] > 0].copy()
+                _zo["Başarı %"] = (_zo["Kazanan"] / _zo["Tahmin"] * 100).round(1)
+                st.markdown("#### ⏱️ İlk tahmin · maça kalan süre performansı")
+                st.caption("İlk tahminin kaydedildiği an ile maç başlangıcı arasındaki süreye göre ölçülür. Küçük örneklerde tek başına karar ölçütü olarak kullanılmamalı.")
+                st.dataframe(_zo, use_container_width=True, hide_index=True)
+
             # Bağlam performansı yalnızca tahmin anında snapshot kaydı bulunan maçlarda ölçülür.
             # Böylece maç bittikten sonra yeni form/H2H kullanıp geçmişe veri sızıntısı yapılmaz.
             if "baglam_ayari" in biten.columns:
@@ -12860,7 +12920,7 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
                 else "✅ Tuttu" if bool(x.get("alternatif_tuttu")) else "❌ Tutmadı",
                 axis=1,
             )
-            for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None), ("baglam_ayari", None)]:
+            for kolon, varsayilan in [("alternatif_tahmin", ""), ("alternatif_guven", None), ("baglam_ayari", None), ("analiz_sayisi", 1), ("yon_degisim_sayisi", 0)]:
                 if kolon not in liste.columns:
                     liste[kolon] = varsayilan
             liste["alternatif_tahmin"] = liste["alternatif_tahmin"].fillna("").replace("None", "")
@@ -12869,11 +12929,12 @@ if st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
             )
             goster = liste[[
                 "Tarih", "lig", "Maç", "ilk_tahmin", "ilk_guven", "İlk Durum",
-                "son_tahmin", "son_guven", "Son Durum", "Değişim", "Bağlam", "Sonuç",
+                "son_tahmin", "son_guven", "Son Durum", "Değişim", "analiz_sayisi", "yon_degisim_sayisi", "Bağlam", "Sonuç",
                 "alternatif_tahmin", "alternatif_guven", "Alternatif Durumu",
             ]].rename(columns={
                 "lig":"Lig", "ilk_tahmin":"İlk Tahmin", "ilk_guven":"İlk Güven %",
                 "son_tahmin":"Son Tahmin", "son_guven":"Son Güven %",
+                "analiz_sayisi":"Analiz Sayısı", "yon_degisim_sayisi":"Yön Değişimi",
                 "alternatif_tahmin":"Alternatif Tahmin", "alternatif_guven":"Alt. Güven %",
             })
             st.markdown("#### Kaydedilen tahminler")
@@ -14618,6 +14679,22 @@ else:
             )
         else:
             tahmin_degisim_html = ''
+        _analiz_sayisi = int(t.get("takip_analiz_sayisi", 0) or 0)
+        _yon_degisim = int(t.get("takip_yon_degisim_sayisi", 0) or 0)
+        _guven_farki = int(t.get("takip_guven_farki", 0) or 0)
+        if _analiz_sayisi >= 2:
+            if _yon_degisim == 0:
+                _kar_lbl, _kar_bg, _kar_border, _kar_color = f"🟢 Kararlı · {_analiz_sayisi} analizdir aynı", "#052e16", "#22c55e", "#bbf7d0"
+            elif _yon_degisim == 1:
+                _kar_lbl, _kar_bg, _kar_border, _kar_color = "🟠 Dalgalı · 1 yön değişimi", "#422006", "#f59e0b", "#fde68a"
+            else:
+                _kar_lbl, _kar_bg, _kar_border, _kar_color = f"🔴 Çok dalgalı · {_yon_degisim} yön değişimi", "#451a1a", "#ef4444", "#fecaca"
+            _gf = f"+{_guven_farki}" if _guven_farki > 0 else str(_guven_farki)
+            tahmin_degisim_html += (
+                f'<div style="margin-top:6px;padding:5px 8px;border-radius:8px;background:{_kar_bg};'
+                f'border:1px solid {_kar_border};color:{_kar_color};font-size:.72rem;font-weight:750">'
+                f'{_kar_lbl} · Güven değişimi {_gf} puan</div>'
+            )
         _filtre_tipi = str(t.get("filtre_secim_tipi", "") or "").strip()
         _filtre_tahmini = bool(t.get("filtre_secim_oran_tahmini", False))
         if _filtre_tipi:
