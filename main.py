@@ -7729,6 +7729,67 @@ def tahmin_loguna_baglam_yaz(m, label, baglam):
     return kayitlari_degistir("tahminler", update, TAHMIN_LOG_PATH)
 
 
+def _tahmin_sinyalleri(label):
+    """Tahmin etiketini ana futbol sinyallerine ayırır.
+
+    Amaç tahminleri birleştirmek değil; aynı senaryoyu destekleyen ana tahmin
+    değişimlerini yanlışlıkla "dalgalanma" saymamaktır.
+    """
+    x = str(label or "").strip()
+    sig = set()
+    # Gol yönü
+    if any(k in x for k in ("2.5 Üst", "KG Var", "Ev 1.5 Üst", "Dep 1.5 Üst")):
+        sig.add("gol_pozitif")
+    if "2.5 Alt" in x or "KG Yok" in x:
+        sig.add("gol_negatif")
+    if "KG Var" in x:
+        sig.add("btts_var")
+    if "KG Yok" in x:
+        sig.add("btts_yok")
+    if "Ev 1.5 Üst" in x:
+        sig.add("ev_gol_yuksek")
+    if "Dep 1.5 Üst" in x:
+        sig.add("dep_gol_yuksek")
+
+    # Maç sonucu yönü (hem "MS 1" hem kombo biçimi "MS1 + ...")
+    if x == "MS 1" or x.startswith("MS1 +"):
+        sig.add("taraf_ev")
+    elif x in ("Beraberlik", "MS X") or x.startswith("MSX +"):
+        sig.add("taraf_x")
+    elif x == "MS 2" or x.startswith("MS2 +"):
+        sig.add("taraf_dep")
+    return sig
+
+
+def tahminler_birbirini_destekliyor_mu(a, b):
+    """İki farklı ana tahmin aynı temel senaryoyu destekliyorsa True.
+
+    Örn. 2.5 Üst -> KG Var veya MS1 -> MS1 + 2.5 Üst dalgalanma değildir.
+    Zıt gol/taraf sinyalleri varsa hiçbir zaman destekleyici kabul edilmez.
+    """
+    a, b = str(a or "").strip(), str(b or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    sa, sb = _tahmin_sinyalleri(a), _tahmin_sinyalleri(b)
+    if not sa or not sb:
+        return False
+    zitlar = (
+        ("gol_pozitif", "gol_negatif"),
+        ("btts_var", "btts_yok"),
+        ("taraf_ev", "taraf_dep"),
+        ("taraf_ev", "taraf_x"),
+        ("taraf_dep", "taraf_x"),
+    )
+    for sol, sag in zitlar:
+        if (sol in sa and sag in sb) or (sag in sa and sol in sb):
+            return False
+    # Aynı ana yönü paylaşması gerekir. 2.5 Üst <-> KG Var burada gol_pozitif
+    # sinyalini paylaşır; sadece ilgisiz iki market otomatik uyumlu sayılmaz.
+    return bool(sa & sb)
+
+
 def tahmin_degisim_tipi(ilk_label, son_label):
     """İlk ve güncel ana tahmin arasındaki değişimi sınıflandırır."""
     ilk = str(ilk_label or "").strip()
@@ -7739,8 +7800,14 @@ def tahmin_degisim_tipi(ilk_label, son_label):
         frozenset(("2.5 Üst", "2.5 Alt")),
         frozenset(("KG Var", "KG Yok")),
         frozenset(("MS 1", "MS 2")),
+        frozenset(("MS 1", "Beraberlik")),
+        frozenset(("MS 2", "Beraberlik")),
     }
-    return "zit" if frozenset((ilk, son)) in zit_ciftler else "degisti"
+    if frozenset((ilk, son)) in zit_ciftler:
+        return "zit"
+    if tahminler_birbirini_destekliyor_mu(ilk, son):
+        return "destekli"
+    return "degisti"
 
 
 def analiz_tahminlerini_kaydet(final):
@@ -7858,7 +7925,11 @@ def analiz_tahminlerini_kaydet(final):
             kayit["analiz_sayisi"] = len(kayit["analiz_gecmisi"])
             kayit["yon_degisim_sayisi"] = sum(
                 1 for a, b in zip(kayit["analiz_gecmisi"], kayit["analiz_gecmisi"][1:])
-                if str(a.get("tahmin", "")) != str(b.get("tahmin", ""))
+                if tahmin_degisim_tipi(a.get("tahmin", ""), b.get("tahmin", "")) in ("zit", "degisti")
+            )
+            kayit["destekleyici_degisim_sayisi"] = sum(
+                1 for a, b in zip(kayit["analiz_gecmisi"], kayit["analiz_gecmisi"][1:])
+                if tahmin_degisim_tipi(a.get("tahmin", ""), b.get("tahmin", "")) == "destekli"
             )
             mevcut[mac_anahtari] = kayit
         return tahmin_kayitlarini_tekillestir(list(mevcut.values()))
@@ -7888,7 +7959,22 @@ def analiz_degisim_bilgisi_ekle(final):
         t["takip_son_zaman"] = kayit.get("son_kayit_zamani") or kayit.get("kaydedildi")
         _ag = list(kayit.get("analiz_gecmisi", []) or [])
         t["takip_analiz_sayisi"] = int(kayit.get("analiz_sayisi", len(_ag)) or len(_ag))
-        t["takip_yon_degisim_sayisi"] = int(kayit.get("yon_degisim_sayisi", 0) or 0)
+        # Eski kayıtlardaki sayaç farklı tahminlerin tamamını dalgalanma sayıyordu.
+        # Kartta geçmişi yeni uyumluluk kuralıyla anlık yeniden hesapla.
+        if len(_ag) >= 2:
+            _yon_yeni = sum(
+                1 for a, b in zip(_ag, _ag[1:])
+                if tahmin_degisim_tipi(a.get("tahmin", ""), b.get("tahmin", "")) in ("zit", "degisti")
+            )
+            _dest_yeni = sum(
+                1 for a, b in zip(_ag, _ag[1:])
+                if tahmin_degisim_tipi(a.get("tahmin", ""), b.get("tahmin", "")) == "destekli"
+            )
+        else:
+            _yon_yeni = int(kayit.get("yon_degisim_sayisi", 0) or 0)
+            _dest_yeni = int(kayit.get("destekleyici_degisim_sayisi", 0) or 0)
+        t["takip_yon_degisim_sayisi"] = _yon_yeni
+        t["takip_destekleyici_degisim_sayisi"] = _dest_yeni
         t["takip_guven_farki"] = int(t.get("ana_p", 0) or 0) - int(kayit.get("ilk_guven", kayit.get("guven", 0)) or 0)
     return final
 
@@ -14874,6 +14960,12 @@ else:
                 f'<div style="margin-top:7px;padding:6px 8px;border-radius:8px;background:#451a1a;'
                 f'border:1px solid #ef4444;color:#fecaca;font-size:.74rem;font-weight:800">'
                 f'⚠️ ZIT TAHMİN: İlk {_ilk_tahmin} %{_ilk_guven} → Güncel {escape(str(t.get("ana_label", "")))} %{_son_guven}</div>'
+            )
+        elif _degisim_tipi == "destekli":
+            tahmin_degisim_html = (
+                f'<div style="margin-top:7px;padding:6px 8px;border-radius:8px;background:#052e16;'
+                f'border:1px solid #22c55e;color:#bbf7d0;font-size:.74rem;font-weight:800">'
+                f'✓ DESTEKLEYİCİ DEĞİŞİM: İlk {_ilk_tahmin} %{_ilk_guven} → Güncel {escape(str(t.get("ana_label", "")))} %{_son_guven} · Dalgalanma sayılmadı</div>'
             )
         elif _degisim_tipi == "degisti":
             tahmin_degisim_html = (
