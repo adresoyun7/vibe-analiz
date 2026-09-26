@@ -10306,7 +10306,7 @@ with st.sidebar:
     # Futbol görünümü yalnızca Futbol seçiliyken oluşturulur.
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "⚡ Günün Tahminleri", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -13523,6 +13523,17 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     st.stop()
 
 
+# FIX40 · ⚡ Günün Tahminleri
+# Bu görünüm seçildiğinde ayrıca ANALİZİ BAŞLAT düğmesine basmak gerekmez.
+# Seçili tarih + lig kümesi değiştiğinde bir kez otomatik çalışır. Her maç için
+# 0.00–0.10 hassasiyet taraması kullanılır; tahmin üretilemeyen fikstürler de
+# nedenleriyle listede tutulur.
+if st.session_state.get("sayfa_modu") == "⚡ Günün Tahminleri":
+    _gt_imza = f"{secili_tarih}|{'|'.join(sorted(str(x) for x in (secili_kodlar or [])))}|{int(min_ornek or 0)}"
+    if API_KEY and secili_kodlar and st.session_state.get("gunun_tahminleri_son_imza") != _gt_imza:
+        analiz_btn = True
+        st.session_state["gunun_tahminleri_son_imza"] = _gt_imza
+
 # Sonuç Takibi sıfırlandıysa, eski final_list'i kullanmak yerine aynı analiz
 # motorunu mevcut ayarlarla baştan çalıştır.
 _sonuc_reset_genis_tarama = False
@@ -13584,9 +13595,10 @@ if analiz_btn:
         _sayac_guven = 0
         _sayac_gecen = 0
         # FIX33: Sadece Maç Analizi + tek lig seçiliyken tüm fikstürü görünür tut.
-        _tek_lig_tum_fikstur = (st.session_state.get("sayfa_modu") == "Maç Analizi"
-                                 and len(secili_kodlar or []) == 1
-                                 and not _sonuc_reset_genis_tarama)
+        _tek_lig_tum_fikstur = (
+            (st.session_state.get("sayfa_modu") == "Maç Analizi" and len(secili_kodlar or []) == 1)
+            or st.session_state.get("sayfa_modu") == "⚡ Günün Tahminleri"
+        ) and not _sonuc_reset_genis_tarama
 
         if not bulten.empty and not gecmis.empty and st.session_state.get("sayfa_modu") != "Top 50 Market":
             for _, m in bulten.iterrows():
@@ -13597,6 +13609,11 @@ if analiz_btn:
                     # Sonuç Takibi reseti: her maç için 0.00–0.10 hassasiyetleri
                     # birlikte tara. Karşıt-market tutarlılık kuralları
                     # hassasiyet_birlesik_hesapla içinde uygulanmaya devam eder.
+                    t, b_det = hassasiyet_birlesik_hesapla(
+                        gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
+                    )
+                elif st.session_state.get("sayfa_modu") == "⚡ Günün Tahminleri":
+                    # Ayar istemeyen görünüm: 11 hassasiyeti otomatik birleştir.
                     t, b_det = hassasiyet_birlesik_hesapla(
                         gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
                     )
@@ -14694,14 +14711,26 @@ st.markdown("<br>", unsafe_allow_html=True)
 # Top 50 kendi 0.00–0.10 taramasını kullanarak gösterilmeye devam eder.
 aktif_sayfa_modu = st.session_state.get("sayfa_modu", "Maç Analizi")
 
+if aktif_sayfa_modu == "⚡ Günün Tahminleri":
+    st.markdown("### ⚡ Günün Tahminleri")
+    st.caption("Seçili liglerde bugünün bülteni otomatik taranır. Her maç 0.00–0.10 hassasiyet aralığında değerlendirilir; ayrıca Analizi Başlat'a basman gerekmez.")
+
 if not fl and aktif_sayfa_modu != "Top 50 Market":
-    st.markdown("""
-    <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
-      <div style="font-size:2rem;margin-bottom:12px">⚡</div>
-      <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
-      <div style="font-size:0.9rem;color:#666;margin-top:6px">Sol menüden API key ve filtreleri ayarla, sonra ANALİZİ BAŞLAT butonuna bas.</div>
-    </div>
-    """, unsafe_allow_html=True)
+    if aktif_sayfa_modu == "⚡ Günün Tahminleri":
+        if not API_KEY:
+            st.info("⚡ Günün Tahminleri için yalnızca API Key gerekli. Key'i girdikten sonra sayfa otomatik hazırlanır.")
+        elif not secili_kodlar:
+            st.info("⚡ En az bir lig seçildiğinde günün tahminleri otomatik hazırlanır.")
+        else:
+            st.info("⚡ Bu tarih ve seçili ligler için gösterilecek maç bulunamadı.")
+    else:
+        st.markdown("""
+        <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:42px;text-align:center;margin-top:20px">
+          <div style="font-size:2rem;margin-bottom:12px">⚡</div>
+          <div style="font-family:Rajdhani,sans-serif;font-size:1.35rem;color:#fff;font-weight:700">Analizi Başlatın</div>
+          <div style="font-size:0.9rem;color:#666;margin-top:6px">Sol menüden API key ve filtreleri ayarla, sonra ANALİZİ BAŞLAT butonuna bas.</div>
+        </div>
+        """, unsafe_allow_html=True)
 else:
     indexed_fl = list(_filtreli_indexed_fl)
     yuksek = [(idx, x) for idx, x in indexed_fl if not x["t"].get("_tek_lig_tum_fikstur_placeholder") and x["t"]["ana_p"] >= 70]
