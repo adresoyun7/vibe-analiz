@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 
 MODEL_VERSION = "2026.09.13.2"
+FIX29_BROWSER_KEY_MEMORY = "localStorage-v1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
 LOGGER = logging.getLogger("yapaikupon")
@@ -1736,6 +1737,7 @@ def basketbol_sayfasi():
         with bk2:
             if st.button("Temizle", use_container_width=True, key="basket_api_clear_main"):
                 st.session_state.pop("user_api_key", None)
+                st.session_state["_clear_odds_browser_memory"] = True
                 st.rerun()
         if get_app_api_key():
             st.caption("✅ Odds API key aktif")
@@ -2007,6 +2009,107 @@ st.set_page_config(page_title="YapAiKupon", layout="wide", page_icon="⚡")
 
 
 # ==========================================================
+# FIX29 · TARAYICI API KEY HAFIZASI (localStorage)
+# ==========================================================
+# Amaç: ODDS API ve API-Football anahtarları F5 / sayfa yenilemesinde
+# kaybolmasın. Anahtarlar kaynak koda veya GitHub'a yazılmaz; yalnızca
+# bu tarayıcının localStorage alanında tutulur. "Temizle" butonları ilgili
+# tarayıcı kaydını da siler.
+
+def browser_api_key_memory_bridge():
+    clear_odds = bool(st.session_state.pop("_clear_odds_browser_memory", False))
+    clear_af = bool(st.session_state.pop("_clear_af_browser_memory", False))
+    clear_payload = json.dumps({"odds": clear_odds, "af": clear_af})
+    components.html(
+        f"""
+<script>
+(() => {{
+  const CLEAR = {clear_payload};
+  const ODDS_STORE = "yapaikupon_odds_api_key";
+  const AF_STORE   = "yapaikupon_api_football_key";
+
+  function storage() {{
+    try {{ return window.parent.localStorage; }} catch (e) {{
+      try {{ return window.localStorage; }} catch (_) {{ return null; }}
+    }}
+  }}
+  const ls = storage();
+  if (!ls) return;
+  if (CLEAR.odds) ls.removeItem(ODDS_STORE);
+  if (CLEAR.af) ls.removeItem(AF_STORE);
+
+  function findInput(labelText) {{
+    const doc = window.parent.document;
+    const labels = Array.from(doc.querySelectorAll('label'));
+    for (const label of labels) {{
+      const txt = (label.innerText || label.textContent || '').trim().toUpperCase();
+      if (txt.includes(labelText.toUpperCase())) {{
+        const inp = label.querySelector('input') ||
+          (label.parentElement && label.parentElement.querySelector('input')) ||
+          (label.parentElement && label.parentElement.parentElement && label.parentElement.parentElement.querySelector('input'));
+        if (inp) return inp;
+      }}
+    }}
+    return null;
+  }}
+
+  function setReactInputValue(input, value) {{
+    if (!input || !value || input.value) return;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  }}
+
+  function wire(input, storeKey) {{
+    if (!input || input.dataset.ykMemoryWired === storeKey) return;
+    input.dataset.ykMemoryWired = storeKey;
+    const saved = ls.getItem(storeKey) || '';
+    if (saved && !input.value) setReactInputValue(input, saved);
+    input.addEventListener('input', () => {{
+      const value = (input.value || '').trim();
+      if (value) ls.setItem(storeKey, value);
+    }});
+    input.addEventListener('change', () => {{
+      const value = (input.value || '').trim();
+      if (value) ls.setItem(storeKey, value);
+    }});
+  }}
+
+  function sync() {{
+    // Sayfada aynı ODDS alanı farklı bölümlerde bulunabildiği için hepsini bağla.
+    const doc = window.parent.document;
+    const labels = Array.from(doc.querySelectorAll('label'));
+    labels.forEach(label => {{
+      const txt = (label.innerText || label.textContent || '').trim().toUpperCase();
+      let key = null;
+      if (txt.includes('ODDS API KEY')) key = ODDS_STORE;
+      else if (txt.includes('API-FOOTBALL KEY')) key = AF_STORE;
+      if (!key) return;
+      const box = label.parentElement;
+      const input = label.querySelector('input') || (box && box.querySelector('input')) ||
+        (box && box.parentElement && box.parentElement.querySelector('input'));
+      wire(input, key);
+    }});
+  }}
+
+  sync();
+  const observer = new MutationObserver(sync);
+  observer.observe(window.parent.document.body, {{childList:true, subtree:true}});
+  setTimeout(sync, 150);
+  setTimeout(sync, 600);
+  setTimeout(sync, 1500);
+}})();
+</script>
+        """,
+        height=0,
+        width=0,
+    )
+
+browser_api_key_memory_bridge()
+
+
+# ==========================================================
 # API KEY ACCESS SYSTEM
 # ==========================================================
 
@@ -2064,6 +2167,7 @@ def api_key_panel():
         with c2:
             if st.button("Temizle", use_container_width=True, key="clear_api_key_btn"):
                 st.session_state.pop("user_api_key", None)
+                st.session_state["_clear_odds_browser_memory"] = True
                 st.success("API Key temizlendi")
                 st.rerun()
 
@@ -2090,6 +2194,7 @@ def api_key_panel():
         with af2:
             if st.button("AF Temizle", use_container_width=True, key="clear_api_football_key_btn"):
                 st.session_state.pop("user_api_football_key", None)
+                st.session_state["_clear_af_browser_memory"] = True
                 st.rerun()
         if get_api_football_key():
             st.caption("API-Football fallback aktif ✅")
@@ -9779,6 +9884,7 @@ with st.sidebar:
         with a2:
             if st.button("Temizle", use_container_width=True, key="clear_api_key_sidebar_clean"):
                 st.session_state.pop("user_api_key", None)
+                st.session_state["_clear_odds_browser_memory"] = True
                 st.success("API Key temizlendi")
                 st.rerun()
         if get_app_api_key():
@@ -9803,6 +9909,7 @@ with st.sidebar:
         with af2:
             if st.button("AF Temizle", use_container_width=True, key="clear_api_football_key_sidebar_clean"):
                 st.session_state.pop("user_api_football_key", None)
+                st.session_state["_clear_af_browser_memory"] = True
                 st.rerun()
         if get_api_football_key():
             st.caption("✅ API-Football fallback aktif · yalnızca yerel bağlam eksikse çağrılır")
