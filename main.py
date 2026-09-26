@@ -14260,55 +14260,71 @@ def detay_ana_icerik():
     </div>
     """, unsafe_allow_html=True)
 
-    # FIX36 · Takım 1.5 Üst ana tahminde; kombolar Güçlü Kombo alanında ayrı önerilir.
-    _ev15 = int(t.get("ev15_p", 0) or 0)
-    _dep15 = int(t.get("dep15_p", 0) or 0)
-    _ev15_st = int(t.get("ev15_stability_count", 0) or 0)
-    _dep15_st = int(t.get("dep15_stability_count", 0) or 0)
-    st.markdown(f"""
-    <div style="background:#13151e;border:1px solid #273044;border-radius:16px;padding:14px 18px;margin-bottom:14px">
-      <div style="font-weight:800;margin-bottom:8px">⚽ Takım 1.5 Üst · Analiz / Kararlılık</div>
-      <div style="display:flex;flex-wrap:wrap;gap:18px;font-size:.84rem">
-        <span><b>{m.get('ev','Ev')}</b> 1.5 Üst: <b>%{_ev15}</b> · Kararlılık <b>{_ev15_st}/11</b></span>
-        <span><b>{m.get('dep','Dep')}</b> 1.5 Üst: <b>%{_dep15}</b> · Kararlılık <b>{_dep15_st}/11</b></span>
-      </div>
-      <div style="margin-top:7px;color:#8f98ab;font-size:.75rem">Takım 1.5 Üst tekli marketleri Ana Tahmin yarışındadır; kombinasyonlar Güçlü Kombo olarak ayrı önerilir.</div>
-    </div>
-    """, unsafe_allow_html=True)
-    _ms25_ek_label = str(t.get("team15_ms25_label", "") or "")
-    _ms25_ek_p = int(t.get("team15_ms25_p", 0) or 0)
-    if _ms25_ek_label:
-        st.info(f"↗️ Takım 1.5 Üst ana tahminine ek karşılaştırma: **{_ms25_ek_label} %{_ms25_ek_p}**")
-    _exp = t.get("experimental_team15_combos", []) or []
-    if _exp:
-        _exp_txt = " · ".join(f"{x.get('label')}: %{int(x.get('guven',0))}" for x in _exp)
-        st.caption("🧪 Kombinasyon takibi: " + _exp_txt)
+    # FIX39 · Maç Detay: ayrı "Takım 1.5 Üst Analiz/Kararlılık" kutusu kaldırıldı.
+    # Takım 1.5 Üst verisi modelde/ana tahminde kullanılmaya devam eder; burada yalnız
+    # kullanıcının istediği kararlı kombo yorumları tek bir bölümde gösterilir.
+    st.markdown("#### 🧠 Kararlı Kombo Yorumu")
+    _ky = list(t.get("fix38_combo_yorumlari", []) or [])
 
-    # FIX38 · Maç Detay: kararlı komboları API/LLM kullanmadan yorumla.
-    _ky = t.get("fix38_combo_yorumlari", []) or []
-    if _ky:
-        st.markdown("#### 🧠 Kararlı Kombo Yorumu")
-        _goster = [x for x in _ky if int(x.get("stability_count",0)) >= 4 and int(x.get("guven",0)) >= 50]
-        if not _goster:
-            st.caption("Bu maçta izlenen kombolardan hiçbiri henüz yeterince kararlı destek üretmiyor.")
-        else:
-            for _k in _goster[:5]:
-                _lbl = str(_k.get("label", ""))
-                _g = int(_k.get("guven",0) or 0)
-                _sc = int(_k.get("stability_count",0) or 0)
-                _sp = float(_k.get("spread",0) or 0)
-                _hit = int(_k.get("hit",0) or 0)
-                _sev = str(_k.get("seviye", ""))
-                _ik = str(_k.get("ikon", ""))
-                if _sc >= 9:
-                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; yön hassasiyet değişimlerine karşı güçlü biçimde korunuyor."
-                elif _sc >= 7:
-                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; genel görünüm kararlı ancak tam uzlaşı yok."
+    # Bazı analiz yollarında hassasiyet raporu taşınmamış olabilir. Bölümü kaybetmek yerine
+    # merkez analizdeki combo_candidates ile geri doldur; bu durumda kararlılık 0/11 değil,
+    # "ölçülemedi" olarak gösterilir.
+    _hedef_kombo = [
+        "MS1 + Ev 1.5 Üst", "MS2 + Dep 1.5 Üst",
+        "MS1 + 2.5 Üst", "MS2 + 2.5 Üst",
+        "2.5 Üst + KG Var",
+    ]
+    _var_labels = {str(x.get("label", "")) for x in _ky}
+    for _c in (t.get("combo_candidates", []) or []):
+        _lbl = str(_c.get("label", ""))
+        if _lbl not in _hedef_kombo or _lbl in _var_labels:
+            continue
+        _ky.append({
+            "label": _lbl, "guven": int(_c.get("guven", 0) or 0),
+            "raw_p": float(_c.get("raw_p", 0) or 0), "hit": int(_c.get("hit", 0) or 0),
+            "stability_count": None, "stability_tols": [], "spread": None,
+            "seviye": "Kararlılık ölçülemedi", "ikon": "⚪",
+        })
+
+    _ky.sort(key=lambda x: (
+        -1 if x.get("stability_count") is None else int(x.get("stability_count", 0)),
+        int(x.get("guven", 0) or 0), int(x.get("hit", 0) or 0)
+    ), reverse=True)
+
+    if not _ky:
+        st.info("Bu maç için izlenen kombinasyonlarda yeterli geçmiş örnek oluşmadı.")
+    else:
+        for _k in _ky:
+            _lbl = str(_k.get("label", ""))
+            _g = int(_k.get("guven", 0) or 0)
+            _sc = _k.get("stability_count")
+            _hit = int(_k.get("hit", 0) or 0)
+            _sp = _k.get("spread")
+            if _sc is None:
+                _ik, _sev = "⚪", "Kararlılık ölçülemedi"
+                _yorum = "Merkez analizde kombo olasılığı var; 0.00–0.10 hassasiyet taramasında yeterli ortak veri olmadığı için kararlılık puanı üretilemedi."
+                _stxt = "—/11"
+                _spread_txt = "—"
+            else:
+                _sc = int(_sc or 0)
+                _stxt = f"{_sc}/11"
+                _spread_txt = f"{float(_sp or 0):.1f}"
+                if _sc >= 9 and _g >= 60:
+                    _ik, _sev = "🔥", "Güçlü ve kararlı"
+                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; hassasiyet değişse de kombo güçlü biçimde korunuyor."
+                elif _sc >= 7 and _g >= 55:
+                    _ik, _sev = "🟢", "Kararlı destek"
+                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; genel görünüm kararlı."
+                elif _sc >= 4:
+                    _ik, _sev = "🟠", "Orta kararlılık"
+                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; sinyal var ancak hassasiyet değişiminde zayıflayabiliyor."
                 else:
-                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; kullanılabilir sinyal var fakat hassasiyet değişiminde zayıflayabiliyor."
-                st.markdown(f"**{_ik} {_lbl} — %{_g} · {_sc}/11 · {_sev}**  \
-{_yorum} Güven yayılımı **{_sp:.1f} puan**, seçili örnek havuzunda **{_hit} gerçekleşme**.")
-        st.caption("Bu bölüm komboları yalnız yorumlar; Ana Tahmin, Aday Listesi ve kupon puanlamasını değiştirmez. Yüzdeler benzer geçmiş örneklerden üretilen model güvenidir; gerçek kazanma olasılığı olarak okunmamalıdır.")
+                    _ik, _sev = "⚪", "Dalgalı / zayıf destek"
+                    _yorum = f"11 hassasiyetin yalnız {_sc} tanesinde destekleniyor; kararlı kombo olarak değerlendirilmemeli."
+            st.markdown(f"**{_ik} {_lbl} — %{_g} · {_stxt} · {_sev}**  \
+{_yorum} Güven yayılımı **{_spread_txt} puan**, seçili örnek havuzunda **{_hit} gerçekleşme**.")
+
+    st.caption("MS + takım 1.5 Üst, MS + 2.5 Üst ve 2.5 Üst + KG Var burada birlikte izlenir. Bu yorum katmanı Ana Tahmin/Aday Listesi/kupon puanlamasını değiştirmez; yüzdeler gerçek kazanma olasılığı değildir.")
 
     st.caption(f"Oran karşılaştırması: {t.get('odds_basis', 'Zaman bilgisi yok')} · "
                f"{t.get('goal_matching', '')}")
