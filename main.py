@@ -7166,6 +7166,70 @@ def _fix34_takim15_kararlilik_ekle(t, taramalar, min_ornek):
     return t
 
 
+def _fix38_kararli_kombo_yorumlari(t, taramalar, min_ornek):
+    """FIX38: Seçili komboları 0.00-0.10 hassasiyetlerinde izler ve yalnız yorum katmanı üretir.
+
+    Tahmin seçimini/puanını değiştirmez. Özellikle kullanıcının istediği:
+    MS1/MS2 + takım 1.5 Üst, MS1/MS2 + 2.5 Üst ve 2.5 Üst + KG Var
+    kombinasyonlarını kararlılık + güven + örnek desteğiyle açıklar.
+    """
+    if not t:
+        return t
+    hedefler = [
+        "MS1 + Ev 1.5 Üst", "MS2 + Dep 1.5 Üst",
+        "MS1 + 2.5 Üst", "MS2 + 2.5 Üst",
+        "2.5 Üst + KG Var",
+    ]
+    rapor = []
+    for label in hedefler:
+        vals, raw_vals, hits, tols = [], [], [], []
+        for tol, pair in sorted((taramalar or {}).items()):
+            try:
+                tt, bb = pair
+            except Exception:
+                continue
+            if tt is None or bb is None:
+                continue
+            if len(bb) < max(int(min_ornek), dinamik_min_mac(float(tol))):
+                continue
+            aday = next((x for x in (tt.get("combo_candidates", []) or []) if str(x.get("label")) == label), None)
+            if not aday:
+                continue
+            g = int(aday.get("guven", 0) or 0)
+            vals.append(g)
+            raw_vals.append(float(aday.get("raw_p", 0) or 0))
+            hits.append(int(aday.get("hit", 0) or 0))
+            # %55+ destek: kombonun o hassasiyette gerçekten kullanılabilir yön göstermesi.
+            if g >= 55:
+                tols.append(f"{float(tol):.2f}")
+        merkez = next((x for x in (t.get("combo_candidates", []) or []) if str(x.get("label")) == label), None)
+        if not merkez and not vals:
+            continue
+        guven = int((merkez or {}).get("guven", round(sum(vals)/len(vals)) if vals else 0) or 0)
+        raw_p = float((merkez or {}).get("raw_p", (sum(raw_vals)/len(raw_vals) if raw_vals else 0)) or 0)
+        hit = int((merkez or {}).get("hit", max(hits) if hits else 0) or 0)
+        st_count = len(tols)
+        spread = round(float(pd.Series(vals).std(ddof=0)), 1) if vals else 0.0
+        # Etiketler yorum amaçlıdır; Ana Tahmin / Aday Listesi skoruna girmez.
+        if st_count >= 9 and guven >= 60 and hit >= max(3, int(min_ornek)):
+            seviye, ikon = "Güçlü ve kararlı", "🔥"
+        elif st_count >= 7 and guven >= 55:
+            seviye, ikon = "Kararlı destek", "🟢"
+        elif st_count >= 4:
+            seviye, ikon = "Orta kararlılık", "🟠"
+        else:
+            seviye, ikon = "Dalgalı / zayıf destek", "⚪"
+        rapor.append({
+            "label": label, "guven": guven, "raw_p": round(raw_p,1), "hit": hit,
+            "stability_count": st_count, "stability_tols": tols,
+            "spread": spread, "seviye": seviye, "ikon": ikon,
+        })
+    # Önce kararlılık, sonra güven. Yalnız yorum sırası; model sırası değildir.
+    rapor.sort(key=lambda x: (x["stability_count"], x["guven"], x["hit"]), reverse=True)
+    t["fix38_combo_yorumlari"] = rapor
+    return t
+
+
 def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False,
                                market_gecmis_kayitlari=None, taramalar=None):
     havuz = birlesik_market_havuzu(b_df, m_row, min_ornek, sadece_ayni_lig,
@@ -7177,6 +7241,7 @@ def hassasiyet_birlesik_hesapla(b_df, m_row, min_ornek, sadece_ayni_lig=False,
         return (None, pd.DataFrame())
     t, b = birlesik_tahmin_olustur(ana, havuz, m_row)
     _fix34_takim15_kararlilik_ekle(t, taramalar, min_ornek)
+    _fix38_kararli_kombo_yorumlari(t, taramalar, min_ornek)
     return t, b
 
 def kombo_tahmini_oran(label, ana_odd=None):
@@ -14218,6 +14283,32 @@ def detay_ana_icerik():
     if _exp:
         _exp_txt = " · ".join(f"{x.get('label')}: %{int(x.get('guven',0))}" for x in _exp)
         st.caption("🧪 Kombinasyon takibi: " + _exp_txt)
+
+    # FIX38 · Maç Detay: kararlı komboları API/LLM kullanmadan yorumla.
+    _ky = t.get("fix38_combo_yorumlari", []) or []
+    if _ky:
+        st.markdown("#### 🧠 Kararlı Kombo Yorumu")
+        _goster = [x for x in _ky if int(x.get("stability_count",0)) >= 4 and int(x.get("guven",0)) >= 50]
+        if not _goster:
+            st.caption("Bu maçta izlenen kombolardan hiçbiri henüz yeterince kararlı destek üretmiyor.")
+        else:
+            for _k in _goster[:5]:
+                _lbl = str(_k.get("label", ""))
+                _g = int(_k.get("guven",0) or 0)
+                _sc = int(_k.get("stability_count",0) or 0)
+                _sp = float(_k.get("spread",0) or 0)
+                _hit = int(_k.get("hit",0) or 0)
+                _sev = str(_k.get("seviye", ""))
+                _ik = str(_k.get("ikon", ""))
+                if _sc >= 9:
+                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; yön hassasiyet değişimlerine karşı güçlü biçimde korunuyor."
+                elif _sc >= 7:
+                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; genel görünüm kararlı ancak tam uzlaşı yok."
+                else:
+                    _yorum = f"11 hassasiyetin {_sc} tanesinde destekleniyor; kullanılabilir sinyal var fakat hassasiyet değişiminde zayıflayabiliyor."
+                st.markdown(f"**{_ik} {_lbl} — %{_g} · {_sc}/11 · {_sev}**  \
+{_yorum} Güven yayılımı **{_sp:.1f} puan**, seçili örnek havuzunda **{_hit} gerçekleşme**.")
+        st.caption("Bu bölüm komboları yalnız yorumlar; Ana Tahmin, Aday Listesi ve kupon puanlamasını değiştirmez. Yüzdeler benzer geçmiş örneklerden üretilen model güvenidir; gerçek kazanma olasılığı olarak okunmamalıdır.")
 
     st.caption(f"Oran karşılaştırması: {t.get('odds_basis', 'Zaman bilgisi yok')} · "
                f"{t.get('goal_matching', '')}")
