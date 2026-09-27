@@ -1,5 +1,6 @@
 
 FIX35_TAKIM15_ANA_TAHMIN = "team15-main-prediction-v1"
+FIX42_TOPLAM_SUT = "optional-total-shots-main-v1"
 
 import io
 import os
@@ -3404,6 +3405,7 @@ def _gecmis_cache_yukle():
                 "B365H", "B365D", "B365A",
                 "B365CH", "B365CD", "B365CA",
                 "REF_H", "REF_D", "REF_A",
+                "HS", "AS", "HST", "AST",
             ]:
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -3454,6 +3456,12 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
     current_season = f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
     expired = not GEÇMİŞ_VERİ_DOSYASI.exists() or time.time() - GEÇMİŞ_VERİ_DOSYASI.stat().st_mtime >= 6 * 3600
     indirilecek = set(secili_sezonlar) if zorla_yenile else secili_sezonlar - mevcut_sezonlar
+    # FIX42: Eski cache sürümleri HS/AS/HST/AST sütunlarını saklamıyordu. Kullanıcı
+    # Toplam Şut özelliğini açtıysa seçili sezonları bir kez gerçek Football-Data'dan
+    # yenile; sonrasında normal 6 saatlik cache düzeni devam eder.
+    if st.session_state.get("toplam_sut_tahminleri_goster", False):
+        if yerel.empty or any(c not in yerel.columns for c in ("HS", "AS")):
+            indirilecek.update(secili_sezonlar)
     if expired and current_season in secili_sezonlar:
         indirilecek.add(current_season)
     # Normal kullanımda hızlı yerel cache; backtestte zorla_yenile=True ile canlı güncelleme.
@@ -3490,7 +3498,10 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
                 df = pd.read_csv(io.BytesIO(r.content))
                 cols = [
                     "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG", "FTR", "HTR",
-                    "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA", "B365>2.5", "B365<2.5", "B365C>2.5", "B365C<2.5", "HC", "AC", "HY", "AY"
+                    "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA", "B365>2.5", "B365<2.5", "B365C>2.5", "B365C<2.5",
+                    # FIX42: Football-Data maç istatistikleri. HS/AS toplam şut,
+                    # HST/AST isabetli şuttur. Şut marketi kapalıyken modele etkisi yoktur.
+                    "HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY"
                 ]
                 # Şirket kimliğini koru; eski B365 dosyaları da desteklenir.
                 cols += [f'{prefix}{closing}{side}' for prefix in ("WH", "PS", "BW", "VC")
@@ -8421,6 +8432,15 @@ def tahmin_tuttu_mu(label, row):
             return None
         translate = {"H": "1", "D": "X", "A": "2"}
         return f'{translate.get(row["HTR"], "?")}/{translate.get(row["FTR"], "?")}' == label[6:]
+    shot_match = re.fullmatch(r"Toplam Şut\s+(\d+)\+", label, flags=re.IGNORECASE)
+    if shot_match:
+        hs, ass = row.get("HS"), row.get("AS")
+        if hs is None or ass is None or pd.isna(hs) or pd.isna(ass):
+            return None
+        try:
+            return float(hs) + float(ass) >= int(shot_match.group(1))
+        except (TypeError, ValueError):
+            return None
     if label in ("İY KG Var", "İY KG Yok"):
         hh, ha = row.get("HTHG"), row.get("HTAG")
         if hh is None or ha is None or pd.isna(hh) or pd.isna(ha):
@@ -10348,6 +10368,16 @@ with st.sidebar:
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
     )
+
+    # FIX42: Şut marketi isteğe bağlıdır. Kapalıyken hiçbir kartı/ana tahmini etkilemez.
+    if st.session_state.get("sayfa_modu") in ("Maç Analizi", "Günün Tahminleri"):
+        st.checkbox(
+            "🎯 Toplam şut tahminlerini göster",
+            value=False,
+            key="toplam_sut_tahminleri_goster",
+            help="Yalnızca Football-Data HS/AS şut geçmişi yeterliyse 20+–32+ toplam şut adayı üretir. Alt tahmini üretmez; veri yetersizse maçın normal tahmini değişmez.",
+            on_change=clear_detail_on_filter_change,
+        )
 
     if st.session_state.get("sayfa_modu") == "Top 50 Market":
         st.markdown("### Market Filtreleri")
@@ -13566,7 +13596,7 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
 # 0.00–0.10 hassasiyet taraması kullanılır; tahmin üretilemeyen fikstürler de
 # nedenleriyle listede tutulur.
 if st.session_state.get("sayfa_modu") == "Günün Tahminleri":
-    _gt_imza = f"{secili_tarih}|{'|'.join(sorted(str(x) for x in (secili_kodlar or [])))}|{int(min_ornek or 0)}"
+    _gt_imza = f"{secili_tarih}|{'|'.join(sorted(str(x) for x in (secili_kodlar or [])))}|{int(min_ornek or 0)}|sut={int(bool(st.session_state.get('toplam_sut_tahminleri_goster', False)))}"
     if API_KEY and secili_kodlar and st.session_state.get("gunun_tahminleri_son_imza") != _gt_imza:
         analiz_btn = True
         st.session_state["gunun_tahminleri_son_imza"] = _gt_imza
@@ -13763,6 +13793,9 @@ if analiz_btn:
                             final.append(_tek_lig_fikstur_placeholder(m, "ilk_tahmin_kararsiz", gecmis, min_ornek, sadece_ayni_lig, t, b_det))
                         continue
 
+                # FIX42: Şut seçeneği kapalıysa t aynen kalır. Açıksa yalnız HS/AS
+                # geçmişi yeterli maçlarda Toplam Şut N+ ana tahmin yarışına girer.
+                t = toplam_sut_ana_tahmine_uygula(t, gecmis, m)
                 m_dict = m.to_dict()
                 m_dict["durum"] = mac_canli_durumu(m_dict["zaman"])
                 final.append({"m": m_dict, "t": t, "b": b_det})
@@ -14131,6 +14164,136 @@ def baglam_analizi_goster(item):
     else:
         st.caption("💹 2.5 piyasa: seçilen market 2.5 Alt/Üst olmadığı için bu doğrulama uygulanmıyor.")
 
+def _takim_sut_profili(kaynak, takim, cutoff, limit=10, saha=None):
+    """Takımın maçlarındaki toplam şut ve kendi şut üretimini özetler.
+
+    Football-Data: HS/AS toplam şut; HST/AST isabetli şut. Yalnızca tamamlanmış,
+    tarih öncesi ve sayısal şut verisi olan maçlar kullanılır.
+    """
+    if kaynak is None or getattr(kaynak, "empty", True) or any(c not in kaynak.columns for c in ("HS", "AS")):
+        return {"mac": 0}
+    adaylar = pd.unique(pd.concat([
+        kaynak.get("HomeTeam", pd.Series(dtype=str)).astype(str),
+        kaynak.get("AwayTeam", pd.Series(dtype=str)).astype(str),
+    ], ignore_index=True)).tolist()
+    es = takim_adi_eslestir(takim, adaylar)
+    if not es:
+        return {"mac": 0}
+    x = tarih_oncesi_gecmis(kaynak, cutoff).copy()
+    x = x[x["HomeTeam"].astype(str).eq(str(es)) | x["AwayTeam"].astype(str).eq(str(es))].copy()
+    if x.empty:
+        return {"mac": 0}
+    x["HS"] = pd.to_numeric(x["HS"], errors="coerce")
+    x["AS"] = pd.to_numeric(x["AS"], errors="coerce")
+    if "HST" in x: x["HST"] = pd.to_numeric(x["HST"], errors="coerce")
+    if "AST" in x: x["AST"] = pd.to_numeric(x["AST"], errors="coerce")
+    x = x.dropna(subset=["HS", "AS"])
+    if saha == "home": x = x[x["HomeTeam"].astype(str).eq(str(es))]
+    elif saha == "away": x = x[x["AwayTeam"].astype(str).eq(str(es))]
+    x = x.sort_values("Date", ascending=False).head(int(limit)).copy()
+    if x.empty:
+        return {"mac": 0}
+    is_home = x["HomeTeam"].astype(str).eq(str(es))
+    own = x["HS"].where(is_home, x["AS"])
+    opp = x["AS"].where(is_home, x["HS"])
+    total = x["HS"] + x["AS"]
+    own_sot = None
+    total_sot = None
+    if "HST" in x and "AST" in x:
+        own_sot = x["HST"].where(is_home, x["AST"])
+        total_sot = x["HST"] + x["AST"]
+    def wavg(series, decay=.90):
+        z = pd.to_numeric(series, errors="coerce").dropna().reset_index(drop=True)
+        if z.empty: return None
+        w = pd.Series([decay ** i for i in range(len(z))], dtype=float)
+        return float((z * w).sum() / w.sum())
+    return {
+        "mac": int(len(x)), "own": wavg(own), "opp": wavg(opp), "total": wavg(total),
+        "own_sot": wavg(own_sot) if own_sot is not None else None,
+        "total_sot": wavg(total_sot) if total_sot is not None else None,
+        "totals": [float(v) for v in pd.to_numeric(total, errors="coerce").dropna().tolist()],
+    }
+
+
+def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
+    """Yalnız ÜST yönünde, 'Toplam Şut 26+' biçiminde opsiyonel aday üretir.
+
+    Eşik 20+..32+ arasından seçilir. En az 6 kullanılabilir yakın dönem maç ve
+    en az %65 shrink edilmiş geçmiş desteği gerekir. Bu güven kalibre edilmiş
+    bahis kazanma olasılığı değildir; geçmiş frekans desteğidir.
+    """
+    if not st.session_state.get("toplam_sut_tahminleri_goster", False):
+        return {"aktif": False, "neden": "Şut tahmini kapalı"}
+    if kaynak is None or getattr(kaynak, "empty", True) or any(c not in kaynak.columns for c in ("HS", "AS")):
+        return {"aktif": False, "neden": "HS/AS şut verisi yok"}
+    ev, dep, cutoff = m.get("ev", ""), m.get("dep", ""), m.get("zaman", m.get("Date"))
+    eg = _takim_sut_profili(kaynak, ev, cutoff, genel_limit)
+    dg = _takim_sut_profili(kaynak, dep, cutoff, genel_limit)
+    if eg.get("mac", 0) < 3 or dg.get("mac", 0) < 3:
+        return {"aktif": False, "neden": "İki takım için en az 3 şut verili maç gerekli"}
+    es = _takim_sut_profili(kaynak, ev, cutoff, saha_limit, "home")
+    ds = _takim_sut_profili(kaynak, dep, cutoff, saha_limit, "away")
+    saha_ok = es.get("mac", 0) >= 3 and ds.get("mac", 0) >= 3
+    beklenen_genel = (float(eg.get("total") or 0) + float(dg.get("total") or 0)) / 2.0
+    beklenen = beklenen_genel
+    if saha_ok:
+        beklenen_saha = (float(es.get("total") or 0) + float(ds.get("total") or 0)) / 2.0
+        beklenen = .60 * beklenen_genel + .40 * beklenen_saha
+    # İki takımın son maç toplamlarını birleştir. Aynı H2H satırı iki kez gelebilir;
+    # burada amaç bağımsız örnek saymak değil yakın dönem dağılımını ölçmektir.
+    vals = list(eg.get("totals", [])) + list(dg.get("totals", []))
+    vals = [v for v in vals if math.isfinite(v) and 5 <= v <= 60]
+    if len(vals) < 6:
+        return {"aktif": False, "neden": "Şut örneği yetersiz", "ornek": len(vals)}
+    candidates = []
+    for threshold in range(20, 33):
+        hits = sum(v >= threshold for v in vals)
+        # Beta(2,2) shrink: küçük örnekte %0/%100 aşırılığını azaltır.
+        destek = (hits + 2.0) / (len(vals) + 4.0) * 100.0
+        # Beklenen değer eşiğin altında kalıyorsa yüksek geçmiş frekansı tek başına yeterli olmasın.
+        if destek >= 65.0 and beklenen >= threshold + .5:
+            candidates.append((threshold, destek, hits))
+    if not candidates:
+        return {"aktif": False, "neden": "Güvenilir + şut eşiği bulunamadı", "beklenen": round(beklenen, 1), "ornek": len(vals)}
+    # Kullanıcının istediği gibi kolay 20+ yerine verinin desteklediği en yüksek makul eşik.
+    threshold, destek, hits = max(candidates, key=lambda x: (x[0], x[1]))
+    ev_bek = float(eg.get("own") or 0)
+    dep_bek = float(dg.get("own") or 0)
+    if saha_ok:
+        ev_bek = .60 * ev_bek + .40 * float(es.get("own") or ev_bek)
+        dep_bek = .60 * dep_bek + .40 * float(ds.get("own") or dep_bek)
+    sot_vals = [v for v in (eg.get("total_sot"), dg.get("total_sot")) if v is not None and math.isfinite(float(v))]
+    return {
+        "aktif": True, "label": f"Toplam Şut {threshold}+", "esik": threshold,
+        "guven": round(destek, 1), "beklenen": round(beklenen, 1), "ev_beklenen": round(ev_bek, 1),
+        "dep_beklenen": round(dep_bek, 1), "beklenen_isabetli": round(sum(sot_vals)/len(sot_vals), 1) if sot_vals else None,
+        "ornek": len(vals), "tutan": hits, "saha_aktif": saha_ok,
+    }
+
+
+def toplam_sut_ana_tahmine_uygula(t, gecmis_df, m):
+    """Opsiyon açıksa ve şut adayı mevcut ana tahminden daha güçlü ise ana tahmin yap."""
+    if not st.session_state.get("toplam_sut_tahminleri_goster", False):
+        return t
+    shot = toplam_sut_tahmini(gecmis_df, m)
+    t["toplam_sut"] = shot
+    if not shot.get("aktif"):
+        return t
+    mevcut = float(t.get("ana_p", 0) or 0)
+    # Şut verisi yeterliyse diğer ana marketlerle aynı yarış: daha yüksek destek kazanır.
+    if float(shot.get("guven", 0) or 0) > mevcut:
+        t["oran_modeli_ana_label"] = t.get("ana_label", "")
+        t["oran_modeli_ana_p"] = t.get("ana_p", 0)
+        t["ana_label"] = shot["label"]
+        t["ana_p"] = int(round(float(shot["guven"])))
+        t["ana_odd"] = None
+        t["shot_main_prediction"] = True
+        # Sıralama için güveni koru; bookmaker oranı olmadığı için ROI/value üretilmez.
+        t["score"] = max(float(t.get("score", 0) or 0), float(shot["guven"]))
+        t["playable_score"] = t["score"]
+    return t
+
+
 def takim_modeli_hesapla(gecmis_df, m, genel_limit=10, saha_limit=5):
     """Oranlardan bağımsız futbol takım performans modeli v2.
 
@@ -14219,6 +14382,7 @@ def takim_modeli_hesapla(gecmis_df, m, genel_limit=10, saha_limit=5):
             "ust25": probs["2.5 Üst"], "alt25": probs["2.5 Alt"],
             "ev15": probs["Ev 1.5 Üst"], "dep15": probs["Dep 1.5 Üst"],
             "ana_label": ana, "ana_p": probs[ana], "probs": probs,
+            "toplam_sut": toplam_sut_tahmini(kaynak, m) if st.session_state.get("toplam_sut_tahminleri_goster", False) else {"aktif": False, "neden": "Şut tahmini kapalı"},
         }
     except Exception as exc:
         return {**bos, "neden": f"Takım modeli hesaplanamadı: {exc}"}
@@ -14258,7 +14422,14 @@ def takim_modeli_goster(gecmis_df, m, t):
     with c2: st.metric("Gol", f"Üst %{model['ust25']:.0f} · KG %{model['kg_var']:.0f}")
     with c3: st.metric("Oran modeli uyumu", durum_yazi, delta=(f"%{ana_skor:.1f} destek" if ana_skor is not None else None), delta_color="off")
     st.caption(f"Takım 1.5 Üst: {m.get('ev','')} %{model['ev15']:.0f} · {m.get('dep','')} %{model['dep15']:.0f}. İç/dış saha verisi " + ("dahil." if model.get("saha_aktif") else "yetersiz; genel performans kullanıldı."))
-    st.caption("ℹ️ Takım Modeli bağımsız izleme katmanıdır; oran modeli, güven yüzdesi ve hassasiyet hesabını değiştirmez.")
+    shot = model.get("toplam_sut", {}) or {}
+    if st.session_state.get("toplam_sut_tahminleri_goster", False):
+        if shot.get("aktif"):
+            _sot = f" · Beklenen isabetli {shot['beklenen_isabetli']:.1f}" if shot.get("beklenen_isabetli") is not None else ""
+            st.success(f"🎯 Şut adayı: {shot['label']} · destek %{shot['guven']:.1f} · beklenen {shot['beklenen']:.1f} (Ev {shot['ev_beklenen']:.1f} / Dep {shot['dep_beklenen']:.1f}) · örnek {shot['ornek']}{_sot}")
+        else:
+            st.caption("🎯 Toplam şut: " + str(shot.get("neden", "Bu maçta yeterli şut verisi yok")))
+    st.caption("ℹ️ Takım Modeli oranlardan bağımsız izleme katmanıdır. Toplam şut seçeneği açıksa ve şut adayı daha güçlü ise Ana Tahmin yarışına katılabilir.")
 
 
 def detay_ana_icerik():
@@ -15327,6 +15498,7 @@ else:
                         f'Beklenen gol <b>{float(_tm.get("xg_ev",0)):.2f}-{float(_tm.get("xg_dep",0)):.2f}</b> · '
                         f'MS 1/X/2 %{float(_tm.get("ms1",0)):.0f}/%{float(_tm.get("msx",0)):.0f}/%{float(_tm.get("ms2",0)):.0f} · '
                         f'Üst %{float(_tm.get("ust25",0)):.0f} · KG %{float(_tm.get("kg_var",0)):.0f} · '
+                        + ((lambda _s: f'<b style="color:#fbbf24">{escape(str(_s.get("label")))} %{float(_s.get("guven",0)):.0f}</b> · ' if _s.get("aktif") else '')((_tm.get("toplam_sut", {}) or {}))) +
                         f'<span style="color:{_tm_color};font-weight:800">{escape(_tm_durum_yazi)}</span></div>')
         else:
             _tm_html = '<div style="margin-top:8px;font-size:.69rem;color:#64748b">Takım Modeli: yeterli takım geçmişi yok</div>'
