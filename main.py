@@ -10280,8 +10280,15 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
     ev, dep, cutoff = m.get("ev", ""), m.get("dep", ""), m.get("zaman", m.get("Date"))
     eg = _takim_sut_profili(kaynak, ev, cutoff, genel_limit)
     dg = _takim_sut_profili(kaynak, dep, cutoff, genel_limit)
-    if eg.get("mac", 0) < 3 or dg.get("mac", 0) < 3:
-        return {"aktif": False, "neden": "İki takım için en az 3 şut verili maç gerekli"}
+    ev_sut_mac = int(eg.get("mac", 0) or 0)
+    dep_sut_mac = int(dg.get("mac", 0) or 0)
+    if ev_sut_mac < 3 or dep_sut_mac < 3:
+        return {
+            "aktif": False,
+            "neden": "İki takım için en az 3 şut verili maç gerekli",
+            "ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
+            "gerekli_sut_mac": 3, "sut_kaynak": "Football-Data HS/AS",
+        }
     es = _takim_sut_profili(kaynak, ev, cutoff, saha_limit, "home")
     ds = _takim_sut_profili(kaynak, dep, cutoff, saha_limit, "away")
     saha_ok = es.get("mac", 0) >= 3 and ds.get("mac", 0) >= 3
@@ -10341,7 +10348,9 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
         return {"aktif": False, "neden": "Güvenilir + şut eşiği bulunamadı",
                 "beklenen": round(beklenen_toplam, 1), "ev_beklenen": round(ev_bek, 1),
                 "dep_beklenen": round(dep_bek, 1),
-                "ornek": max(len(toplam_vals), len(ev_vals), len(dep_vals))}
+                "ornek": max(len(toplam_vals), len(ev_vals), len(dep_vals)),
+                "ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
+                "gerekli_sut_mac": 3, "sut_kaynak": "Football-Data HS/AS"}
 
     # Farklı şut marketlerinde salt % desteğin kolay düşük eşiği seçmesini azaltmak için
     # önce destek, eşitlikte kendi marketindeki daha yüksek eşiği kullanıyoruz.
@@ -10354,6 +10363,8 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
         "ev_beklenen": round(ev_bek, 1), "dep_beklenen": round(dep_bek, 1),
         "beklenen_isabetli": round(sum(sot_vals)/len(sot_vals), 1) if sot_vals else None,
         "saha_aktif": saha_ok,
+        "ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
+        "gerekli_sut_mac": 3, "sut_kaynak": "Football-Data HS/AS",
     }
 
 
@@ -15581,8 +15592,17 @@ else:
                 _shot_html = (f'<div style="margin-top:6px;padding:7px 9px;border-radius:9px;background:#17120a;border:1px solid #5b4515;font-size:.70rem;color:#fde68a">'
                               f'<b>🎯 Şut:</b> ' + ' &nbsp;·&nbsp; '.join(_shot_parcalar) + '</div>')
             else:
+                _shot_ev_n = _shot.get("ev_sut_mac")
+                _shot_dep_n = _shot.get("dep_sut_mac")
+                _shot_diag = ""
+                if _shot_ev_n is not None or _shot_dep_n is not None:
+                    _shot_diag = (
+                        f'<br><span style="color:#94a3b8">Şut verisi: Ev <b>{int(_shot_ev_n or 0)}</b> maç · '
+                        f'Dep <b>{int(_shot_dep_n or 0)}</b> maç · Gerekli: her takım ≥{int(_shot.get("gerekli_sut_mac",3) or 3)} maç'
+                        f' · Kaynak: {escape(str(_shot.get("sut_kaynak","Football-Data HS/AS")))}</span>'
+                    )
                 _shot_html = (f'<div style="margin-top:6px;font-size:.69rem;color:#64748b">'
-                              f'🎯 Şut tahmini: {escape(str(_shot.get("neden","yeterli veri yok")))}</div>')
+                              f'🎯 Şut tahmini: {escape(str(_shot.get("neden","yeterli veri yok")))}{_shot_diag}</div>')
 
         kc, bc = st.columns([9, 1.4])
         with kc:
