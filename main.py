@@ -10264,6 +10264,59 @@ def _takim_sut_profili(kaynak, takim, cutoff, limit=10, saha=None):
     }
 
 
+def _oran_tabanli_sut_fallback(m, neden="Şut geçmişi yetersiz"):
+    """Doğrudan şut geçmişi yokken 1-X-2/gol oranlarından kaba bir ÜST-yönlü şut seçimi üretir.
+
+    Bu çıktı tarihsel şut olasılığı değildir; yalnızca şut seçeneği açıkken boş kart
+    bırakmamak için kullanılan oran-tabanlı fallback'tir. Ana tahmini ele geçirmez.
+    """
+    def _f(key):
+        try:
+            v = float((m or {}).get(key))
+            return v if math.isfinite(v) and v > 1.0 else None
+        except Exception:
+            return None
+    def _norm(vals):
+        inv = [(1.0 / v) if v else 0.0 for v in vals]
+        z = sum(inv)
+        return [x / z for x in inv] if z > 0 else [0.0 for _ in inv]
+
+    h, x, a = _f("h"), _f("b"), _f("a")
+    if not (h and x and a):
+        return {"aktif": False, "neden": f"{neden}; oran fallback için 1-X-2 oranı yok",
+                "fallback": True, "sut_kaynak": "Oran tabanlı fallback"}
+    ph, px, pa = _norm([h, x, a])
+
+    ov, un = _f("o25_over"), _f("o25_under")
+    pov = _norm([ov, un])[0] if ov and un else 0.50
+    by, bn = _f("btts_yes"), _f("btts_no")
+    pbtts = _norm([by, bn])[0] if by and bn else 0.50
+    tempo = max(0.0, min(1.0, 0.65 * pov + 0.35 * pbtts))
+
+    # Eşikler bilinçli olarak temkinli tutulur. Bunlar bookmaker'ın şut marketi
+    # değildir; maç sonucu/gol fiyatlarının hücum baskısı sinyalinden türetilir.
+    toplam_esik = int(round(21 + 6 * tempo))          # yaklaşık 21+ .. 27+
+    ev_esik = int(round(8 + 8 * ph + 2 * tempo))     # yaklaşık 9+ .. 17+
+    dep_esik = int(round(8 + 8 * pa + 2 * tempo))
+
+    # Belirgin favori varsa taraf şutunu, dengeli maçta toplam şutu seç.
+    if ph >= 0.52 and ph >= pa + 0.12:
+        label, esik, sinyal = f"Ev Şut {ev_esik}+", ev_esik, ph
+    elif pa >= 0.52 and pa >= ph + 0.12:
+        label, esik, sinyal = f"Dep Şut {dep_esik}+", dep_esik, pa
+    else:
+        label, esik, sinyal = f"Toplam Şut {toplam_esik}+", toplam_esik, tempo
+
+    return {
+        "aktif": True, "label": label, "esik": esik,
+        "fallback": True, "oran_fallback": True,
+        "neden": neden, "sut_kaynak": "1-X-2 + gol oranı fallback",
+        "oran_sinyal": round(float(sinyal) * 100.0, 1),
+        "tempo_sinyal": round(float(tempo) * 100.0, 1),
+        "adaylar": [{"label": label, "esik": esik, "fallback": True}],
+    }
+
+
 def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
     """Opsiyonel ÜST-yönlü şut marketleri üretir.
 
@@ -10276,19 +10329,17 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
     if not st.session_state.get("toplam_sut_tahminleri_goster", False):
         return {"aktif": False, "neden": "Şut tahmini kapalı"}
     if kaynak is None or getattr(kaynak, "empty", True) or any(c not in kaynak.columns for c in ("HS", "AS")):
-        return {"aktif": False, "neden": "HS/AS şut verisi yok"}
+        return _oran_tabanli_sut_fallback(m, "HS/AS şut verisi yok")
     ev, dep, cutoff = m.get("ev", ""), m.get("dep", ""), m.get("zaman", m.get("Date"))
     eg = _takim_sut_profili(kaynak, ev, cutoff, genel_limit)
     dg = _takim_sut_profili(kaynak, dep, cutoff, genel_limit)
     ev_sut_mac = int(eg.get("mac", 0) or 0)
     dep_sut_mac = int(dg.get("mac", 0) or 0)
     if ev_sut_mac < 3 or dep_sut_mac < 3:
-        return {
-            "aktif": False,
-            "neden": "İki takım için en az 3 şut verili maç gerekli",
-            "ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
-            "gerekli_sut_mac": 3, "sut_kaynak": "Football-Data HS/AS",
-        }
+        fb = _oran_tabanli_sut_fallback(m, "İki takım için en az 3 şut verili maç yok")
+        fb.update({"ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
+                   "gerekli_sut_mac": 3})
+        return fb
     es = _takim_sut_profili(kaynak, ev, cutoff, saha_limit, "home")
     ds = _takim_sut_profili(kaynak, dep, cutoff, saha_limit, "away")
     saha_ok = es.get("mac", 0) >= 3 and ds.get("mac", 0) >= 3
@@ -10345,12 +10396,13 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
         if aday:
             adaylar.append(aday)
     if not adaylar:
-        return {"aktif": False, "neden": "Güvenilir + şut eşiği bulunamadı",
-                "beklenen": round(beklenen_toplam, 1), "ev_beklenen": round(ev_bek, 1),
-                "dep_beklenen": round(dep_bek, 1),
-                "ornek": max(len(toplam_vals), len(ev_vals), len(dep_vals)),
-                "ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
-                "gerekli_sut_mac": 3, "sut_kaynak": "Football-Data HS/AS"}
+        fb = _oran_tabanli_sut_fallback(m, "Geçmişte güvenilir + şut eşiği bulunamadı")
+        fb.update({"beklenen": round(beklenen_toplam, 1), "ev_beklenen": round(ev_bek, 1),
+                   "dep_beklenen": round(dep_bek, 1),
+                   "ornek": max(len(toplam_vals), len(ev_vals), len(dep_vals)),
+                   "ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
+                   "gerekli_sut_mac": 3})
+        return fb
 
     # Farklı şut marketlerinde salt % desteğin kolay düşük eşiği seçmesini azaltmak için
     # önce destek, eşitlikte kendi marketindeki daha yüksek eşiği kullanıyoruz.
@@ -10375,6 +10427,10 @@ def toplam_sut_ana_tahmine_uygula(t, gecmis_df, m):
     shot = toplam_sut_tahmini(gecmis_df, m)
     t["toplam_sut"] = shot
     if not shot.get("aktif"):
+        return t
+    # Oran fallback yalnızca ayrı şut satırında gösterilir; kalibre şut desteği olmadığı
+    # için Ana Tahmin ile yüzde yarıştırılmaz.
+    if shot.get("oran_fallback"):
         return t
     mevcut = float(t.get("ana_p", 0) or 0)
     # Şut verisi yeterliyse diğer ana marketlerle aynı yarış: daha yüksek destek kazanır.
@@ -15580,17 +15636,26 @@ else:
         if st.session_state.get("toplam_sut_tahminleri_goster", False):
             _shot = (t.get("toplam_sut", {}) or {})
             if _shot.get("aktif"):
-                _shot_adaylar = list(_shot.get("adaylar", []) or [])
-                _shot_parcalar = []
-                for _sa in _shot_adaylar:
-                    _shot_parcalar.append(
-                        f'<b style="color:#fbbf24">{escape(str(_sa.get("label","—")))}</b> '
-                        f'%{float(_sa.get("guven",0)):.0f} · beklenen {float(_sa.get("beklenen",0)):.1f}'
-                    )
-                if not _shot_parcalar:
-                    _shot_parcalar = [f'<b style="color:#fbbf24">{escape(str(_shot.get("label","—")))}</b> %{float(_shot.get("guven",0)):.0f}']
-                _shot_html = (f'<div style="margin-top:6px;padding:7px 9px;border-radius:9px;background:#17120a;border:1px solid #5b4515;font-size:.70rem;color:#fde68a">'
-                              f'<b>🎯 Şut:</b> ' + ' &nbsp;·&nbsp; '.join(_shot_parcalar) + '</div>')
+                if _shot.get("oran_fallback"):
+                    _shot_label = escape(str(_shot.get("label", "—")))
+                    _shot_src = escape(str(_shot.get("sut_kaynak", "Oran tabanlı fallback")))
+                    _shot_reason = escape(str(_shot.get("neden", "Şut geçmişi yetersiz")))
+                    _shot_html = (f'<div style="margin-top:6px;padding:7px 9px;border-radius:9px;background:#17120a;border:1px solid #5b4515;font-size:.70rem;color:#fde68a">'
+                                  f'<b>🎯 Şut:</b> <b style="color:#fbbf24">{_shot_label}</b>'
+                                  f'<br><span style="color:#94a3b8">Zorunlu fallback · {_shot_src} · {_shot_reason}. ' 
+                                  f'Bu yüzde/güven tahmini değildir.</span></div>')
+                else:
+                    _shot_adaylar = list(_shot.get("adaylar", []) or [])
+                    _shot_parcalar = []
+                    for _sa in _shot_adaylar:
+                        _shot_parcalar.append(
+                            f'<b style="color:#fbbf24">{escape(str(_sa.get("label","—")))}</b> '
+                            f'%{float(_sa.get("guven",0)):.0f} · beklenen {float(_sa.get("beklenen",0)):.1f}'
+                        )
+                    if not _shot_parcalar:
+                        _shot_parcalar = [f'<b style="color:#fbbf24">{escape(str(_shot.get("label","—")))}</b> %{float(_shot.get("guven",0)):.0f}']
+                    _shot_html = (f'<div style="margin-top:6px;padding:7px 9px;border-radius:9px;background:#17120a;border:1px solid #5b4515;font-size:.70rem;color:#fde68a">'
+                                  f'<b>🎯 Şut:</b> ' + ' &nbsp;·&nbsp; '.join(_shot_parcalar) + '</div>')
             else:
                 _shot_ev_n = _shot.get("ev_sut_mac")
                 _shot_dep_n = _shot.get("dep_sut_mac")
