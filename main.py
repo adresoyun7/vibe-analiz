@@ -7992,13 +7992,27 @@ def analiz_tahminlerini_kaydet(final):
             # FIX32: Her analiz anını sakla. Böylece yalnız ilk/son değil,
             # maçın tüm tahmin yolculuğu ve güven değişimi ölçülebilir.
             analiz_gecmisi = list(eski.get("analiz_gecmisi", []) or [])
-            analiz_gecmisi.append({
+            _yeni_hassasiyet = round(float(t.get("kullanilan_tolerans", 0) or 0), 4)
+            # FIX44: Aynı maç aynı hassasiyetle tekrar analiz edilirse bunu yeni bir
+            # bağımsız analiz sayma. Son kayıt aynı hassasiyetse yalnızca snapshot'ı
+            # güncelle; böylece F5/yeniden analiz "N analizdir aynı" sayısını şişirmez.
+            _son_hassasiyet = None
+            if analiz_gecmisi:
+                try:
+                    _son_hassasiyet = round(float(analiz_gecmisi[-1].get("hassasiyet", 0) or 0), 4)
+                except (TypeError, ValueError):
+                    _son_hassasiyet = None
+            _yeni_analiz = {
                 "tahmin": label,
                 "guven": guncel_guven,
                 "oran": guncel_oran,
                 "kaydedildi": simdi_iso,
-                "hassasiyet": float(t.get("kullanilan_tolerans", 0) or 0),
-            })
+                "hassasiyet": _yeni_hassasiyet,
+            }
+            if analiz_gecmisi and _son_hassasiyet == _yeni_hassasiyet:
+                analiz_gecmisi[-1] = _yeni_analiz
+            else:
+                analiz_gecmisi.append(_yeni_analiz)
             kayit["analiz_gecmisi"] = analiz_gecmisi[-50:]
             kayit["analiz_sayisi"] = len(kayit["analiz_gecmisi"])
             kayit["yon_degisim_sayisi"] = sum(
@@ -15545,10 +15559,30 @@ else:
                         f'Beklenen gol <b>{float(_tm.get("xg_ev",0)):.2f}-{float(_tm.get("xg_dep",0)):.2f}</b> · '
                         f'MS 1/X/2 %{float(_tm.get("ms1",0)):.0f}/%{float(_tm.get("msx",0)):.0f}/%{float(_tm.get("ms2",0)):.0f} · '
                         f'Üst %{float(_tm.get("ust25",0)):.0f} · KG %{float(_tm.get("kg_var",0)):.0f} · '
-                        + ((lambda _s: f'<b style="color:#fbbf24">{escape(str(_s.get("label")))} %{float(_s.get("guven",0)):.0f}</b> · ' if _s.get("aktif") else '')((_tm.get("toplam_sut", {}) or {}))) +
                         f'<span style="color:{_tm_color};font-weight:800">{escape(_tm_durum_yazi)}</span></div>')
         else:
             _tm_html = '<div style="margin-top:8px;font-size:.69rem;color:#64748b">Takım Modeli: yeterli takım geçmişi yok</div>'
+
+        # FIX44: Şut sonucu takım modeli sözlüğünden değil, ana analizde hesaplanan
+        # t["toplam_sut"] alanından okunur. Tik açıksa ana tahmin olmasa bile kartta görünür.
+        _shot_html = ''
+        if st.session_state.get("toplam_sut_tahminleri_goster", False):
+            _shot = (t.get("toplam_sut", {}) or {})
+            if _shot.get("aktif"):
+                _shot_adaylar = list(_shot.get("adaylar", []) or [])
+                _shot_parcalar = []
+                for _sa in _shot_adaylar:
+                    _shot_parcalar.append(
+                        f'<b style="color:#fbbf24">{escape(str(_sa.get("label","—")))}</b> '
+                        f'%{float(_sa.get("guven",0)):.0f} · beklenen {float(_sa.get("beklenen",0)):.1f}'
+                    )
+                if not _shot_parcalar:
+                    _shot_parcalar = [f'<b style="color:#fbbf24">{escape(str(_shot.get("label","—")))}</b> %{float(_shot.get("guven",0)):.0f}']
+                _shot_html = (f'<div style="margin-top:6px;padding:7px 9px;border-radius:9px;background:#17120a;border:1px solid #5b4515;font-size:.70rem;color:#fde68a">'
+                              f'<b>🎯 Şut:</b> ' + ' &nbsp;·&nbsp; '.join(_shot_parcalar) + '</div>')
+            else:
+                _shot_html = (f'<div style="margin-top:6px;font-size:.69rem;color:#64748b">'
+                              f'🎯 Şut tahmini: {escape(str(_shot.get("neden","yeterli veri yok")))}</div>')
 
         kc, bc = st.columns([9, 1.4])
         with kc:
@@ -15568,6 +15602,7 @@ else:
                 {belirsiz_html}
                 {ai_comment_html}
                 {_tm_html}
+              {_shot_html}
               </div>
 
               <div>
