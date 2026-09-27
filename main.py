@@ -8432,13 +8432,15 @@ def tahmin_tuttu_mu(label, row):
             return None
         translate = {"H": "1", "D": "X", "A": "2"}
         return f'{translate.get(row["HTR"], "?")}/{translate.get(row["FTR"], "?")}' == label[6:]
-    shot_match = re.fullmatch(r"Toplam Şut\s+(\d+)\+", label, flags=re.IGNORECASE)
+    shot_match = re.fullmatch(r"(Toplam|Ev|Dep) Şut\s+(\d+)\+", label, flags=re.IGNORECASE)
     if shot_match:
         hs, ass = row.get("HS"), row.get("AS")
         if hs is None or ass is None or pd.isna(hs) or pd.isna(ass):
             return None
         try:
-            return float(hs) + float(ass) >= int(shot_match.group(1))
+            yon, esik = shot_match.group(1).lower(), int(shot_match.group(2))
+            deger = float(hs) + float(ass) if yon == "toplam" else float(hs) if yon == "ev" else float(ass)
+            return deger >= esik
         except (TypeError, ValueError):
             return None
     if label in ("İY KG Var", "İY KG Yok"):
@@ -10243,15 +10245,19 @@ def _takim_sut_profili(kaynak, takim, cutoff, limit=10, saha=None):
         "own_sot": wavg(own_sot) if own_sot is not None else None,
         "total_sot": wavg(total_sot) if total_sot is not None else None,
         "totals": [float(v) for v in pd.to_numeric(total, errors="coerce").dropna().tolist()],
+        "owns": [float(v) for v in pd.to_numeric(own, errors="coerce").dropna().tolist()],
+        "opps": [float(v) for v in pd.to_numeric(opp, errors="coerce").dropna().tolist()],
     }
 
 
 def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
-    """Yalnız ÜST yönünde, 'Toplam Şut 26+' biçiminde opsiyonel aday üretir.
+    """Opsiyonel ÜST-yönlü şut marketleri üretir.
 
-    Eşik 20+..32+ arasından seçilir. En az 6 kullanılabilir yakın dönem maç ve
-    en az %65 shrink edilmiş geçmiş desteği gerekir. Bu güven kalibre edilmiş
-    bahis kazanma olasılığı değildir; geçmiş frekans desteğidir.
+    Toplam Şut N+, Ev Şut N+ ve Dep Şut N+ adaylarını ayrı ayrı değerlendirir;
+    Alt tahmini üretmez. Her market en az 6 yakın dönem gözlem ve en az %65
+    Beta(2,2) shrink edilmiş destek ister. Dönen ana ``label`` üç şut adayının
+    en güçlü olanıdır; ``adaylar`` alanı diğer uygun şut marketlerini de taşır.
+    Yüzdeler kalibre edilmiş bahis olasılığı değil, geçmiş frekans desteğidir.
     """
     if not st.session_state.get("toplam_sut_tahminleri_goster", False):
         return {"aktif": False, "neden": "Şut tahmini kapalı"}
@@ -10265,40 +10271,75 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
     es = _takim_sut_profili(kaynak, ev, cutoff, saha_limit, "home")
     ds = _takim_sut_profili(kaynak, dep, cutoff, saha_limit, "away")
     saha_ok = es.get("mac", 0) >= 3 and ds.get("mac", 0) >= 3
+
+    # Maç toplam şutu: iki takımın oynadığı maçlardaki toplam şut temposu.
     beklenen_genel = (float(eg.get("total") or 0) + float(dg.get("total") or 0)) / 2.0
-    beklenen = beklenen_genel
+    beklenen_toplam = beklenen_genel
     if saha_ok:
         beklenen_saha = (float(es.get("total") or 0) + float(ds.get("total") or 0)) / 2.0
-        beklenen = .60 * beklenen_genel + .40 * beklenen_saha
-    # İki takımın son maç toplamlarını birleştir. Aynı H2H satırı iki kez gelebilir;
-    # burada amaç bağımsız örnek saymak değil yakın dönem dağılımını ölçmektir.
-    vals = list(eg.get("totals", [])) + list(dg.get("totals", []))
-    vals = [v for v in vals if math.isfinite(v) and 5 <= v <= 60]
-    if len(vals) < 6:
-        return {"aktif": False, "neden": "Şut örneği yetersiz", "ornek": len(vals)}
-    candidates = []
-    for threshold in range(20, 33):
-        hits = sum(v >= threshold for v in vals)
-        # Beta(2,2) shrink: küçük örnekte %0/%100 aşırılığını azaltır.
-        destek = (hits + 2.0) / (len(vals) + 4.0) * 100.0
-        # Beklenen değer eşiğin altında kalıyorsa yüksek geçmiş frekansı tek başına yeterli olmasın.
-        if destek >= 65.0 and beklenen >= threshold + .5:
-            candidates.append((threshold, destek, hits))
-    if not candidates:
-        return {"aktif": False, "neden": "Güvenilir + şut eşiği bulunamadı", "beklenen": round(beklenen, 1), "ornek": len(vals)}
-    # Kullanıcının istediği gibi kolay 20+ yerine verinin desteklediği en yüksek makul eşik.
-    threshold, destek, hits = max(candidates, key=lambda x: (x[0], x[1]))
-    ev_bek = float(eg.get("own") or 0)
-    dep_bek = float(dg.get("own") or 0)
+        beklenen_toplam = .60 * beklenen_genel + .40 * beklenen_saha
+
+    # Taraf şutu: takımın ürettiği şut ile rakibin verdiği şutu birlikte kullan.
+    ev_genel = (float(eg.get("own") or 0) + float(dg.get("opp") or 0)) / 2.0
+    dep_genel = (float(dg.get("own") or 0) + float(eg.get("opp") or 0)) / 2.0
+    ev_bek, dep_bek = ev_genel, dep_genel
     if saha_ok:
-        ev_bek = .60 * ev_bek + .40 * float(es.get("own") or ev_bek)
-        dep_bek = .60 * dep_bek + .40 * float(ds.get("own") or dep_bek)
-    sot_vals = [v for v in (eg.get("total_sot"), dg.get("total_sot")) if v is not None and math.isfinite(float(v))]
+        ev_saha = (float(es.get("own") or ev_genel) + float(ds.get("opp") or ev_genel)) / 2.0
+        dep_saha = (float(ds.get("own") or dep_genel) + float(es.get("opp") or dep_genel)) / 2.0
+        ev_bek = .60 * ev_genel + .40 * ev_saha
+        dep_bek = .60 * dep_genel + .40 * dep_saha
+
+    toplam_vals = list(eg.get("totals", [])) + list(dg.get("totals", []))
+    toplam_vals = [v for v in toplam_vals if math.isfinite(v) and 5 <= v <= 60]
+    # Ev tarafı için ev takımının attığı + deplasman takımının rakibe verdiği şutlar;
+    # deplasman tarafı için simetriği. Bu, yalnız takım formuna göre tahmin etmekten
+    # daha dengeli bir hücum/rakip-savunma profili verir.
+    ev_vals = list(eg.get("owns", [])) + list(dg.get("opps", []))
+    dep_vals = list(dg.get("owns", [])) + list(eg.get("opps", []))
+    ev_vals = [v for v in ev_vals if math.isfinite(v) and 0 <= v <= 40]
+    dep_vals = [v for v in dep_vals if math.isfinite(v) and 0 <= v <= 40]
+
+    def en_iyi_aday(prefix, vals, beklenen, alt_esik, ust_esik):
+        if len(vals) < 6:
+            return None
+        uygun = []
+        for threshold in range(int(alt_esik), int(ust_esik) + 1):
+            hits = sum(v >= threshold for v in vals)
+            destek = (hits + 2.0) / (len(vals) + 4.0) * 100.0
+            if destek >= 65.0 and beklenen >= threshold + .5:
+                uygun.append((threshold, destek, hits))
+        if not uygun:
+            return None
+        threshold, destek, hits = max(uygun, key=lambda x: (x[0], x[1]))
+        return {"label": f"{prefix} {threshold}+", "esik": threshold,
+                "guven": round(destek, 1), "beklenen": round(beklenen, 1),
+                "ornek": len(vals), "tutan": hits}
+
+    adaylar = []
+    for aday in (
+        en_iyi_aday("Toplam Şut", toplam_vals, beklenen_toplam, 20, 32),
+        en_iyi_aday("Ev Şut", ev_vals, ev_bek, 7, 20),
+        en_iyi_aday("Dep Şut", dep_vals, dep_bek, 7, 20),
+    ):
+        if aday:
+            adaylar.append(aday)
+    if not adaylar:
+        return {"aktif": False, "neden": "Güvenilir + şut eşiği bulunamadı",
+                "beklenen": round(beklenen_toplam, 1), "ev_beklenen": round(ev_bek, 1),
+                "dep_beklenen": round(dep_bek, 1),
+                "ornek": max(len(toplam_vals), len(ev_vals), len(dep_vals))}
+
+    # Farklı şut marketlerinde salt % desteğin kolay düşük eşiği seçmesini azaltmak için
+    # önce destek, eşitlikte kendi marketindeki daha yüksek eşiği kullanıyoruz.
+    ana = max(adaylar, key=lambda x: (float(x["guven"]), int(x["esik"])))
+    sot_vals = [v for v in (eg.get("total_sot"), dg.get("total_sot"))
+                if v is not None and math.isfinite(float(v))]
     return {
-        "aktif": True, "label": f"Toplam Şut {threshold}+", "esik": threshold,
-        "guven": round(destek, 1), "beklenen": round(beklenen, 1), "ev_beklenen": round(ev_bek, 1),
-        "dep_beklenen": round(dep_bek, 1), "beklenen_isabetli": round(sum(sot_vals)/len(sot_vals), 1) if sot_vals else None,
-        "ornek": len(vals), "tutan": hits, "saha_aktif": saha_ok,
+        "aktif": True, **ana, "adaylar": adaylar,
+        "beklenen_toplam": round(beklenen_toplam, 1),
+        "ev_beklenen": round(ev_bek, 1), "dep_beklenen": round(dep_bek, 1),
+        "beklenen_isabetli": round(sum(sot_vals)/len(sot_vals), 1) if sot_vals else None,
+        "saha_aktif": saha_ok,
     }
 
 
@@ -14430,6 +14471,9 @@ def takim_modeli_goster(gecmis_df, m, t):
         if shot.get("aktif"):
             _sot = f" · Beklenen isabetli {shot['beklenen_isabetli']:.1f}" if shot.get("beklenen_isabetli") is not None else ""
             st.success(f"🎯 Şut adayı: {shot['label']} · destek %{shot['guven']:.1f} · beklenen {shot['beklenen']:.1f} (Ev {shot['ev_beklenen']:.1f} / Dep {shot['dep_beklenen']:.1f}) · örnek {shot['ornek']}{_sot}")
+            _diger_sut = [f"{x['label']} %{x['guven']:.0f}" for x in shot.get('adaylar', []) if x.get('label') != shot.get('label')]
+            if _diger_sut:
+                st.caption("Diğer şut adayları: " + " · ".join(_diger_sut))
         else:
             st.caption("🎯 Toplam şut: " + str(shot.get("neden", "Bu maçta yeterli şut verisi yok")))
     st.caption("ℹ️ Takım Modeli oranlardan bağımsız izleme katmanıdır. Toplam şut seçeneği açıksa ve şut adayı daha güçlü ise Ana Tahmin yarışına katılabilir.")
