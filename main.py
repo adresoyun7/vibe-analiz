@@ -10264,18 +10264,42 @@ def _takim_sut_profili(kaynak, takim, cutoff, limit=10, saha=None):
     }
 
 
-def _oran_tabanli_sut_fallback(m, neden="Şut geçmişi yetersiz"):
-    """Doğrudan şut geçmişi yokken 1-X-2/gol oranlarından kaba bir ÜST-yönlü şut seçimi üretir.
+def _sut_barem_key(m, tur):
+    """Maç bazlı şut baremini session_state'te sabit bir anahtarla tut."""
+    zaman = m.get("zaman", m.get("Date", ""))
+    try:
+        ztxt = pd.to_datetime(zaman).strftime("%Y%m%d%H%M")
+    except Exception:
+        ztxt = str(zaman)[:16]
+    ham = f"{ztxt}|{m.get('ev','')}|{m.get('dep','')}|{tur}"
+    import hashlib
+    return "sut_barem_" + hashlib.md5(ham.encode("utf-8")).hexdigest()[:14]
 
-    Bu çıktı tarihsel şut olasılığı değildir; yalnızca şut seçeneği açıkken boş kart
-    bırakmamak için kullanılan oran-tabanlı fallback'tir. Ana tahmini ele geçirmez.
-    """
-    def _f(key):
+
+def _sut_baremleri(m):
+    """0 = otomatik; >0 = bahis sitesinde o maç için sunulan minimum çizgi."""
+    def _al(tur):
         try:
-            v = float((m or {}).get(key))
+            return int(st.session_state.get(_sut_barem_key(m, tur), 0) or 0)
+        except Exception:
+            return 0
+    return {"toplam": _al("toplam"), "ev": _al("ev"), "dep": _al("dep")}
+
+
+def _oran_tabanli_sut_fallback(m, neden="Şut geçmişi yetersiz"):
+    """HS/AS yoksa oran sinyalinden zorunlu şut adayı üretir.
+
+    Bu model şut olasılığı/güveni üretmez. 1-X-2 ile gol marketlerinden yalnızca
+    hücum/tempo sinyali türetir. Maç bazlı kullanıcı baremleri varsa aday o çizgi
+    üzerinden değerlendirilir; çizgi otomatik olarak 'güvenli' kabul edilmez.
+    """
+    def _f(k):
+        try:
+            v = float(m.get(k))
             return v if math.isfinite(v) and v > 1.0 else None
         except Exception:
             return None
+
     def _norm(vals):
         inv = [(1.0 / v) if v else 0.0 for v in vals]
         z = sum(inv)
@@ -10284,7 +10308,8 @@ def _oran_tabanli_sut_fallback(m, neden="Şut geçmişi yetersiz"):
     h, x, a = _f("h"), _f("b"), _f("a")
     if not (h and x and a):
         return {"aktif": False, "neden": f"{neden}; oran fallback için 1-X-2 oranı yok",
-                "fallback": True, "sut_kaynak": "Oran tabanlı fallback"}
+                "fallback": True, "oran_fallback": True,
+                "sut_kaynak": "Oran tabanlı fallback", "adaylar": []}
     ph, px, pa = _norm([h, x, a])
 
     ov, un = _f("o25_over"), _f("o25_under")
@@ -10293,29 +10318,31 @@ def _oran_tabanli_sut_fallback(m, neden="Şut geçmişi yetersiz"):
     pbtts = _norm([by, bn])[0] if by and bn else 0.50
     tempo = max(0.0, min(1.0, 0.65 * pov + 0.35 * pbtts))
 
-    # Eşikler bilinçli olarak temkinli tutulur. Bunlar bookmaker'ın şut marketi
-    # değildir; maç sonucu/gol fiyatlarının hücum baskısı sinyalinden türetilir.
-    toplam_esik = int(round(21 + 6 * tempo))          # yaklaşık 21+ .. 27+
-    ev_esik = int(round(8 + 8 * ph + 2 * tempo))     # yaklaşık 9+ .. 17+
-    dep_esik = int(round(8 + 8 * pa + 2 * tempo))
+    otomatik = {
+        "toplam": int(round(21 + 6 * tempo)),
+        "ev": int(round(8 + 8 * ph + 2 * tempo)),
+        "dep": int(round(8 + 8 * pa + 2 * tempo)),
+    }
+    barem = _sut_baremleri(m)
+    esik = {k: (barem[k] if barem[k] > 0 else otomatik[k]) for k in otomatik}
 
-    # Belirgin favori varsa taraf şutunu, dengeli maçta toplam şutu seç.
-    if ph >= 0.52 and ph >= pa + 0.12:
-        label, esik, sinyal = f"Ev Şut {ev_esik}+", ev_esik, ph
-    elif pa >= 0.52 and pa >= ph + 0.12:
-        label, esik, sinyal = f"Dep Şut {dep_esik}+", dep_esik, pa
-    else:
-        label, esik, sinyal = f"Toplam Şut {toplam_esik}+", toplam_esik, tempo
-
+    # Üç market de adaydır. 'sinyal' yalnız seçim sıralamasıdır, güven yüzdesi değildir.
+    adaylar = [
+        {"label": f"Toplam Şut {esik['toplam']}+", "esik": esik["toplam"],
+         "tur": "toplam", "sinyal": round(tempo * 100, 1), "manuel_barem": barem["toplam"] > 0},
+        {"label": f"Ev Şut {esik['ev']}+", "esik": esik["ev"],
+         "tur": "ev", "sinyal": round((0.75 * ph + 0.25 * tempo) * 100, 1), "manuel_barem": barem["ev"] > 0},
+        {"label": f"Dep Şut {esik['dep']}+", "esik": esik["dep"],
+         "tur": "dep", "sinyal": round((0.75 * pa + 0.25 * tempo) * 100, 1), "manuel_barem": barem["dep"] > 0},
+    ]
+    ana = max(adaylar, key=lambda q: float(q.get("sinyal", 0)))
     return {
-        "aktif": True, "label": label, "esik": esik,
+        "aktif": True, "label": ana["label"], "esik": ana["esik"],
         "fallback": True, "oran_fallback": True,
         "neden": neden, "sut_kaynak": "1-X-2 + gol oranı fallback",
-        "oran_sinyal": round(float(sinyal) * 100.0, 1),
-        "tempo_sinyal": round(float(tempo) * 100.0, 1),
-        "adaylar": [{"label": label, "esik": esik, "fallback": True}],
+        "oran_sinyal": ana["sinyal"], "tempo_sinyal": round(tempo * 100.0, 1),
+        "adaylar": adaylar, "baremler": barem,
     }
-
 
 def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
     """Opsiyonel ÜST-yönlü şut marketleri üretir.
@@ -10387,11 +10414,12 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
                 "guven": round(destek, 1), "beklenen": round(beklenen, 1),
                 "ornek": len(vals), "tutan": hits}
 
+    barem = _sut_baremleri(m)
     adaylar = []
     for aday in (
-        en_iyi_aday("Toplam Şut", toplam_vals, beklenen_toplam, 20, 32),
-        en_iyi_aday("Ev Şut", ev_vals, ev_bek, 7, 20),
-        en_iyi_aday("Dep Şut", dep_vals, dep_bek, 7, 20),
+        en_iyi_aday("Toplam Şut", toplam_vals, beklenen_toplam, max(20, barem["toplam"] or 20), max(32, barem["toplam"] or 0)),
+        en_iyi_aday("Ev Şut", ev_vals, ev_bek, max(7, barem["ev"] or 7), max(20, barem["ev"] or 0)),
+        en_iyi_aday("Dep Şut", dep_vals, dep_bek, max(7, barem["dep"] or 7), max(20, barem["dep"] or 0)),
     ):
         if aday:
             adaylar.append(aday)
@@ -15653,10 +15681,17 @@ else:
                     _shot_label = escape(str(_shot.get("label", "—")))
                     _shot_src = escape(str(_shot.get("sut_kaynak", "Oran tabanlı fallback")))
                     _shot_reason = escape(str(_shot.get("neden", "Şut geçmişi yetersiz")))
+                    _fb_adaylar = list(_shot.get("adaylar", []) or [])
+                    _fb_diger = []
+                    for _fa in _fb_adaylar:
+                        if str(_fa.get("label")) != str(_shot.get("label")):
+                            _fb_diger.append(escape(str(_fa.get("label", "—"))))
+                    _fb_diger_html = (f'<br><span style="color:#cbd5e1">Diğer adaylar: {" · ".join(_fb_diger)}</span>') if _fb_diger else ''
                     _shot_html = (f'<div style="margin-top:6px;padding:7px 9px;border-radius:9px;background:#17120a;border:1px solid #5b4515;font-size:.70rem;color:#fde68a">'
                                   f'<b>🎯 Şut:</b> <b style="color:#fbbf24">{_shot_label}</b>'
-                                  f'<br><span style="color:#94a3b8">Zorunlu fallback · {_shot_src} · {_shot_reason}. ' 
-                                  f'Bu yüzde/güven tahmini değildir.</span></div>')
+                                  f'{_fb_diger_html}'
+                                  f'<br><span style="color:#94a3b8">Zorunlu fallback · {_shot_src} · {_shot_reason}. '
+                                  f'Seçim üç şut marketinin oran sinyali karşılaştırmasıdır; yüzde/güven tahmini değildir.</span></div>')
                 else:
                     _shot_adaylar = list(_shot.get("adaylar", []) or [])
                     _shot_parcalar = []
@@ -15743,6 +15778,20 @@ else:
                 line.strip() for line in textwrap.dedent(card_html).splitlines() if line.strip()
             )
             st.markdown(_card_html_render, unsafe_allow_html=True)
+            if st.session_state.get("toplam_sut_tahminleri_goster", False):
+                with st.expander("🎯 Bu maçın şut baremleri", expanded=False):
+                    st.caption("Bahis sitesinde sunulan minimum çizgiyi yaz. 0 = YapAiKupon otomatik eşik. Her maç ayrı saklanır.")
+                    _sb1, _sb2, _sb3 = st.columns(3)
+                    with _sb1:
+                        st.number_input("Toplam Şut +", min_value=0, max_value=45, step=1,
+                                        key=_sut_barem_key(m, "toplam"), help="Örn. 24 = Toplam Şut 24+")
+                    with _sb2:
+                        st.number_input("Ev Şut +", min_value=0, max_value=35, step=1,
+                                        key=_sut_barem_key(m, "ev"), help="Örn. 16 = Ev Şut 16+")
+                    with _sb3:
+                        st.number_input("Dep Şut +", min_value=0, max_value=35, step=1,
+                                        key=_sut_barem_key(m, "dep"), help="Örn. 12 = Dep Şut 12+")
+                    st.caption("Girilen barem, o marketi otomatik olarak güvenli yapmaz. HS/AS varsa geçmiş destek yeniden ölçülür; yoksa yalnız oran-fallback aday karşılaştırmasında kullanılır.")
             # Alt/Üst ve KG oranları statik gösterilir; kart çevirme kapalıdır.
         with bc:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
@@ -16498,3 +16547,4 @@ else:
             st.rerun()
 
 legal_footer()
+
