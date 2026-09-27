@@ -15635,6 +15635,19 @@ else:
         _shot_html = ''
         if st.session_state.get("toplam_sut_tahminleri_goster", False):
             _shot = (t.get("toplam_sut", {}) or {})
+            # FIX47: Önceki analiz kaydında yalnız tanı bilgisi kalmışsa kart aşamasında
+            # mevcut maç oranlarıyla fallback'i yeniden üret. Böylece "Ev 0 / Dep 0"
+            # tanısı tek başına görünmek yerine gerçek zorunlu şut etiketi gösterilir.
+            if not _shot.get("aktif"):
+                _shot_fb = _oran_tabanli_sut_fallback(
+                    m, str(_shot.get("neden", "Şut geçmişi yetersiz"))
+                )
+                if _shot_fb.get("aktif"):
+                    for _k in ("ev_sut_mac", "dep_sut_mac", "gerekli_sut_mac"):
+                        if _k in _shot:
+                            _shot_fb[_k] = _shot.get(_k)
+                    _shot = _shot_fb
+                    t["toplam_sut"] = _shot
             if _shot.get("aktif"):
                 if _shot.get("oran_fallback"):
                     _shot_label = escape(str(_shot.get("label", "—")))
