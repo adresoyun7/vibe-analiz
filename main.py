@@ -8906,6 +8906,19 @@ def uluslar_ligi_piyasa_tahmini(m):
               key=lambda x: x["guven"], default=None)
 
     p = int(round(ana["guven"]))
+
+    # FIX52: Nations League korumalı yol da normal hesapla() ile aynı temel
+    # sonuç şemasını döndürür. Detay penceresi ms_mod, güven rozeti, tolerans
+    # rehberi ve diğer market alanlarını doğrudan okuduğu için eksik anahtar
+    # bırakmak KeyError üretiyordu. Eksik bookmaker marketleri tahmin etmiyoruz;
+    # yalnız UI uyumluluğu için nötr/0 bilgi alanları veriyoruz.
+    ms_probs = ms or [0.0, 0.0, 0.0]
+    total_probs = totals or [0.0, 0.0]
+    btts_probs = btts or [0.0, 0.0]
+    ms_idx = max(range(3), key=lambda i: ms_probs[i]) if ms else 1
+    ms_mod = ("H", "D", "A")[ms_idx]
+    ms_side = ("MS 1", "Beraberlik", "MS 2")[ms_idx]
+    gc, gb_cls, gb_lbl = guven_renk(p)
     t = {
         "ana_label": ana["label"], "ana_p": p, "ana_odd": ana.get("oran"),
         "ana_raw_p": p, "alt_label": alt["label"] if alt else "",
@@ -8916,18 +8929,46 @@ def uluslar_ligi_piyasa_tahmini(m):
         "stability_text": "", "stability_tols": [], "stability_early_tols": [],
         "stability_late_tols": [], "stability_early_text": "", "stability_late_text": "",
         "combo_var": False, "combo_label": "", "combo_p": 0, "combo_level": "",
-        "eg": 1, "dg": 1, "belirsiz": True, "ayni_lig_ornek": 0,
+        "combo_raw_p": 0, "combo_hit": 0, "scenario_label": ana["label"],
+        "canli_label": "—", "canli_p": 0, "canli_strateji": "Uluslar Ligi korumalı mod",
+        "eg": 1, "dg": 1, "belirsiz": True, "ms_belirsiz": True, "ayni_lig_ornek": 0,
+        "ms_mod": ms_mod, "ms_side": ms_side,
+        "ms_p": int(round(ms_probs[ms_idx])) if ms else 0,
+        "ms1_p": int(round(ms_probs[0])), "msx_p": int(round(ms_probs[1])), "ms2_p": int(round(ms_probs[2])),
+        "ms25_p": int(round(total_probs[0])), "ms25a_p": int(round(total_probs[1])),
+        "ms15_p": 0, "ev15_p": 0, "dep15_p": 0, "ms35_p": 0,
+        "kg_var_p": int(round(btts_probs[0])), "kg_yok_p": int(round(btts_probs[1])),
+        "kg_label": "KG Var" if btts and btts_probs[0] >= btts_probs[1] else "KG Yok" if btts else "",
+        "kg_p": int(round(max(btts_probs))) if btts else 0,
+        "iy05_p": 0, "iy05a_p": 0, "iy15_p": 0, "iykg_var_p": 0, "iykg_yok_p": 0,
+        "iy1_p": 0, "iyx_p": 0, "iy2_p": 0, "htft_mod": "—", "htft_p": 0, "flip_p": 0.0,
+        "risk_label": "Piyasa modu", "risk_cls": "",
+        "guven_renk": gc, "guven_badge_cls": gb_cls, "guven_badge_lbl": gb_lbl,
+        "ornek_durum": "Nations League piyasa modu", "ornek_renk": "#94a3b8",
+        "onerilen_tolerans": "Uygulanmıyor", "onerilen_min_mac": 0,
+        "tolerans_yorumu": "Uluslar Ligi'nde kulüp geçmişiyle oran-benzerliği taraması kullanılmıyor.",
+        "tolerans_tavsiyesi": "Gerçek 1-X-2 / 2.5 / BTTS marketleri kullanılıyor.",
+        "kullanilan_tolerans": 0.0, "guven_carpani": 1.0,
+        "form_aktif": False, "form_status": "", "form_text": "", "form_factor": 1.0,
+        "form_ev_puan_orani": None, "form_dep_puan_orani": None, "form_farki": 0.0,
+        "odds_basis": "Uluslar Ligi · mevcut bookmaker marketi",
+        "goal_matching": "Kulüp geçmişiyle gol eşleştirmesi kapalı",
+        "effective_ms_samples": 0.0, "effective_goal_samples": 0.0, "effective_ht_samples": 0.0,
+        "odds_source": "current_market", "odds_cross_bookmaker": False,
         "match_type": "Uluslar Ligi · piyasa korumalı",
         "goal_profile": "Kulüp geçmişi kullanılmadı",
-        "nations_league_mode": True,
+        "nedenler": [
+            "Uluslar Ligi maçında kulüp ligi geçmişi benzer örnek olarak kullanılmadı.",
+            "Gösterilen yüzdeler bookmaker marjından arındırılmış piyasa konsensüsüdür; tarihsel başarı oranı değildir.",
+        ],
+        "fake_drop": False, "nations_league_mode": True,
         "nations_market_source": ana["kaynak"],
         "nations_market_candidates": aile_birincileri,
         "nations_market_note": "Yüzde tarihsel başarı/güven değil; bookmaker marjından arındırılmış piyasa konsensüsüdür.",
-        "oynanabilir": p > 50,
-        "oynanabilir_esik_ok": p > 50,
+        "oynanabilir": p > 50, "oynanabilir_esik_ok": p > 50,
         "model_version": MODEL_VERSION,
     }
-    t["eg"], t["dg"] = skoru_tahmine_uydur(1, 1, t["ana_label"], "D", t["alt_label"], "")
+    t["eg"], t["dg"] = skoru_tahmine_uydur(1, 1, t["ana_label"], t["ms_mod"], t["alt_label"], "")
     return t, pd.DataFrame()
 
 
