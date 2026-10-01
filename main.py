@@ -8955,6 +8955,7 @@ def uluslar_ligi_piyasa_tahmini(m):
         "goal_matching": "Kulüp geçmişiyle gol eşleştirmesi kapalı",
         "effective_ms_samples": 0.0, "effective_goal_samples": 0.0, "effective_ht_samples": 0.0,
         "odds_source": "current_market", "odds_cross_bookmaker": False,
+        "nations_league_market_mode": True,
         "match_type": "Uluslar Ligi · piyasa korumalı",
         "goal_profile": "Kulüp geçmişi kullanılmadı",
         "nedenler": [
@@ -14447,10 +14448,19 @@ def kupon_seciminden_detay_itemi(secim, sadece_ayni_lig=False):
 
 
 def ana_tahmin_gecmis_detayi(m, t, b_det):
+    # FIX53: Nations League korumalı mod tarihsel oran-benzerliği kullanmaz.
+    # Bu yüzden boş DataFrame'i normal geçmiş tablosu gibi işlemeye çalışma.
+    if bool(t.get("nations_league_market_mode")):
+        st.info("🇪🇺 Uluslar Ligi korumalı mod: Bu tahmin benzer geçmiş maçlardan değil, maçın mevcut bookmaker 1-X-2 / 2.5 / KG marketlerinden üretiliyor. Bu nedenle geçmiş örnek sayısı uygulanmıyor.")
+        return
+
     # Önce askıdaki/eksik İY verili ligleri çıkar; sayaç ve gösterim adedi
     # yalnızca gerçekten tabloda gösterilebilecek geçmiş maçlardan hesaplansın.
     b_det = sadece_tam_verili_gecmis(b_det)
     toplam_gecmis_ornek = len(b_det)
+    if toplam_gecmis_ornek <= 0 or "Date" not in b_det.columns:
+        st.info("Bu tahmin için gösterilebilecek benzer geçmiş maç bulunamadı.")
+        return
 
     gosterim_secimi = st.selectbox(
         "Gösterilecek geçmiş örnek",
@@ -14740,6 +14750,9 @@ def detay_ana_icerik():
     m, t, b_det = item["m"], item["t"], item["b"]
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
+    _nl_market_mode = bool(t.get("nations_league_market_mode"))
+    _ornek_ust_yazi = "📊 Piyasa modu · geçmiş örnek kullanılmıyor" if _nl_market_mode else f"📊 {int(t.get('ornek', 0) or 0)} örnek"
+    _ayar_ornek_yazi = "Örnek: <b>uygulanmıyor</b> · Dinamik min maç: <b>uygulanmıyor</b>" if _nl_market_mode else f"Örnek: <b>{int(t.get('ornek', 0) or 0)}</b> · Dinamik min maç: <b>{t.get('onerilen_min_mac', 0)}</b>"
 
     if st.button("✕ Kapat", key="close_detail_popup_btn", use_container_width=True):
         st.session_state.detay_idx = None
@@ -14760,7 +14773,7 @@ def detay_ana_icerik():
             </div>
             <div style="text-align:right">
               <span class="live-badge" style="background:{durum_color};color:white">{durum_text}</span><br>
-              <span style="font-size:0.82rem;color:#9db2d1;display:inline-block;margin-top:8px">📊 {int(t['ornek'])} örnek</span>
+              <span style="font-size:0.82rem;color:#9db2d1;display:inline-block;margin-top:8px">{_ornek_ust_yazi}</span>
             </div>
           </div>
         </div>
@@ -14806,7 +14819,7 @@ def detay_ana_icerik():
     <div style="background:#13151e;border:1px solid #1e2130;border-radius:16px;padding:14px 18px;margin-bottom:14px">
       <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between">
         <div style="font-size:0.82rem;color:#c7cfdd">Kullanılan tolerans: <b>{t['kullanilan_tolerans']:.2f}</b> · Önerilen: <b>{t['onerilen_tolerans']}</b></div>
-        <div style="font-size:0.82rem;color:#c7cfdd">Örnek: <b>{int(t['ornek'])}</b> · Dinamik min maç: <b>{t['onerilen_min_mac']}</b></div>
+        <div style="font-size:0.82rem;color:#c7cfdd">{_ayar_ornek_yazi}</div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;align-items:center">
         <span style="background:{t.get('ornek_renk', '#44506b')};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.75rem;font-weight:700">{t.get('ornek_durum', 'Standart')}</span>
@@ -15932,7 +15945,7 @@ else:
                   <div class="oran-box"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>
                   <div class="oran-box"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>
                 </div>
-                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · 📊 {int(t['ornek'])} örnek · 🏟️ Aynı lig: {int(t.get('ayni_lig_ornek', 0) or 0)}/{int(t['ornek'])} · {t.get('ornek_durum', 'Standart')}</div>
+                <div style="margin-top:8px;font-size:0.72rem;color:#666">🏅 {t.get('playable_score', t['ana_p'])} puan · {('📊 Piyasa modu · geçmiş örnek yok' if t.get('nations_league_market_mode') else '📊 ' + str(int(t.get('ornek',0) or 0)) + ' örnek · 🏟️ Aynı lig: ' + str(int(t.get('ayni_lig_ornek',0) or 0)) + '/' + str(int(t.get('ornek',0) or 0)))} · {t.get('ornek_durum', 'Standart')}</div>
                 <div style="margin-top:6px;font-size:0.72rem;color:#f6b26b">🏅 {t.get('score', 0):.1f} puan</div>
                 {stability_html}
               </div>
