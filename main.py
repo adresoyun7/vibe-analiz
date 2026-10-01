@@ -8850,6 +8850,73 @@ def _marjdan_arindirilmis_olasiliklar(oranlar):
         return None
 
 
+def _poisson_pmf(k, lam):
+    try:
+        lam = max(0.05, float(lam))
+        return math.exp(-lam) * (lam ** int(k)) / math.factorial(int(k))
+    except Exception:
+        return 0.0
+
+
+def _uluslar_ligi_maca_ozel_skor(ms_probs=None, total_probs=None, btts_probs=None):
+    """Mevcut piyasa dağılımlarına en iyi uyan Poisson gol beklentisini bul.
+
+    FIX54: Eski korumalı mod her maça 1-1 tabanı verip skoru_tahmine_uydur()
+    çağırdığı için benzer ana marketlerde skorlar 2-1'e yapışıyordu. Burada ev/deplasman
+    gol beklentileri her maçın 1-X-2, 2.5 ve BTTS marj-arındırılmış dağılımına ayrı
+    ayrı uydurulur; sonra 0-6 skor matrisi içindeki en olası skor seçilir.
+    """
+    targets = []
+    if ms_probs and len(ms_probs) >= 3 and sum(ms_probs) > 0:
+        targets.append(("ms", [float(x)/100.0 for x in ms_probs[:3]], 1.00))
+    if total_probs and len(total_probs) >= 2 and sum(total_probs) > 0:
+        targets.append(("tot", [float(x)/100.0 for x in total_probs[:2]], 1.15))
+    if btts_probs and len(btts_probs) >= 2 and sum(btts_probs) > 0:
+        targets.append(("btts", [float(x)/100.0 for x in btts_probs[:2]], 1.15))
+    if not targets:
+        return 1, 1, None, None
+
+    best = None
+    # 0.20..3.80 arası 0.10 adım: milli maçlar için yeterince geniş, hızlı bir ızgara.
+    grid = [x / 10.0 for x in range(2, 39)]
+    for lh in grid:
+        ph = [_poisson_pmf(k, lh) for k in range(8)]
+        for la in grid:
+            pa = [_poisson_pmf(k, la) for k in range(8)]
+            p1 = px = p2 = pover = pbtts = 0.0
+            for h in range(8):
+                for a in range(8):
+                    pr = ph[h] * pa[a]
+                    if h > a: p1 += pr
+                    elif h == a: px += pr
+                    else: p2 += pr
+                    if h + a >= 3: pover += pr
+                    if h > 0 and a > 0: pbtts += pr
+            err = 0.0
+            for typ, vals, w in targets:
+                if typ == "ms":
+                    err += w * ((p1-vals[0])**2 + (px-vals[1])**2 + (p2-vals[2])**2)
+                elif typ == "tot":
+                    err += w * ((pover-vals[0])**2 + ((1-pover)-vals[1])**2)
+                else:
+                    err += w * ((pbtts-vals[0])**2 + ((1-pbtts)-vals[1])**2)
+            if best is None or err < best[0]:
+                best = (err, lh, la, ph, pa)
+
+    if best is None:
+        return 1, 1, None, None
+    _, lh, la, ph, pa = best
+    # En olası tam skor. Eşitlikte beklenen gole daha yakın skor tercih edilir.
+    score_candidates = []
+    for h in range(7):
+        for a in range(7):
+            pr = ph[h] * pa[a]
+            dist = abs(h-lh) + abs(a-la)
+            score_candidates.append((pr, -dist, h, a))
+    _, _, eg, dg = max(score_candidates)
+    return int(eg), int(dg), round(lh, 2), round(la, 2)
+
+
 def uluslar_ligi_piyasa_tahmini(m):
     """Nations League için kulüp geçmişini kullanmayan korumalı tahmin.
 
@@ -8969,7 +9036,16 @@ def uluslar_ligi_piyasa_tahmini(m):
         "oynanabilir": p > 50, "oynanabilir_esik_ok": p > 50,
         "model_version": MODEL_VERSION,
     }
-    t["eg"], t["dg"] = skoru_tahmine_uydur(1, 1, t["ana_label"], t["ms_mod"], t["alt_label"], "")
+    # FIX54: Sabit 1-1 tabanını kaldır. Her maçın kendi 1-X-2 + 2.5 + BTTS
+    # piyasa dağılımına uyan gol beklentisini ve en olası tam skoru hesapla.
+    _eg, _dg, _xg_h, _xg_a = _uluslar_ligi_maca_ozel_skor(ms, totals, btts)
+    t["eg"], t["dg"] = _eg, _dg
+    t["nations_xg_ev"] = _xg_h
+    t["nations_xg_dep"] = _xg_a
+    if _xg_h is not None and _xg_a is not None:
+        t["nedenler"].append(
+            f"Tahmini skor sabit tabandan değil, bu maçın piyasa dağılımına uyan gol beklentisinden üretildi ({_xg_h:.2f}-{_xg_a:.2f})."
+        )
     return t, pd.DataFrame()
 
 
