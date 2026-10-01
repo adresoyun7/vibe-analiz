@@ -8822,8 +8822,17 @@ FIX50_NATIONS_LEAGUE = "nations-league-market-guard-v1"
 
 
 def uluslar_ligi_mi(m):
-    """UEFA Nations League maçlarını diğer kulüp liglerinden kesin olarak ayır."""
-    return str((m or {}).get("sport_key", "")).strip() == "soccer_uefa_nations_league"
+    """UEFA Nations League maçlarını diğer kulüp liglerinden kesin olarak ayır.
+
+    m hem dict hem pandas.Series olabilir. Series üzerinde ``m or {}`` kullanmak
+    pandas'ın belirsiz truth-value ValueError'ına yol açar; doğrudan .get kullan.
+    """
+    if m is None:
+        return False
+    try:
+        return str(m.get("sport_key", "")).strip() == "soccer_uefa_nations_league"
+    except (AttributeError, TypeError):
+        return False
 
 
 def _marjdan_arindirilmis_olasiliklar(oranlar):
@@ -8852,7 +8861,15 @@ def uluslar_ligi_piyasa_tahmini(m):
     Buradaki yüzde model başarı olasılığı değildir; bookmaker marjından arındırılmış
     piyasa konsensüsüdür. Eksik market uydurulmaz.
     """
-    m = dict(m or {})
+    if m is None:
+        m = {}
+    elif not isinstance(m, dict):
+        try:
+            m = dict(m)
+        except (TypeError, ValueError):
+            m = {}
+    else:
+        m = dict(m)
     adaylar = []
 
     ms = _marjdan_arindirilmis_olasiliklar([m.get("h"), m.get("b"), m.get("a")])
