@@ -8818,6 +8818,102 @@ def _tek_lig_fikstur_placeholder(m_row, neden, gecmis_df=None, min_ornek=1, sade
 # örnek üretemezse yalnızca bu görünümde 1-X-2 piyasa olasılıklarından şeffaf
 # bir fallback tahmin oluşturulur. Bu fallback normal Maç Analizi/Aday sistemi
 # veya Sonuç Takibi model performansına karıştırılmaz.
+FIX50_NATIONS_LEAGUE = "nations-league-market-guard-v1"
+
+
+def uluslar_ligi_mi(m):
+    """UEFA Nations League maçlarını diğer kulüp liglerinden kesin olarak ayır."""
+    return str((m or {}).get("sport_key", "")).strip() == "soccer_uefa_nations_league"
+
+
+def _marjdan_arindirilmis_olasiliklar(oranlar):
+    """Aynı marketteki bookmaker oranlarını marjdan arındırıp yüzdeye çevir."""
+    try:
+        vals = [float(x) for x in oranlar]
+        if not vals or not all(math.isfinite(x) and x > 1.0 for x in vals):
+            return None
+        inv = [1.0 / x for x in vals]
+        toplam = sum(inv)
+        if toplam <= 0:
+            return None
+        return [100.0 * x / toplam for x in inv]
+    except (TypeError, ValueError):
+        return None
+
+
+def uluslar_ligi_piyasa_tahmini(m):
+    """Nations League için kulüp geçmişini kullanmayan korumalı tahmin.
+
+    Uygulamadaki Football-Data geçmişi kulüp liglerinden oluşuyor. Nations League
+    maçını bu havuzdaki benzer 1-X-2 oranlı kulüp maçlarıyla eşleştirmek KG ve 2.5
+    tarafında sahte tarihsel güven üretebilir. Bu nedenle Nations League'de yalnız
+    o maçın gerçek bookmaker 1-X-2 / 2.5 / BTTS marketleri kullanılır.
+
+    Buradaki yüzde model başarı olasılığı değildir; bookmaker marjından arındırılmış
+    piyasa konsensüsüdür. Eksik market uydurulmaz.
+    """
+    m = dict(m or {})
+    adaylar = []
+
+    ms = _marjdan_arindirilmis_olasiliklar([m.get("h"), m.get("b"), m.get("a")])
+    if ms:
+        for label, p, odd in zip(("MS 1", "Beraberlik", "MS 2"), ms, (m.get("h"), m.get("b"), m.get("a"))):
+            adaylar.append({"label": label, "guven": p, "oran": odd, "aile": "ms", "kaynak": "1-X-2"})
+
+    totals = _marjdan_arindirilmis_olasiliklar([m.get("o25_over"), m.get("o25_under")])
+    if totals:
+        adaylar.extend([
+            {"label": "2.5 Üst", "guven": totals[0], "oran": m.get("o25_over"), "aile": "25", "kaynak": "2.5 marketi"},
+            {"label": "2.5 Alt", "guven": totals[1], "oran": m.get("o25_under"), "aile": "25", "kaynak": "2.5 marketi"},
+        ])
+
+    btts = _marjdan_arindirilmis_olasiliklar([m.get("btts_yes"), m.get("btts_no")])
+    if btts:
+        adaylar.extend([
+            {"label": "KG Var", "guven": btts[0], "oran": m.get("btts_yes"), "aile": "kg", "kaynak": "BTTS marketi"},
+            {"label": "KG Yok", "guven": btts[1], "oran": m.get("btts_no"), "aile": "kg", "kaynak": "BTTS marketi"},
+        ])
+
+    if not adaylar:
+        return None, pd.DataFrame()
+
+    # Her market ailesinden yalnız daha olası taraf yarışsın. Böylece aynı marketin
+    # iki zıt yönünü alternatif olarak göstermeyiz.
+    aile_birincileri = []
+    for aile in ("ms", "25", "kg"):
+        grup = [x for x in adaylar if x["aile"] == aile]
+        if grup:
+            aile_birincileri.append(max(grup, key=lambda x: x["guven"]))
+    ana = max(aile_birincileri, key=lambda x: x["guven"])
+    alt = max((x for x in aile_birincileri if x["aile"] != ana["aile"]),
+              key=lambda x: x["guven"], default=None)
+
+    p = int(round(ana["guven"]))
+    t = {
+        "ana_label": ana["label"], "ana_p": p, "ana_odd": ana.get("oran"),
+        "ana_raw_p": p, "alt_label": alt["label"] if alt else "",
+        "alt_p": int(round(alt["guven"])) if alt else 0,
+        "alt_ornek": 0, "alt_puan": 0, "alt_kararlilik": 0, "alt_hassasiyetler": [],
+        "ornek": 0, "score": float(p), "playable_score": float(p),
+        "birlesik_puan": float(p), "stability_count": 0, "stability_pct": 0,
+        "stability_text": "", "stability_tols": [], "stability_early_tols": [],
+        "stability_late_tols": [], "stability_early_text": "", "stability_late_text": "",
+        "combo_var": False, "combo_label": "", "combo_p": 0, "combo_level": "",
+        "eg": 1, "dg": 1, "belirsiz": True, "ayni_lig_ornek": 0,
+        "match_type": "Uluslar Ligi · piyasa korumalı",
+        "goal_profile": "Kulüp geçmişi kullanılmadı",
+        "nations_league_mode": True,
+        "nations_market_source": ana["kaynak"],
+        "nations_market_candidates": aile_birincileri,
+        "nations_market_note": "Yüzde tarihsel başarı/güven değil; bookmaker marjından arındırılmış piyasa konsensüsüdür.",
+        "oynanabilir": p > 50,
+        "oynanabilir_esik_ok": p > 50,
+        "model_version": MODEL_VERSION,
+    }
+    t["eg"], t["dg"] = skoru_tahmine_uydur(1, 1, t["ana_label"], "D", t["alt_label"], "")
+    return t, pd.DataFrame()
+
+
 def gunun_zorunlu_fallback_t(m_row, neden="oran modeli örnek bulamadı"):
     try:
         h, d, a = (float(m_row.get("h")), float(m_row.get("b")), float(m_row.get("a")))
@@ -13941,7 +14037,13 @@ if analiz_btn:
                 _sayac_toplam += 1
                 # Maç Analizi: üstte seçilen manuel hassasiyetle TEK kez çalışır.
                 # Top 50 Market: 0.00–0.10 birleşik hassasiyet modeli kullanılmaya devam eder.
-                if _sonuc_reset_genis_tarama:
+                _nations_mode = uluslar_ligi_mi(m)
+                if _nations_mode:
+                    # FIX50: Nations League'i kulüp ligi geçmişiyle eşleştirme.
+                    # Football-Data havuzumuz kulüp liglerinden oluştuğu için özellikle
+                    # KG/2.5 sonuçları ters yönlenebiliyordu. Yalnız gerçek maç marketi kullanılır.
+                    t, b_det = uluslar_ligi_piyasa_tahmini(m)
+                elif _sonuc_reset_genis_tarama:
                     # Sonuç Takibi reseti: her maç için 0.00–0.10 hassasiyetleri
                     # birlikte tara. Karşıt-market tutarlılık kuralları
                     # hassasiyet_birlesik_hesapla içinde uygulanmaya devam eder.
@@ -13983,7 +14085,7 @@ if analiz_btn:
                     gercek_ornek = len(b_det) if b_det is not None else 0
                 except Exception:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
-                if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
+                if (not _sonuc_reset_genis_tarama) and (not _nations_mode) and gercek_ornek < max(1, int(min_ornek or 1)):
                     _sayac_ornek += 1
                     # Günün Tahminleri'nde minimum örnek bir ELEME kriteri değildir.
                     # Tahmin gösterilir, yalnızca kartta örnek sayısı bilgi olarak kalır.
@@ -14011,6 +14113,7 @@ if analiz_btn:
                 # Kapalıyken her maç yalnızca seçili TOLERANS ile bir kez hesaplanır.
                 if (
                     st.session_state.get("sayfa_modu") == "Maç Analizi"
+                    and (not _nations_mode)
                     and st.session_state.get("mac_analizi_stabilite_tarama", False)
                 ):
                     try:
@@ -14048,7 +14151,7 @@ if analiz_btn:
                 # ana tahmine dönerse veya ±0.02 oran stresinde yön değiştirirse
                 # Maç Analizi ana listesine hiç alma. Bu filtre yalnızca ana tahmini
                 # etkiler; alternatif/kombo değişimleri maçın elenmesine yol açmaz.
-                if st.session_state.get("sayfa_modu") == "Maç Analizi" and not _sonuc_reset_genis_tarama:
+                if st.session_state.get("sayfa_modu") == "Maç Analizi" and (not _nations_mode) and not _sonuc_reset_genis_tarama:
                     _m_for_first = m.to_dict()
                     _before = copy.deepcopy(_ilk_ana_registry)
                     _ilk_ok, _ilk_neden = ilk_ana_tahmin_filtresi_uygula(
@@ -15522,6 +15625,15 @@ else:
             )
         elif not t.get("gunun_zorunlu_fallback"):
             filtre_secim_html = ''
+        _nations_html = ''
+        if t.get("nations_league_mode"):
+            _nk = escape(str(t.get("nations_market_source", "piyasa")))
+            _nations_html = (
+                '<div style="margin-top:7px;padding:7px 9px;border-radius:9px;background:#172554;'
+                'border:1px solid #3b82f6;color:#bfdbfe;font-size:.71rem;font-weight:750">'
+                '🇪🇺 <b>Uluslar Ligi koruması:</b> kulüp ligi geçmişi kullanılmadı · '
+                f'kaynak {_nk}. Gösterilen yüzde tarihsel başarı değil, marjdan arındırılmış piyasa konsensüsüdür.</div>'
+            )
         combo_html = ''
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
         if combo_text:
@@ -15730,7 +15842,7 @@ else:
                 <div class="mk-mini">Maç tipi: {t['match_type']} · Gol profili: {t['goal_profile']}</div>
                 {belirsiz_html}
                 {ai_comment_html}
-                {_tm_html}
+                {_nations_html}{_tm_html}
               {_shot_html}
               </div>
 
