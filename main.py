@@ -9036,6 +9036,52 @@ def uluslar_ligi_piyasa_tahmini(m):
 
     p = int(round(ana["guven"]))
 
+    # FIX56: Uluslar Ligi piyasa modunda da kombo üret. Bu değer tarihsel başarı
+    # olasılığı değildir; iki market bileşeninin marjdan arındırılmış piyasa
+    # desteğini ve aynı skor senaryosunda birlikte gerçekleşebilmesini özetler.
+    _aile_map = {x["aile"]: x for x in aile_birincileri}
+    _combo_adaylari = []
+
+    def _nl_combo_ekle(label, *bilesenler):
+        if not all(bilesenler):
+            return
+        # Kombonun gerçekten mümkün olduğu en az bir 0..6 skor olsun.
+        if not any(skor_etikete_uyuyor_mu(label, h, a) for h in range(7) for a in range(7)):
+            return
+        ps = [float(x["guven"]) for x in bilesenler]
+        # Geometrik ortalama: zayıf bileşen komboyu aşağı çeker; yüzdeyi
+        # kazanma olasılığı gibi değil, piyasa-destek skoru olarak kullanıyoruz.
+        destek = math.prod(max(v, 0.01) for v in ps) ** (1.0 / len(ps))
+        _combo_adaylari.append({"label": label, "destek": destek, "bilesen": ps})
+
+    _msw, _ou, _kg = _aile_map.get("ms"), _aile_map.get("25"), _aile_map.get("kg")
+    if _msw and _ou:
+        _ms_prefix = "MS1" if _msw["label"] == "MS 1" else "MS2" if _msw["label"] == "MS 2" else None
+        if _ms_prefix:
+            _nl_combo_ekle(f"{_ms_prefix} + {_ou['label']}", _msw, _ou)
+    if _msw and _kg:
+        _ms_prefix = "MS1" if _msw["label"] == "MS 1" else "MS2" if _msw["label"] == "MS 2" else None
+        if _ms_prefix:
+            _nl_combo_ekle(f"{_ms_prefix} + {_kg['label']}", _msw, _kg)
+    if _ou and _kg and _ou["label"] == "2.5 Üst" and _kg["label"] == "KG Var":
+        _nl_combo_ekle("2.5 Üst + KG Var", _ou, _kg)
+
+    _nl_combo = max(_combo_adaylari, key=lambda x: x["destek"], default=None)
+    _nl_combo_p = int(round(_nl_combo["destek"])) if _nl_combo else 0
+    if _nl_combo_p >= 62:
+        _nl_combo_level = "Çok Güçlü"
+    elif _nl_combo_p >= 56:
+        _nl_combo_level = "Güçlü"
+    elif _nl_combo_p >= 51:
+        _nl_combo_level = "Orta"
+    else:
+        _nl_combo_level = "Zayıf" if _nl_combo else ""
+    _nl_combo_comment = (
+        f"{_nl_combo_level}: iki bileşenin piyasa desteği birlikte {_nl_combo_p}/100. "
+        "Bu skor tarihsel başarı oranı değil, piyasa uyum göstergesidir."
+        if _nl_combo else ""
+    )
+
     # FIX52: Nations League korumalı yol da normal hesapla() ile aynı temel
     # sonuç şemasını döndürür. Detay penceresi ms_mod, güven rozeti, tolerans
     # rehberi ve diğer market alanlarını doğrudan okuduğu için eksik anahtar
@@ -9057,8 +9103,11 @@ def uluslar_ligi_piyasa_tahmini(m):
         "birlesik_puan": float(p), "stability_count": 0, "stability_pct": 0,
         "stability_text": "", "stability_tols": [], "stability_early_tols": [],
         "stability_late_tols": [], "stability_early_text": "", "stability_late_text": "",
-        "combo_var": False, "combo_label": "", "combo_p": 0, "combo_level": "",
-        "combo_raw_p": 0, "combo_hit": 0, "scenario_label": ana["label"],
+        "combo_var": bool(_nl_combo), "combo_label": _nl_combo["label"] if _nl_combo else "",
+        "combo_p": _nl_combo_p, "combo_level": _nl_combo_level,
+        "combo_raw_p": 0, "combo_hit": 0,
+        "combo_comment": _nl_combo_comment, "combo_metric_label": "Piyasa uyumu",
+        "scenario_label": ana["label"],
         "canli_label": "—", "canli_p": 0, "canli_strateji": "Uluslar Ligi korumalı mod",
         "eg": 1, "dg": 1, "belirsiz": True, "ms_belirsiz": True, "ayni_lig_ornek": 0,
         "ms_mod": ms_mod, "ms_side": ms_side,
@@ -15130,8 +15179,8 @@ def detay_ana_icerik():
         if combo_text:
             combo_row = f"""
           <div class="diger-row">
-            <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">{t.get('combo_level', 'Destekli')}</div></div></div>
-            <span class="diger-badge {combo_cls}">{combo_text} %{int(t.get('combo_p', 0))}</span>
+            <div class="diger-left"><span class="diger-icon">🎯</span><div><div class="diger-name">Güçlü Kombo</div><div class="diger-sub">{t.get('combo_level', 'Destekli')}{' · piyasa uyumu' if t.get('nations_league_market_mode') else ''}</div></div></div>
+            <span class="diger-badge {combo_cls}">{combo_text} {'%'+str(int(t.get('combo_p', 0))) if not t.get('nations_league_market_mode') else str(int(t.get('combo_p', 0)))+'/100'}</span>
           </div>"""
 
         st.markdown(f"""
@@ -15848,7 +15897,16 @@ else:
         if combo_text:
             combo_level = t.get("combo_level", "")
             level_text = f' · {combo_level}' if combo_level else ''
-            combo_html = f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}</div><span class="combo-pill">{combo_text}</span></div>'
+            _combo_p_txt = f' · {int(t.get("combo_p", 0) or 0)}/100' if t.get("nations_league_market_mode") else ''
+            _combo_comment = escape(str(t.get("combo_comment", "") or ""))
+            _combo_comment_html = (
+                f'<div style="margin-top:5px;font-size:.70rem;color:#f6c177">{_combo_comment}</div>'
+                if _combo_comment else ''
+            )
+            combo_html = (
+                f'<div style="margin-top:8px"><div class="mk-label">GÜÇLÜ KOMBO{level_text}{_combo_p_txt}</div>'
+                f'<span class="combo-pill">{combo_text}</span>{_combo_comment_html}</div>'
+            )
         _hassasiyet_yazi = str(t.get("stability_text", "") or "").strip()
         _stabilite_tarama_acik = bool(st.session_state.get("mac_analizi_stabilite_tarama", False))
         if _hassasiyet_yazi:
