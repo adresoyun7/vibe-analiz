@@ -8861,7 +8861,7 @@ def _poisson_pmf(k, lam):
 def _uluslar_ligi_maca_ozel_skor(ms_probs=None, total_probs=None, btts_probs=None):
     """Mevcut piyasa dağılımlarına en iyi uyan Poisson gol beklentisini bul.
 
-    FIX54: Eski korumalı mod her maça 1-1 tabanı verip skoru_tahmine_uydur()
+    FIX55: Eski korumalı mod her maça 1-1 tabanı verip skoru_tahmine_uydur()
     çağırdığı için benzer ana marketlerde skorlar 2-1'e yapışıyordu. Burada ev/deplasman
     gol beklentileri her maçın 1-X-2, 2.5 ve BTTS marj-arındırılmış dağılımına ayrı
     ayrı uydurulur; sonra 0-6 skor matrisi içindeki en olası skor seçilir.
@@ -8906,13 +8906,75 @@ def _uluslar_ligi_maca_ozel_skor(ms_probs=None, total_probs=None, btts_probs=Non
     if best is None:
         return 1, 1, None, None
     _, lh, la, ph, pa = best
-    # En olası tam skor. Eşitlikte beklenen gole daha yakın skor tercih edilir.
+    # FIX55: Saf Poisson modu floor(lambda) çevresinde toplandığı için 1-0 / 1-1 / 2-1
+    # skorlarına aşırı yığılıyordu. Burada yine 0-6 skor matrisi kullanılır; fakat
+    # seçim, piyasanın güçlü yönleriyle koşullandırılmış MAP (en olası uyumlu skor)
+    # olarak yapılır. Rastgele çeşitlilik veya maç adına göre skor üretimi yoktur.
+    ms_t = [float(x)/100.0 for x in ms_probs[:3]] if ms_probs and len(ms_probs) >= 3 else None
+    tot_t = [float(x)/100.0 for x in total_probs[:2]] if total_probs and len(total_probs) >= 2 else None
+    btts_t = [float(x)/100.0 for x in btts_probs[:2]] if btts_probs and len(btts_probs) >= 2 else None
+
+    # Beklenen toplam gol yükseldikçe skor kartının 2-1'de takılı kalmasını önle.
+    # Bu sınır lambda'dan türetilir; keyfi çeşitlilik değildir.
+    lam_total = lh + la
+    min_total = 0
+    max_total = 12
+    if lam_total >= 4.60:
+        min_total = 5
+    elif lam_total >= 3.65:
+        min_total = 4
+    elif lam_total >= 2.75:
+        min_total = 3
+    if lam_total <= 1.55:
+        max_total = 1
+    elif lam_total <= 2.25:
+        max_total = 2
+
+    # Market çok netse sonucu/Üst-Alt/KG yönünü skor seçiminde gerçekten uygula.
+    ms_pick = max(range(3), key=lambda i: ms_t[i]) if ms_t else None
+    ms_strong = bool(ms_t and ms_t[ms_pick] >= 0.48)
+    over_strong = bool(tot_t and tot_t[0] >= 0.56)
+    under_strong = bool(tot_t and tot_t[1] >= 0.56)
+    btts_yes_strong = bool(btts_t and btts_t[0] >= 0.56)
+    btts_no_strong = bool(btts_t and btts_t[1] >= 0.56)
+
+    # Çok güçlü taraf farkında tek farklı galibiyet yerine iki+ farkı da aday havuzuna zorla.
+    dominance = abs(lh - la)
+    require_margin2 = bool(ms_strong and dominance >= 1.35 and ms_t[ms_pick] >= 0.58)
+
+    def uyumlu(h, a, gevsek=False):
+        total = h + a
+        if not gevsek and (total < min_total or total > max_total):
+            return False
+        if ms_strong:
+            if ms_pick == 0 and h <= a: return False
+            if ms_pick == 1 and h != a: return False
+            if ms_pick == 2 and a <= h: return False
+        if require_margin2 and not gevsek:
+            if ms_pick == 0 and h-a < 2: return False
+            if ms_pick == 2 and a-h < 2: return False
+        if over_strong and not gevsek and total < 3: return False
+        if under_strong and not gevsek and total > 2: return False
+        if btts_yes_strong and not gevsek and (h == 0 or a == 0): return False
+        if btts_no_strong and not gevsek and h > 0 and a > 0: return False
+        return True
+
     score_candidates = []
-    for h in range(7):
-        for a in range(7):
-            pr = ph[h] * pa[a]
-            dist = abs(h-lh) + abs(a-la)
-            score_candidates.append((pr, -dist, h, a))
+    for gevsek in (False, True):
+        score_candidates.clear()
+        for h in range(7):
+            for a in range(7):
+                if not uyumlu(h, a, gevsek=gevsek):
+                    continue
+                pr = ph[h] * pa[a]
+                # Yakın olasılıklarda lambda'ya yakın skor tercih edilir.
+                dist = abs(h-lh) + abs(a-la)
+                score_candidates.append((pr, -dist, h, a))
+        if score_candidates:
+            break
+
+    if not score_candidates:
+        return int(round(lh)), int(round(la)), round(lh, 2), round(la, 2)
     _, _, eg, dg = max(score_candidates)
     return int(eg), int(dg), round(lh, 2), round(la, 2)
 
@@ -9036,7 +9098,7 @@ def uluslar_ligi_piyasa_tahmini(m):
         "oynanabilir": p > 50, "oynanabilir_esik_ok": p > 50,
         "model_version": MODEL_VERSION,
     }
-    # FIX54: Sabit 1-1 tabanını kaldır. Her maçın kendi 1-X-2 + 2.5 + BTTS
+    # FIX55: Sabit 1-1 tabanını kaldır ve piyasa-koşullu skor matrisini kullan. Her maçın kendi 1-X-2 + 2.5 + BTTS
     # piyasa dağılımına uyan gol beklentisini ve en olası tam skoru hesapla.
     _eg, _dg, _xg_h, _xg_a = _uluslar_ligi_maca_ozel_skor(ms, totals, btts)
     t["eg"], t["dg"] = _eg, _dg
