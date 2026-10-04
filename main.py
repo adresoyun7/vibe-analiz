@@ -10641,24 +10641,18 @@ def _oran_tabanli_sut_fallback(m, neden="Şut geçmişi yetersiz"):
     tempo = max(0.0, min(1.0, 0.65 * pov + 0.35 * pbtts))
 
     otomatik = {
-        "toplam": int(round(21 + 6 * tempo)),
-        "ev": int(round(8 + 8 * ph + 2 * tempo)),
-        "dep": int(round(8 + 8 * pa + 2 * tempo)),
+        "toplam": round(20.5 + 6.0 * tempo, 1),
+        "ev": round(7.5 + 8.0 * ph + 2.0 * tempo, 1),
+        "dep": round(7.5 + 8.0 * pa + 2.0 * tempo, 1),
     }
     esik = otomatik
-
-    # Fallback aralığı yalnız yaklaşık oynanabilir banttır: toplamda merkez ±2,
-    # takım şutunda merkez ±1. Bu bant güven/olasılık olarak yorumlanmaz.
     adaylar = [
-        {"label": f"Toplam Şut {esik['toplam']}+", "esik": esik["toplam"],
-         "tur": "toplam", "sinyal": round(tempo * 100, 1),
-         "aralik_min": max(16, esik["toplam"] - 2), "aralik_max": esik["toplam"] + 2},
-        {"label": f"Ev Şut {esik['ev']}+", "esik": esik["ev"],
-         "tur": "ev", "sinyal": round((0.75 * ph + 0.25 * tempo) * 100, 1),
-         "aralik_min": max(5, esik["ev"] - 1), "aralik_max": esik["ev"] + 1},
-        {"label": f"Dep Şut {esik['dep']}+", "esik": esik["dep"],
-         "tur": "dep", "sinyal": round((0.75 * pa + 0.25 * tempo) * 100, 1),
-         "aralik_min": max(5, esik["dep"] - 1), "aralik_max": esik["dep"] + 1},
+        {"label": f"Toplam Şut {esik['toplam']:.1f} Üst", "esik": esik["toplam"], "tur": "toplam", "sinyal": round(tempo*100,1),
+         "aralik_min": max(16.5, esik["toplam"]-2), "aralik_max": esik["toplam"]+2},
+        {"label": f"Ev Şut {esik['ev']:.1f} Üst", "esik": esik["ev"], "tur": "ev", "sinyal": round((.75*ph+.25*tempo)*100,1),
+         "aralik_min": max(5.5, esik["ev"]-1), "aralik_max": esik["ev"]+1},
+        {"label": f"Dep Şut {esik['dep']:.1f} Üst", "esik": esik["dep"], "tur": "dep", "sinyal": round((.75*pa+.25*tempo)*100,1),
+         "aralik_min": max(5.5, esik["dep"]-1), "aralik_max": esik["dep"]+1},
     ]
     ana = max(adaylar, key=lambda q: float(q.get("sinyal", 0)))
     return {
@@ -10726,23 +10720,31 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
     def en_iyi_aday(prefix, vals, beklenen, alt_esik, ust_esik):
         if len(vals) < 6:
             return None
-        uygun = []
-        for threshold in range(int(alt_esik), int(ust_esik) + 1):
-            hits = sum(v >= threshold for v in vals)
+        bahis_satirlari = []
+        for half_line in [x + 0.5 for x in range(int(alt_esik), int(ust_esik) + 1)]:
+            hits = sum(v > half_line for v in vals)
             destek = (hits + 2.0) / (len(vals) + 4.0) * 100.0
-            if destek >= 65.0 and beklenen >= threshold + .5:
-                uygun.append((threshold, destek, hits))
-        if not uygun:
-            return None
-        threshold, destek, hits = max(uygun, key=lambda x: (x[0], x[1]))
-        # İdeal aralık: aynı destek/ortalama kurallarını geçen tüm eşiklerin bandı.
-        # Tercih edilen değer, bandın en yüksek hâlâ desteklenen eşiğidir.
-        aralik_min = min(x[0] for x in uygun)
-        aralik_max = max(x[0] for x in uygun)
-        return {"label": f"{prefix} {threshold}+", "esik": threshold,
-                "guven": round(destek, 1), "beklenen": round(beklenen, 1),
-                "ornek": len(vals), "tutan": hits,
-                "aralik_min": aralik_min, "aralik_max": aralik_max}
+            bahis_satirlari.append({"cizgi": float(half_line), "destek": round(destek, 1), "tutan": int(hits), "ornek": len(vals)})
+        # Sabit 24/25 veya 13/14 yerine beklenen şuta göre doğal bahis çizgisi seç.
+        hedef = math.floor(float(beklenen) - 0.5) + 0.5
+        hedef = max(float(alt_esik) + 0.5, min(float(ust_esik) + 0.5, hedef))
+        secim = next((q for q in sorted(bahis_satirlari, key=lambda q: abs(q["cizgi"]-hedef))
+                       if q["cizgi"] <= hedef + 1e-9 and q["destek"] >= 65.0), None)
+        if secim is None:
+            uygun = [q for q in bahis_satirlari if q["destek"] >= 65.0 and q["cizgi"] <= float(beklenen) + 0.5]
+            if not uygun:
+                return None
+            secim = max(uygun, key=lambda q: (q["cizgi"], q["destek"]))
+        threshold = float(secim["cizgi"])
+        uygun = [q for q in bahis_satirlari if q["destek"] >= 65.0 and q["cizgi"] <= float(beklenen) + 0.5]
+        aralik_min = min((q["cizgi"] for q in uygun), default=threshold)
+        aralik_max = max((q["cizgi"] for q in uygun), default=threshold)
+        komsu = sorted(bahis_satirlari, key=lambda q: abs(q["cizgi"]-threshold))[:5]
+        return {"label": f"{prefix} {threshold:.1f} Üst", "esik": threshold,
+                "guven": float(secim["destek"]), "beklenen": round(beklenen, 1),
+                "ornek": len(vals), "tutan": int(secim["tutan"]),
+                "aralik_min": aralik_min, "aralik_max": aralik_max,
+                "bahis_satirlari": komsu, "model_cizgisi": threshold}
 
     adaylar = []
     for aday in (
@@ -10775,6 +10777,23 @@ def toplam_sut_tahmini(kaynak, m, genel_limit=10, saha_limit=5):
         "ev_sut_mac": ev_sut_mac, "dep_sut_mac": dep_sut_mac,
         "gerekli_sut_mac": 3, "sut_kaynak": "Football-Data HS/AS",
     }
+
+
+def sut_bahsi_gorunumu(shot):
+    if not shot or not shot.get("aktif"):
+        return
+    st.markdown("### 🎯 Şut Bahsi Görünümü")
+    c1,c2,c3=st.columns(3,gap="small")
+    with c1: st.metric("Model çizgisi", shot.get("label","-"))
+    with c2: st.metric("Beklenen şut", f"{float(shot.get('beklenen',0)):.1f}")
+    with c3: st.metric("Model desteği", f"%{float(shot.get('guven',0)):.1f}")
+    if shot.get("aralik_min") is not None:
+        st.caption(f"Desteklenen model bandı: {float(shot['aralik_min']):.1f}–{float(shot['aralik_max']):.1f} · {int(shot.get('ornek',0) or 0)} geçmiş gözlem")
+    satirlar=shot.get("bahis_satirlari") or []
+    if satirlar:
+        df=pd.DataFrame([{"Şut çizgisi":f"{float(x['cizgi']):.1f} Üst","Model desteği":f"%{float(x['destek']):.1f}","Tutan":f"{int(x['tutan'])}/{int(x['ornek'])}","Durum":"⭐ Önerilen" if abs(float(x['cizgi'])-float(shot.get('model_cizgisi',-999)))<.01 else "Alternatif"} for x in satirlar])
+        st.dataframe(df,use_container_width=True,hide_index=True)
+    st.caption("⚠️ Yaklaşık model çizgisi; gerçek bookmaker şut oranı değildir." if shot.get("oran_fallback") else "ℹ️ Destek geçmiş HS/AS verisinden hesaplanır; bookmaker şut oranı değildir.")
 
 
 def toplam_sut_ana_tahmine_uygula(t, gecmis_df, m):
@@ -14925,11 +14944,7 @@ def takim_modeli_goster(gecmis_df, m, t):
     shot = model.get("toplam_sut", {}) or {}
     if st.session_state.get("toplam_sut_tahminleri_goster", False):
         if shot.get("aktif"):
-            _sot = f" · Beklenen isabetli {shot['beklenen_isabetli']:.1f}" if shot.get("beklenen_isabetli") is not None else ""
-            st.success(f"🎯 Şut adayı: {shot['label']} · destek %{shot['guven']:.1f} · beklenen {shot['beklenen']:.1f} (Ev {shot['ev_beklenen']:.1f} / Dep {shot['dep_beklenen']:.1f}) · örnek {shot['ornek']}{_sot}")
-            _diger_sut = [f"{x['label']} %{x['guven']:.0f}" for x in shot.get('adaylar', []) if x.get('label') != shot.get('label')]
-            if _diger_sut:
-                st.caption("Diğer şut adayları: " + " · ".join(_diger_sut))
+            sut_bahsi_gorunumu(shot)
         else:
             st.caption("🎯 Toplam şut: " + str(shot.get("neden", "Bu maçta yeterli şut verisi yok")))
     st.caption("ℹ️ Takım Modeli oranlardan bağımsız izleme katmanıdır. Toplam şut seçeneği açıksa ve şut adayı daha güçlü ise Ana Tahmin yarışına katılabilir.")
