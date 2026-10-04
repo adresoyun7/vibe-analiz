@@ -30,7 +30,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 
-MODEL_VERSION = "2026.10.04.fix57-nl-odds-analysis"
+MODEL_VERSION = "2026.09.13.2"
 FIX30_API_KEY_MEMORY_TOP = "sqlite-settings-v1"
 TR_TIMEZONE = ZoneInfo("Europe/Istanbul")
 APP_DATA_DIR = Path(os.environ.get("YAPAIKUPON_DATA_DIR", str(Path(__file__).resolve().parent)))
@@ -8979,78 +8979,6 @@ def _uluslar_ligi_maca_ozel_skor(ms_probs=None, total_probs=None, btts_probs=Non
     return int(eg), int(dg), round(lh, 2), round(la, 2)
 
 
-def _uluslar_ligi_oran_analizi(ms=None, totals=None, btts=None):
-    """Uluslar Ligi için doğrudan bookmaker oran analizi.
-
-    Bu katman tarihsel başarı oranı üretmez. Yalnızca mevcut 1-X-2 / 2.5 / KG
-    marketlerini marjdan arındırır, market ailesi farkını ölçer ve özellikle MS
-    tarafının gerçekten ayrışıp ayrışmadığını belirler.
-    """
-    result = {
-        "ms1": None, "msx": None, "ms2": None,
-        "ust25": None, "alt25": None, "kg_var": None, "kg_yok": None,
-        "ms_top": None, "ms_second": None, "ms_gap": 0.0,
-        "ms_net": False, "ms_karar": "Analiz edilemedi",
-        "ms_karar_kisa": "Veri yok", "ms_not": "",
-        "market_uyumu": "",
-    }
-    if ms and len(ms) >= 3:
-        result["ms1"], result["msx"], result["ms2"] = [float(x) for x in ms[:3]]
-        sirali = sorted(
-            [(result["ms1"], "MS1"), (result["msx"], "MS X"), (result["ms2"], "MS2")],
-            reverse=True,
-        )
-        top, second = sirali[0], sirali[1]
-        result["ms_top"] = top[0]
-        result["ms_second"] = second[0]
-        result["ms_gap"] = top[0] - second[0]
-        raw = [x / 100.0 for x in (result["ms1"], result["msx"], result["ms2"])]
-        # Ana modelde kullanılan eski belirsizlik mantığıyla uyumlu, ancak artık
-        # sabit True değildir. Böylece örn. Fransa 1.40 / 4.40 / 6.00 net taraf
-        # verirken Bosna 2.62 / 3.30 / 2.40 net sayılmaz.
-        belirsiz = (
-            (max(raw) < 0.42 and (sorted(raw, reverse=True)[0] - sorted(raw, reverse=True)[1]) < 0.06)
-            or (abs(raw[0] - raw[2]) < 0.05 and abs(raw[0] - raw[1]) < 0.05)
-        )
-        result["ms_net"] = not belirsiz
-        if result["ms_top"] >= 60 and result["ms_gap"] >= 20:
-            result["ms_karar"] = "Çok net"
-            result["ms_karar_kisa"] = "Çok net"
-        elif result["ms_top"] >= 55 and result["ms_gap"] >= 12:
-            result["ms_karar"] = "Net taraf"
-            result["ms_karar_kisa"] = "Net"
-        elif result["ms_top"] >= 45 and result["ms_gap"] >= 8:
-            result["ms_karar"] = "Hafif taraf"
-            result["ms_karar_kisa"] = "Hafif"
-        else:
-            result["ms_karar"] = "Maç sonucu tarafı net değil"
-            result["ms_karar_kisa"] = "Net değil"
-        if belirsiz:
-            result["ms_karar"] = "Maç sonucu tarafı net değil"
-            result["ms_karar_kisa"] = "Net değil"
-        result["ms_not"] = (
-            f"MS dağılımı: %{{:.1f}} / %{{:.1f}} / %{{:.1f}} · lider farkı %{{:.1f}}."
-        ).format(result["ms1"], result["msx"], result["ms2"], result["ms_gap"])
-
-    if totals and len(totals) >= 2:
-        result["ust25"], result["alt25"] = float(totals[0]), float(totals[1])
-    if btts and len(btts) >= 2:
-        result["kg_var"], result["kg_yok"] = float(btts[0]), float(btts[1])
-
-    aile_top = []
-    for label, vals in (("MS", (result["ms_top"], result["ms_second"])),
-                        ("2.5", (max(result["ust25"], result["alt25"]) if result["ust25"] is not None else None,
-                                  min(result["ust25"], result["alt25"]) if result["ust25"] is not None else None)),
-                        ("KG", (max(result["kg_var"], result["kg_yok"]) if result["kg_var"] is not None else None,
-                                 min(result["kg_var"], result["kg_yok"]) if result["kg_var"] is not None else None))):
-        if vals[0] is not None:
-            aile_top.append((label, vals[0], vals[0] - vals[1]))
-    if aile_top:
-        aile_top.sort(key=lambda x: x[1], reverse=True)
-        result["market_uyumu"] = " · ".join(f"{x[0]} %{x[1]:.0f} (fark %{x[2]:.0f})" for x in aile_top)
-    return result
-
-
 def uluslar_ligi_piyasa_tahmini(m):
     """Nations League için kulüp geçmişini kullanmayan korumalı tahmin.
 
@@ -9127,13 +9055,11 @@ def uluslar_ligi_piyasa_tahmini(m):
         _combo_adaylari.append({"label": label, "destek": destek, "bilesen": ps})
 
     _msw, _ou, _kg = _aile_map.get("ms"), _aile_map.get("25"), _aile_map.get("kg")
-    _nl_oran = _uluslar_ligi_oran_analizi(ms, totals, btts)
-    _nl_ms_belirsiz = not bool(_nl_oran.get("ms_net"))
-    if _msw and _ou and not _nl_ms_belirsiz:
+    if _msw and _ou:
         _ms_prefix = "MS1" if _msw["label"] == "MS 1" else "MS2" if _msw["label"] == "MS 2" else None
         if _ms_prefix:
             _nl_combo_ekle(f"{_ms_prefix} + {_ou['label']}", _msw, _ou)
-    if _msw and _kg and not _nl_ms_belirsiz:
+    if _msw and _kg:
         _ms_prefix = "MS1" if _msw["label"] == "MS 1" else "MS2" if _msw["label"] == "MS 2" else None
         if _ms_prefix:
             _nl_combo_ekle(f"{_ms_prefix} + {_kg['label']}", _msw, _kg)
@@ -9183,9 +9109,7 @@ def uluslar_ligi_piyasa_tahmini(m):
         "combo_comment": _nl_combo_comment, "combo_metric_label": "Piyasa uyumu",
         "scenario_label": ana["label"],
         "canli_label": "—", "canli_p": 0, "canli_strateji": "Uluslar Ligi korumalı mod",
-        "eg": 1, "dg": 1,
-        "belirsiz": bool(_nl_ms_belirsiz and ana.get("aile") == "ms"),
-        "ms_belirsiz": bool(_nl_ms_belirsiz), "ayni_lig_ornek": 0,
+        "eg": 1, "dg": 1, "belirsiz": True, "ms_belirsiz": True, "ayni_lig_ornek": 0,
         "ms_mod": ms_mod, "ms_side": ms_side,
         "ms_p": int(round(ms_probs[ms_idx])) if ms else 0,
         "ms1_p": int(round(ms_probs[0])), "msx_p": int(round(ms_probs[1])), "ms2_p": int(round(ms_probs[2])),
@@ -9215,15 +9139,11 @@ def uluslar_ligi_piyasa_tahmini(m):
         "nedenler": [
             "Uluslar Ligi maçında kulüp ligi geçmişi benzer örnek olarak kullanılmadı.",
             "Gösterilen yüzdeler bookmaker marjından arındırılmış piyasa konsensüsüdür; tarihsel başarı oranı değildir.",
-            f"Oran analizi: {_nl_oran.get('ms_karar', 'analiz edilemedi')} · MS lider farkı %{float(_nl_oran.get('ms_gap', 0.0) or 0.0):.1f}.",
         ],
         "fake_drop": False, "nations_league_mode": True,
         "nations_market_source": ana["kaynak"],
         "nations_market_candidates": aile_birincileri,
         "nations_market_note": "Yüzde tarihsel başarı/güven değil; bookmaker marjından arındırılmış piyasa konsensüsüdür.",
-        "nations_odds_analysis": _nl_oran,
-        "nations_ms_karar": _nl_oran.get("ms_karar", "Analiz edilemedi"),
-        "nations_ms_gap": float(_nl_oran.get("ms_gap", 0.0) or 0.0),
         "oynanabilir": p > 50, "oynanabilir_esik_ok": p > 50,
         "model_version": MODEL_VERSION,
     }
@@ -15966,22 +15886,11 @@ else:
         _nations_html = ''
         if t.get("nations_league_mode"):
             _nk = escape(str(t.get("nations_market_source", "piyasa")))
-            _no = t.get("nations_odds_analysis", {}) or {}
-            _ms_karar = escape(str(_no.get("ms_karar", t.get("nations_ms_karar", "Analiz edilemedi"))))
-            _ms_karar_color = "#22c55e" if _no.get("ms_net") else "#f59e0b"
-            _ms_pct = " / ".join(
-                f"%{float(_no[k]):.0f}" for k in ("ms1", "msx", "ms2")
-                if _no.get(k) is not None
-            )
-            _market_ozet = escape(str(_no.get("market_uyumu", "")))
             _nations_html = (
                 '<div style="margin-top:7px;padding:7px 9px;border-radius:9px;background:#172554;'
                 'border:1px solid #3b82f6;color:#bfdbfe;font-size:.71rem;font-weight:750">'
-                '🇪🇺 <b>Uluslar Ligi oran analizi:</b> marjdan arındırılmış piyasa konsensüsü · '
-                f'<span style="color:{_ms_karar_color}"><b>{_ms_karar}</b></span>'
-                + (f' · MS %{_ms_pct.replace(" / "," / ")} · Lider farkı %{float(_no.get("ms_gap",0) or 0):.1f}' if _ms_pct else '')
-                + (f' · {_market_ozet}' if _market_ozet else '')
-                + f'<br><span style="color:#93c5fd">Kaynak {_nk} · Bu değer tarihsel başarı oranı değildir.</span></div>'
+                '🇪🇺 <b>Uluslar Ligi koruması:</b> kulüp ligi geçmişi kullanılmadı · '
+                f'kaynak {_nk}. Gösterilen yüzde tarihsel başarı değil, marjdan arındırılmış piyasa konsensüsüdür.</div>'
             )
         combo_html = ''
         skor_html = f'<div style="margin-top:8px;font-size:0.76rem;color:#cbd5e1">🎯 Tahmini skor: <b style="color:#f8fbff">{t.get("eg", 1)}-{t.get("dg", 1)}</b></div>'
