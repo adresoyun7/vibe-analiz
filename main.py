@@ -8819,6 +8819,7 @@ def _tek_lig_fikstur_placeholder(m_row, neden, gecmis_df=None, min_ornek=1, sade
 # bir fallback tahmin oluşturulur. Bu fallback normal Maç Analizi/Aday sistemi
 # veya Sonuç Takibi model performansına karıştırılmaz.
 FIX50_NATIONS_LEAGUE = "nations-league-market-guard-v1"
+FIX57_NATIONS_NORMAL_MODEL = "nations-league-normal-club-model-v1"
 
 
 def uluslar_ligi_mi(m):
@@ -14284,35 +14285,37 @@ if analiz_btn:
                 # Maç Analizi: üstte seçilen manuel hassasiyetle TEK kez çalışır.
                 # Top 50 Market: 0.00–0.10 birleşik hassasiyet modeli kullanılmaya devam eder.
                 _nations_mode = uluslar_ligi_mi(m)
-                if _nations_mode:
-                    # FIX50: Nations League'i kulüp ligi geçmişiyle eşleştirme.
-                    # Football-Data havuzumuz kulüp liglerinden oluştuğu için özellikle
-                    # KG/2.5 sonuçları ters yönlenebiliyordu. Yalnız gerçek maç marketi kullanılır.
-                    t, b_det = uluslar_ligi_piyasa_tahmini(m)
-                elif _sonuc_reset_genis_tarama:
+                # FIX57: Nations League artık ayrı bir piyasa-modu olarak değil,
+                # normal Maç Analizi/Günün Tahminleri oran-modeli ile hesaplanır.
+                # Nations League için Football-Data içinde aynı-lig tarihçesi olmadığı
+                # için yalnız bu branşta genel geçmiş havuzu kullanılır; aksi halde
+                # sadece_ayni_lig filtresi 0 örnek üretir. Bu örnekler Nations League
+                # başarı oranı değil, genel kulüp maçlarından oran-benzerliği örnekleridir.
+                _nations_same_league = False if _nations_mode else sadece_ayni_lig
+                if _sonuc_reset_genis_tarama:
                     # Sonuç Takibi reseti: her maç için 0.00–0.10 hassasiyetleri
                     # birlikte tara. Karşıt-market tutarlılık kuralları
                     # hassasiyet_birlesik_hesapla içinde uygulanmaya devam eder.
                     t, b_det = hassasiyet_birlesik_hesapla(
-                        gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
+                        gecmis, m, min_ornek, sadece_ayni_lig=_nations_same_league
                     )
                 elif st.session_state.get("sayfa_modu") == "Günün Tahminleri":
                     # Ayar istemeyen görünüm: 11 hassasiyeti otomatik birleştir.
                     t, b_det = hassasiyet_birlesik_hesapla(
-                        gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
+                        gecmis, m, min_ornek, sadece_ayni_lig=_nations_same_league
                     )
                 elif st.session_state.get("sayfa_modu") == "Maç Analizi":
                     t, b_det = hesapla(
                         gecmis,
                         m,
                         TOLERANS,
-                        sadece_ayni_lig=sadece_ayni_lig,
+                        sadece_ayni_lig=_nations_same_league,
                         form_aktif=False,
                         kalibrasyon_aktif=False,
                     )
                 else:
                     t, b_det = hassasiyet_birlesik_hesapla(
-                        gecmis, m, min_ornek, sadece_ayni_lig=sadece_ayni_lig
+                        gecmis, m, min_ornek, sadece_ayni_lig=_nations_same_league
                     )
                 if t is None:
                     _sayac_t_none += 1
@@ -14331,7 +14334,7 @@ if analiz_btn:
                     gercek_ornek = len(b_det) if b_det is not None else 0
                 except Exception:
                     gercek_ornek = int(t.get("ornek", t.get("sample", 0)) or 0)
-                if (not _sonuc_reset_genis_tarama) and (not _nations_mode) and gercek_ornek < max(1, int(min_ornek or 1)):
+                if (not _sonuc_reset_genis_tarama) and gercek_ornek < max(1, int(min_ornek or 1)):
                     _sayac_ornek += 1
                     # Günün Tahminleri'nde minimum örnek bir ELEME kriteri değildir.
                     # Tahmin gösterilir, yalnızca kartta örnek sayısı bilgi olarak kalır.
