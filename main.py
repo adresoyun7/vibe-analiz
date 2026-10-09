@@ -11250,6 +11250,7 @@ def _spor_toto_takim_benzerlik(a, b):
         "amedspor": "amedspor",
         "kasimpasaas": "kasimpasa",
         "kasimpasa": "kasimpasa",
+        "kasimpasask": "kasimpasa",
         "goztepeas": "goztepe",
         "goztepe": "goztepe",
         "alanyaspor": "alanyaspor",
@@ -11264,6 +11265,7 @@ def _spor_toto_takim_benzerlik(a, b):
         "tumosankonyaspor": "konyaspor",
         "istanbulbasaksehirfk": "istanbulbasaksehir",
         "gaziantepfk": "gaziantepfk",
+        "gazisehirgaziantep": "gaziantepfk",
         "galatasarayas": "galatasaray",
         "galatasaray": "galatasaray",
         "kocaelispor": "kocaelispor",
@@ -11277,6 +11279,7 @@ def _spor_toto_takim_benzerlik(a, b):
         "besiktasas": "besiktas",
         "erzurumspor": "erzurumspor",
         "erzurumsporfk": "erzurumspor",
+        "erzurumbb": "erzurumspor",
         "bberzurumspor": "erzurumspor",
         "buyuksehirbelediyeerzurumspor": "erzurumspor",
 
