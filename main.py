@@ -11300,53 +11300,43 @@ def _spor_toto_takim_benzerlik(a, b):
 
 
 def _spor_toto_eslestir(mac, bulten):
-    """Önce aynı gün, bulunamazsa ±1 gün içinde güçlü takım adı eşleşmesi ara."""
+    """Yalnız iki takım da güçlü biçimde eşleşirse API maçını kabul et.
+
+    Aynı gün önceliklidir; ±1 gün sadece saat dilimi farkları içindir.
+    Bir takımın benzerliği diğer takımın hatasını telafi edemez.
+    """
     if bulten is None or getattr(bulten, "empty", True):
         return None, 0.0
-
-    tum = bulten.copy()
-    aramalar = []
-
-    # 1) Önce manuel programdaki günün kendisi.
-    if "zaman" in tum.columns:
-        try:
-            ayni_gun = tum[tum["zaman"].apply(lambda x: (dt := parse_mac_datetime(x)) is not None and dt.date() == mac["zaman"].date())]
-            if not ayni_gun.empty:
-                aramalar.append(ayni_gun)
-        except Exception:
-            pass
-
-        # 2) Program/API tarihleri bir gün kayabiliyor. Takım adları güçlü eşleşiyorsa ±1 gün kabul et.
-        try:
-            yakin_gun = tum[tum["zaman"].apply(
-                lambda x: (dt := parse_mac_datetime(x)) is not None and abs((dt.date() - mac["zaman"].date()).days) <= 1
-            )]
-            if not yakin_gun.empty:
-                aramalar.append(yakin_gun)
-        except Exception:
-            pass
-
-    if not aramalar:
-        aramalar = [tum]
-
-    en_iyi = None
-    en_skor = 0.0
-    for aday in aramalar:
-        for _, row in aday.iterrows():
-            evs = _spor_toto_takim_benzerlik(mac["ev"], row.get("ev", ""))
-            deps = _spor_toto_takim_benzerlik(mac["dep"], row.get("dep", ""))
-            skor = (evs + deps) / 2.0
-            if skor > en_skor:
-                en_skor = skor
-                en_iyi = row
-        # Çok güçlü eşleşme bulunduysa daha geniş tarih havuzuna gerek yok.
-        if en_skor >= 0.88:
-            break
-
-    # Yanlış maça yapışmaması için iki takımın birlikte güçlü eşleşmesini şart koş.
-    if en_skor < 0.72:
-        return None, en_skor
-    return en_iyi, en_skor
+    kickoff = parse_mac_datetime(mac.get("zaman"))
+    if kickoff is None:
+        return None, 0.0
+    best, best_score, best_day = None, 0.0, 99
+    for _, row in bulten.iterrows():
+        dt = parse_mac_datetime(row.get("zaman"))
+        if dt is None:
+            continue
+        day_diff = abs((dt.date() - kickoff.date()).days)
+        if day_diff > 1:
+            continue
+        home = _spor_toto_takim_benzerlik(mac.get("ev", ""), row.get("ev", ""))
+        away = _spor_toto_takim_benzerlik(mac.get("dep", ""), row.get("dep", ""))
+        score = (home + away) / 2
+        if (day_diff, -score) < (best_day, -best_score):
+            best, best_score, best_day = row, score, day_diff
+    # En iyi geçerli çift eşleşmesini ayrıca seç: kısmi eşleşmeler kabul edilmez.
+    valid = []
+    for _, row in bulten.iterrows():
+        dt = parse_mac_datetime(row.get("zaman"))
+        if dt is None or abs((dt.date() - kickoff.date()).days) > 1:
+            continue
+        home = _spor_toto_takim_benzerlik(mac.get("ev", ""), row.get("ev", ""))
+        away = _spor_toto_takim_benzerlik(mac.get("dep", ""), row.get("dep", ""))
+        if min(home, away) >= 0.86:
+            valid.append((abs((dt.date() - kickoff.date()).days), -(home + away) / 2, row))
+    if not valid:
+        return None, best_score
+    valid.sort(key=lambda item: (item[0], item[1]))
+    return valid[0][2], -valid[0][1]
 
 
 def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_lig=False):
@@ -11651,7 +11641,7 @@ if spor_toto_btn:
         st.warning(f"Spor Toto için 15 geçerli maç bekleniyor; şu an {len(spor_maclar)} satır okundu.")
     if not API_KEY:
         st.error("⚠️ Spor Toto oranlarını eşleştirmek için API Key gerekli.")
-    elif spor_maclar:
+    elif len(spor_maclar) == 15:
         with st.spinner("⚽ Spor Toto maçları bültenle eşleştiriliyor ve 11 hassasiyet taranıyor..."):
             gecmis_st = futbol_veri_motoru(tuple(yillar))
             spor_toto_kodlari = _spor_toto_kodlari_akilli(API_KEY, secili_kodlar, spor_maclar)
