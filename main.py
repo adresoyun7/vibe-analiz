@@ -11363,6 +11363,37 @@ def _spor_toto_eslestir(mac, bulten):
     return valid[0][2], -valid[0][1]
 
 
+def _spor_toto_eslesme_teshisi(mac, bulten, limit=6):
+    """Salt tanılama: hiçbir adayı otomatik eşleştirmez."""
+    if bulten is None or getattr(bulten, "empty", True):
+        return []
+    kickoff = parse_mac_datetime(mac.get("zaman"))
+    if kickoff is None:
+        return []
+    candidates = []
+    for _, row in bulten.iterrows():
+        dt = parse_mac_datetime(row.get("zaman"))
+        if dt is None or abs((dt.date() - kickoff.date()).days) > 2:
+            continue
+        home = _spor_toto_takim_benzerlik(mac.get("ev", ""), row.get("ev", ""))
+        away = _spor_toto_takim_benzerlik(mac.get("dep", ""), row.get("dep", ""))
+        # İki takımın birlikte eşleşmesi önemli; tek tarafı doğru olanı gizleme.
+        candidates.append({
+            "API tarihi": dt.strftime("%d.%m.%Y %H:%M"),
+            "API ev sahibi": str(row.get("ev", "")),
+            "API deplasman": str(row.get("dep", "")),
+            "API lig kodu": str(row.get("sport_key", row.get("lig", ""))),
+            "Ev benzerliği": round(home, 3),
+            "Dep benzerliği": round(away, 3),
+            "En düşük benzerlik": round(min(home, away), 3),
+            "Gün farkı": abs((dt.date() - kickoff.date()).days),
+        })
+    candidates.sort(key=lambda x: (x["En düşük benzerlik"],
+                                    x["Ev benzerliği"] + x["Dep benzerliği"],
+                                    -x["Gün farkı"]), reverse=True)
+    return candidates[:limit]
+
+
 def _spor_toto_ms_tarama(gecmis_df, mac_row, min_ornek_val, toleranslar, ayni_lig=False):
     """Spor Toto MS taraması: tüm geçmiş liglerde 1/X/2 oran profili ara.
 
@@ -11683,7 +11714,7 @@ if spor_toto_btn:
                 es, es_skor = _spor_toto_eslestir(sm, st_bulten)
                 if es is None:
                     _durum_es = "API bülteninde yok / lig kapsamı kontrol edilmeli" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi · API takım adlarını kontrol et"
-                    sonuclar.append({**sm, "durum": _durum_es, "es_skor": es_skor})
+                    sonuclar.append({**sm, "durum": _durum_es, "es_skor": es_skor, "teshis_adaylari": _spor_toto_eslesme_teshisi(sm, st_bulten)})
                     continue
                 # Spor Toto: geçmiş örnekleri lig ayrımı yapmadan tüm seçili geçmiş liglerde ara.
                 # Ana uygulamadaki "sadece_ayni_lig" ayarı Spor Toto'yu etkilemez.
@@ -11734,6 +11765,18 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 'Durum': r.get('durum', ''),
             })
         st.dataframe(pd.DataFrame(tablo), use_container_width=True, hide_index=True)
+
+        eslesmeyen = [r for r in _st_sonuclar if not str(r.get("durum", "")).startswith(("Tamam", "Düşük güvenilirlik", "Yetersiz örnek"))]
+        if eslesmeyen:
+            with st.expander(f"🔎 Eşleşme teşhis paneli ({len(eslesmeyen)} maç)", expanded=True):
+                st.caption("Bu panel API'den gerçekten gelen maçları gösterir. Adaylar otomatik kabul edilmez; tarih, iki takım ve lig birlikte kontrol edilmelidir.")
+                for r in eslesmeyen:
+                    st.markdown(f"**#{r.get('no')} · {r.get('ev')} – {r.get('dep')}**")
+                    adaylar = r.get("teshis_adaylari") or []
+                    if adaylar:
+                        st.dataframe(pd.DataFrame(adaylar), use_container_width=True, hide_index=True)
+                    else:
+                        st.warning("Bu maçın tarihine ±2 gün yakın API karşılaşması bulunamadı. Seçilen sport key'lerin ve API kapsamının kontrolü gerekli.")
 
         tamam = [r for r in _st_sonuclar if str(r.get('durum', '')).startswith('Tamam')]
         if tamam:
