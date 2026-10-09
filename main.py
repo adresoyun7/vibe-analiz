@@ -11239,6 +11239,30 @@ def _spor_toto_takim_benzerlik(a, b):
         "basaksehirfk": "istanbulbasaksehir",
         "istanbulbasaksehir": "istanbulbasaksehir",
         "gaziantepfkas": "gaziantepfk",
+        "gaziantepfkasas": "gaziantepfk",
+        "gaziantep": "gaziantepfk",
+        "ar cacorumfk": "corumfk",
+        "arcacorumfk": "corumfk",
+        "corumfk": "corumfk",
+        "corum": "corumfk",
+        "amedsk": "amedspor",
+        "amedsportiffaaliyetler": "amedspor",
+        "amedspor": "amedspor",
+        "kasimpasaas": "kasimpasa",
+        "kasimpasa": "kasimpasa",
+        "goztepeas": "goztepe",
+        "goztepe": "goztepe",
+        "alanyaspor": "alanyaspor",
+        "corendonalanyaspor": "alanyaspor",
+        "samsunsporas": "samsunspor",
+        "trabzonsporas": "trabzonspor",
+        "caykurrizesporas": "rizespor",
+        "caykurrizespor": "rizespor",
+        "rizespor": "rizespor",
+        "fenerbahceas": "fenerbahce",
+        "eyupspor": "eyupspor",
+        "tumosankonyaspor": "konyaspor",
+        "istanbulbasaksehirfk": "istanbulbasaksehir",
         "gaziantepfk": "gaziantepfk",
         "galatasarayas": "galatasaray",
         "galatasaray": "galatasaray",
@@ -11658,7 +11682,7 @@ if spor_toto_btn:
             for sm in spor_maclar:
                 es, es_skor = _spor_toto_eslestir(sm, st_bulten)
                 if es is None:
-                    _durum_es = "API bülteninde henüz yok" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi"
+                    _durum_es = "API bülteninde yok / lig kapsamı kontrol edilmeli" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi · API takım adlarını kontrol et"
                     sonuclar.append({**sm, "durum": _durum_es, "es_skor": es_skor})
                     continue
                 # Spor Toto: geçmiş örnekleri lig ayrımı yapmadan tüm seçili geçmiş liglerde ara.
@@ -11668,7 +11692,9 @@ if spor_toto_btn:
                     sonuclar.append({**sm, "durum": "Örnek yok", "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep")})
                     continue
                 _faz = str(ist.get("spor_toto_faz", "standart"))
-                _durum = "Tamam" if _faz == "standart" else f"Tamam · {_faz}"
+                _durum = "Tamam" if _faz == "standart" else f"Düşük güvenilirlik · {_faz}"
+                if int(ist.get("ornek", 0) or 0) < 10:
+                    _durum = "Yetersiz örnek · tahmin önerilmez"
                 sonuclar.append({**sm, "durum": _durum, "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep"), **ist})
             st.session_state['spor_toto_sonuclar'] = sonuclar
         st.rerun()
@@ -11685,7 +11711,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
     else:
         tablo = []
         for r in _st_sonuclar:
-            if str(r.get('durum', '')).startswith('Tamam'):
+            if str(r.get('durum', '')).startswith(('Tamam', 'Düşük güvenilirlik', 'Yetersiz örnek')):
                 tahmin = str(r.get('secim', '—'))
                 guven = f"%{float(r.get('guven', 0)):.1f}"
                 _faz = str(r.get('spor_toto_faz', 'standart'))
