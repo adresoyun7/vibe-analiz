@@ -11110,6 +11110,29 @@ with st.sidebar:
             help='Her satır: GG.AA.YYYY SS:DD | Ev sahibi | Deplasman',
         )
         st.caption('Format: tarih saat | ev sahibi | deplasman · Haftalık yalnızca bu 15 satırı değiştirmen yeterli.')
+        with st.expander("✍️ API'de bulunmayan maçlar için manuel 1/X/2 oranları", expanded=False):
+            st.caption("İsteğe bağlıdır. Yalnızca API eşleşmesi olmayan maçlarda kullanılır. Üç oranı da gir; 1.00 değeri boş kabul edilir. Kaynağını ayrıca doğrula.")
+            _manuel_maclar = []
+            for _n, _line in enumerate(str(spor_toto_metin).splitlines(), 1):
+                _parts = [v.strip() for v in _line.split('|')]
+                if len(_parts) >= 3:
+                    try:
+                        _manuel_maclar.append({'no': _n, 'zaman': datetime.strptime(_parts[0], '%d.%m.%Y %H:%M'), 'ev': _parts[1], 'dep': _parts[2]})
+                    except ValueError:
+                        pass
+            if not _manuel_maclar:
+                st.info("15 maçlık listeyi girdikten sonra manuel oran alanları görüntülenir.")
+            for _mm in _manuel_maclar:
+                _mid = f"{_mm['zaman'].isoformat()}|{takim_anahtari(_mm['ev'])}|{takim_anahtari(_mm['dep'])}"
+                with st.container():
+                    st.caption(f"#{_mm['no']} {_mm['ev']} – {_mm['dep']}")
+                    _cols = st.columns(3)
+                    for _col, _side in zip(_cols, ('1', 'X', '2')):
+                        with _col:
+                            st.number_input(f"{_side} oranı", min_value=1.0, max_value=1000.0,
+                                            value=1.0, step=0.05, format="%.2f",
+                                            key=f"st_manuel_{_mid}_{_side}")
+
     elif st.session_state.get('sayfa_modu') == 'Sonuç Takibi':
         st.caption("Kaydedilen analizlerin sonuçlarını buradan yenileyebilirsin.")
     elif st.session_state.get('sayfa_modu') == 'Canlı Takip':
@@ -11316,6 +11339,9 @@ def _spor_toto_takim_benzerlik(a, b):
         "norvec": "norway", "norway": "norway",
         "portekiz": "portugal", "portugal": "portugal",
     }
+    # Türkçe noktasız ı NFKD+ASCII sırasında düşer: Kasımpaşa -> kasmpasa.
+    aliaslar.update({'kasmpasaas': 'kasimpasa', 'kasmpasa': 'kasimpasa',
+                     'kasmpasask': 'kasimpasa'})
     ka = aliaslar.get(ka, ka)
     kb = aliaslar.get(kb, kb)
 
@@ -11716,6 +11742,23 @@ if spor_toto_btn:
             for sm in spor_maclar:
                 es, es_skor = _spor_toto_eslestir(sm, st_bulten)
                 if es is None:
+                    _mid = f"{sm['zaman'].isoformat()}|{takim_anahtari(sm['ev'])}|{takim_anahtari(sm['dep'])}"
+                    _manuel = [st.session_state.get(f"st_manuel_{_mid}_{side}", 1.0) for side in ('1', 'X', '2')]
+                    if all(isinstance(v, (float, int)) and math.isfinite(v) and v > 1.0 for v in _manuel):
+                        _hedef = {**sm, 'h': float(_manuel[0]), 'b': float(_manuel[1]), 'a': float(_manuel[2]),
+                                  'sport_key': 'soccer_turkey_super_league', 'odds_phase': 'preclosing',
+                                  'bookmaker_key': 'manual', 'history_detail_only': False}
+                        _ist = _spor_toto_ms_11_hesapla(gecmis_st, _hedef, min_ornek, False)
+                        if _ist is not None:
+                            _faz = str(_ist.get('spor_toto_faz', 'standart'))
+                            _durum = 'Manuel oran · Tamam' if _faz == 'standart' else f'Manuel oran · {_faz}'
+                            if int(_ist.get('ornek', 0) or 0) < 10:
+                                _durum = 'Manuel oran · Yetersiz örnek'
+                            sonuclar.append({**sm, 'durum': _durum, 'es_skor': 0.0,
+                                             'api_ev': None, 'api_dep': None, 'manuel_oran': True, **_ist})
+                        else:
+                            sonuclar.append({**sm, 'durum': 'Manuel oran · geçmiş örnek yok', 'manuel_oran': True})
+                        continue
                     _durum_es = "API bülteninde yok / lig kapsamı kontrol edilmeli" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi · API takım adlarını kontrol et"
                     sonuclar.append({**sm, "durum": _durum_es, "es_skor": es_skor, "teshis_adaylari": _spor_toto_eslesme_teshisi(sm, st_bulten)})
                     continue
@@ -11745,7 +11788,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
     else:
         tablo = []
         for r in _st_sonuclar:
-            if str(r.get('durum', '')).startswith(('Tamam', 'Düşük güvenilirlik', 'Yetersiz örnek')):
+            if str(r.get('durum', '')).startswith(('Tamam', 'Düşük güvenilirlik', 'Yetersiz örnek', 'Manuel oran ·')):
                 tahmin = str(r.get('secim', '—'))
                 guven = f"%{float(r.get('guven', 0)):.1f}"
                 _faz = str(r.get('spor_toto_faz', 'standart'))
@@ -11781,7 +11824,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     else:
                         st.warning("Bu maçın tarihine ±2 gün yakın API karşılaşması bulunamadı. Seçilen sport key'lerin ve API kapsamının kontrolü gerekli.")
 
-        tamam = [r for r in _st_sonuclar if str(r.get('durum', '')).startswith('Tamam')]
+        tamam = [r for r in _st_sonuclar if (str(r.get('durum', '')).startswith('Tamam') or str(r.get('durum', '')).startswith('Manuel oran · Tamam'))]
         if tamam:
             st.markdown("#### Kolon önerileri")
 
@@ -12321,7 +12364,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             gor = []
             for r in _st_sonuclar:
-                if not str(r.get('durum', '')).startswith('Tamam'):
+                if not (str(r.get('durum', '')).startswith('Tamam') or str(r.get('durum', '')).startswith('Manuel oran · Tamam')):
                     continue
                 dag = r.get('spor_toto_dagilim') or {}
                 dag_txt = (f"1 %{float(dag.get('1',0)):.1f} · X %{float(dag.get('X',0)):.1f} · 2 %{float(dag.get('2',0)):.1f}" if dag else '—')
