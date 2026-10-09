@@ -11824,8 +11824,20 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     else:
                         st.warning("Bu maçın tarihine ±2 gün yakın API karşılaşması bulunamadı. Seçilen sport key'lerin ve API kapsamının kontrolü gerekli.")
 
-        tamam = [r for r in _st_sonuclar if (str(r.get('durum', '')).startswith('Tamam') or str(r.get('durum', '')).startswith('Manuel oran · Tamam'))]
-        if tamam:
+        # Spor Toto 15 macin hepsini kolonlara tasir: veri kalitesi dusukse
+        # maci cikarmak yerine belirsizligi dagilimda korur.
+        def _st_kolona_uygun(r):
+            dag = r.get('spor_toto_dagilim') or {}
+            return (str(r.get('secim', '')) in ('1', 'X', '2')
+                    and all(isinstance(dag.get(k), (int, float)) and math.isfinite(dag[k])
+                            and dag[k] >= 0 for k in ('1', 'X', '2')))
+
+        tamam = [r for r in _st_sonuclar if _st_kolona_uygun(r)]
+        if len(tamam) != 15:
+            eksikler = [f"#{r.get('no')} {r.get('ev')} - {r.get('dep')}"
+                        for r in _st_sonuclar if not _st_kolona_uygun(r)]
+            st.warning('15 maçın tamamı analiz edilemedi. Eksik maçlar: ' + ', '.join(eksikler))
+        if tamam and len(tamam) == 15:
             st.markdown("#### Kolon önerileri")
 
             def _st_alternatifler(r, gevseklik=0):
@@ -12364,7 +12376,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             gor = []
             for r in _st_sonuclar:
-                if not (str(r.get('durum', '')).startswith('Tamam') or str(r.get('durum', '')).startswith('Manuel oran · Tamam')):
+                if not _st_kolona_uygun(r):
                     continue
                 dag = r.get('spor_toto_dagilim') or {}
                 dag_txt = (f"1 %{float(dag.get('1',0)):.1f} · X %{float(dag.get('X',0)):.1f} · 2 %{float(dag.get('2',0)):.1f}" if dag else '—')
