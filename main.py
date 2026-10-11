@@ -15530,6 +15530,40 @@ _filtreli_indexed_fl = [
     (idx, item) for idx, item in enumerate(_ham_fl)
     if str((item.get("m", {}) or {}).get("sport_key", "")) in _aktif_ligler_gorunum
 ]
+
+# Maç Analizi saat filtresi: yalnızca görünümü etkiler, analizi/API çağrısını yenilemez.
+if st.session_state.get("sayfa_modu") == "Maç Analizi":
+    st.markdown("#### 🕒 Maç saati filtresi")
+    saat_secimi = st.selectbox(
+        "Saat aralığı",
+        ["Tüm Saatler", "12:00–18:00", "18:00–23:00", "Özel Aralık"],
+        key="mac_analizi_saat_secimi",
+    )
+    if saat_secimi == "Özel Aralık":
+        saat_sol, saat_sag = st.columns(2)
+        with saat_sol:
+            saat_baslangic = st.time_input("Başlangıç", value=datetime.strptime("12:00", "%H:%M").time(), key="mac_saat_baslangic")
+        with saat_sag:
+            saat_bitis = st.time_input("Bitiş", value=datetime.strptime("23:00", "%H:%M").time(), key="mac_saat_bitis")
+    elif saat_secimi == "12:00–18:00":
+        saat_baslangic, saat_bitis = datetime.strptime("12:00", "%H:%M").time(), datetime.strptime("18:00", "%H:%M").time()
+    elif saat_secimi == "18:00–23:00":
+        saat_baslangic, saat_bitis = datetime.strptime("18:00", "%H:%M").time(), datetime.strptime("23:00", "%H:%M").time()
+
+    if saat_secimi != "Tüm Saatler":
+        def _saat_araliginda(item):
+            kickoff = parse_mac_datetime((item.get("m", {}) or {}).get("zaman"))
+            if kickoff is None:
+                return False
+            saat = kickoff.time()
+            if saat_baslangic <= saat_bitis:
+                return saat_baslangic <= saat <= saat_bitis
+            return saat >= saat_baslangic or saat <= saat_bitis
+
+        _filtreli_indexed_fl = [
+            (idx, item) for idx, item in _filtreli_indexed_fl if _saat_araliginda(item)
+        ]
+    st.caption(f"Saat filtresine uyan maç: {len(_filtreli_indexed_fl)} / {len(_ham_fl)} analiz sonucu")
 fl = [item for _, item in _filtreli_indexed_fl]
 
 # Son analiz teşhisi rerun sonrasında da görünür kalsın.
