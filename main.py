@@ -15103,7 +15103,15 @@ def detay_ana_icerik():
         unsafe_allow_html=True,
     )
 
-    ms_label_long = "Ev Sahibi" if t["ms_mod"] == "H" else "Deplasman" if t["ms_mod"] == "A" else "Beraberlik"
+    # Bazı kayıtlar eski/eksik tahmin şemasıyla gelebilir; detay modalı çökmesin.
+    ms_mod_detay = t.get("ms_mod")
+    if ms_mod_detay not in ("H", "D", "A"):
+        ms_probs_detay = [t.get("ms1_p"), t.get("msx_p"), t.get("ms2_p")]
+        if all(isinstance(v, (int, float)) for v in ms_probs_detay):
+            ms_mod_detay = ("H", "D", "A")[max(range(3), key=lambda i: ms_probs_detay[i])]
+        else:
+            ms_mod_detay = {"MS 1": "H", "Beraberlik": "D", "MS 2": "A"}.get(t.get("ana_label"))
+    ms_label_long = {"H": "Ev Sahibi", "A": "Deplasman", "D": "Beraberlik"}.get(ms_mod_detay, "Belirlenemedi")
 
     st.markdown(f"""
     <div class="hero-boxes">
