@@ -11839,6 +11839,25 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
             st.warning('15 maçın tamamı analiz edilemedi. Eksik maçlar: ' + ', '.join(eksikler))
         if tamam and len(tamam) == 15:
             st.markdown("#### Kolon önerileri")
+            st.markdown("#### 🔒 Manuel maç sabitleme")
+            st.caption("Otomatik: model karar verir. Tek: tüm kolonlarda aynı sonuç. Çifte: yalnız seçilen iki sonuç. Üçlü: 1/0/2 açık. 0 = beraberlik.")
+            _manuel_options = {"Otomatik": None, "1": ("1",), "0": ("X",), "2": ("2",),
+                               "1-0": ("1", "X"), "1-2": ("1", "2"),
+                               "0-2": ("X", "2"), "1-0-2": ("1", "X", "2")}
+            _manuel_secimler = {}
+            with st.expander("15 maç için manuel seçimler", expanded=False):
+                for _mr in tamam:
+                    _mno = int(_mr['no'])
+                    _label = st.selectbox(
+                        f"#{_mno} · {_mr.get('ev','')} - {_mr.get('dep','')}",
+                        options=list(_manuel_options),
+                        key=f"st_manuel_sabit_{_mno}",
+                    )
+                    if _manuel_options[_label] is not None:
+                        _manuel_secimler[_mno] = _manuel_options[_label]
+            if _manuel_secimler:
+                st.info(f"{len(_manuel_secimler)} maç manuel ayarlı. Seçimler dinamik kolonlara ve bütçeli sistem kuponuna uygulanır.")
+
 
             def _st_alternatifler(r, gevseklik=0):
                 """Gerçek 1/X/2 dağılımından kademeli alternatif üret.
@@ -12140,6 +12159,12 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 dag=r0.get('spor_toto_dagilim') or {}
                 vals={t:max(0.0,float(dag.get(t,0) or 0)) for t in ('1','X','2')}
                 s=sum(vals.values()) or 1.0
+                _izin = _manuel_secimler.get(int(r0['no']))
+                if _izin is not None:
+                    vals = {t: (vals[t] if t in _izin else 0.0) for t in ('1','X','2')}
+                    if sum(vals.values()) <= 0:
+                        vals = {t: (1.0 if t in _izin else 0.0) for t in ('1','X','2')}
+                    s = sum(vals.values())
                 _f25_probs.append({t:vals[t]/s for t in ('1','X','2')})
 
             def _f25_hedef_adet(pmap,n, mac_idx=None):
@@ -12414,79 +12439,129 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     help="Resmî güncel kolon bedelini buraya yaz. Böylece bütçe hesabı sabit bir fiyata bağlı kalmaz.",
                 )
 
-            def _spor_toto_butce_sistem_kuponu(maclar, butce, kolon_bedeli):
-                """Bütçeyi aşmadan tek sistem kuponunda kapsanan ortak olasılığı maksimize et.
+            def _spor_toto_butce_sistem_kuponu(maclar, butce, kolon_bedeli,
+                                                hedef=12, strateji="Hedef odaklı", cekince=0.20):
+                """Bütçeli sistem kuponu; olasılıkları ihtiyatlılaştırıp hedef doğruyu optimize eder.
 
-                Her maç için üç durum vardır: en olası tek sonuç, en olası iki sonuç veya
-                1/X/2'nin tamamı. Sistem kolon adedi seçim adetlerinin çarpımıdır.
-                Dinamik programlama ile 2^a * 3^b kolon sınırı altında en yüksek ortak
-                kapsama (olasılık kütlesi çarpımı) seçilir.
+                Bu değerler kalibre edilmiş gerçek olasılıklar DEĞİLDİR. Geçmiş
+                tahmin/sonuç arşivi olmadan kalibrasyon iddiasında bulunulmaz.
+                Her sistem kolonunun tüm kombinasyonları kapsadığı varsayılır.
                 """
                 try:
-                    butce = max(0.0, float(butce))
-                    kolon_bedeli = max(0.01, float(kolon_bedeli))
-                except (TypeError, ValueError):
+                    butce, kolon_bedeli = float(butce), float(kolon_bedeli)
+                    max_kolon = min(2500, int((butce + 1e-9) // kolon_bedeli))
+                    hedef = max(1, min(15, int(hedef)))
+                    cekince = max(0.0, min(0.50, float(cekince)))
+                except (TypeError, ValueError, ZeroDivisionError):
+                    return None
+                if kolon_bedeli <= 0 or max_kolon < 1 or len(maclar) != 15:
                     return None
 
-                # Spor Toto oyun planındaki bilet başına 2.500 kolon sınırını da koru.
-                max_kolon = min(2500, int(math.floor((butce + 1e-9) / kolon_bedeli)))
-                if max_kolon < 1:
-                    return None
+                def olasiliklar(r):
+                    dag = r.get("spor_toto_dagilim") or {}
+                    try:
+                        p = {k: max(0.0, float(dag.get(k, 0) or 0)) for k in ("1", "X", "2")}
+                        if not all(math.isfinite(v) for v in p.values()):
+                            raise ValueError("nonfinite")
+                    except (TypeError, ValueError):
+                        p = {k: 0.0 for k in ("1", "X", "2")}
+                    total = sum(p.values())
+                    if total <= 0:
+                        p = {k: 1 / 3 for k in p}
+                    else:
+                        p = {k: v / total for k, v in p.items()}
+                    # Örnek azlığı, düşük kararlılık ve fallback veri daha yüksek
+                    # belirsizlik getirir; uniforma yaklaştırmak aşırı güveni önler.
+                    kar = max(0.0, min(1.0, float(r.get("kararlilik", 0) or 0) / max(1.0, float(r.get("gecerli", 11) or 11))))
+                    ornek = max(0.0, float(r.get("ornek", 0) or 0))
+                    kalite = 0.12 if r.get("spor_toto_fallback") else 0.0
+                    shrink = min(0.65, cekince + (1-kar)*0.18 + 0.15*5/(5+ornek) + kalite)
+                    return {k: (1-shrink)*v + shrink/3 for k, v in p.items()}
 
                 hazir = []
                 for r in maclar:
-                    dag = r.get('spor_toto_dagilim') or {}
-                    probs = {taraf: max(0.0, float(dag.get(taraf, 0) or 0)) for taraf in ('1', 'X', '2')}
-                    toplam = sum(probs.values())
-                    if toplam <= 0:
-                        ana = str(r.get('secim', '1'))
-                        probs = {taraf: (100.0 if taraf == ana else 0.0) for taraf in ('1', 'X', '2')}
-                        toplam = 100.0
-                    probs = {k: v / toplam for k, v in probs.items()}
-                    sirali = sorted(probs, key=lambda taraf: (probs[taraf], taraf == str(r.get('secim', ''))), reverse=True)
-                    secenekler = []
-                    for adet in (1, 2, 3):
-                        secimler = tuple(sirali[:adet])
-                        kapsam = max(1e-12, sum(probs[x] for x in secimler))
-                        secenekler.append((adet, secimler, math.log(kapsam), kapsam))
+                    p = olasiliklar(r)
+                    sirali = sorted(("1", "X", "2"), key=lambda x: (-p[x], x))
+                    izin = _manuel_secimler.get(int(r["no"]))
+                    sets = [tuple(izin)] if izin is not None else [tuple(sirali[:n]) for n in (1,2,3)]
+                    secenekler = [(len(x), x, sum(p[k] for k in x)) for x in sets]
                     hazir.append((r, secenekler))
 
-                # state: kolon_adedi -> (log ortak kapsama, [maç seçimleri])
-                dp = {1: (0.0, [])}
-                for r, secenekler in hazir:
-                    yeni = {}
-                    for mevcut_kolon, (skor, plan) in dp.items():
-                        for adet, secimler, log_kapsam, kapsam in secenekler:
-                            kolon = mevcut_kolon * adet
-                            if kolon > max_kolon:
-                                continue
-                            aday = (skor + log_kapsam, plan + [(r, secimler, kapsam)])
-                            onceki = yeni.get(kolon)
-                            if onceki is None or aday[0] > onceki[0] + 1e-12:
-                                yeni[kolon] = aday
-                    dp = yeni
-                    if not dp:
-                        return None
+                def dagilim_ekle(dist, p):
+                    out = [0.0] * (len(dist)+1)
+                    for i, v in enumerate(dist):
+                        out[i] += v*(1-p)
+                        out[i+1] += v*p
+                    return out
 
-                # Salt kapsama maksimumu bütçeyi gereksiz doldurabilir. Aynı/neredeyse aynı
-                # kapsamada daha az kolon tercih edilir; aksi halde en yüksek kapsama kazanır.
-                en_iyi_kolon, (en_iyi_skor, en_iyi_plan) = max(
-                    dp.items(), key=lambda item: (item[1][0], -item[0])
-                )
+                # Aynı kolon maliyetinde farklı dağılımlar hedef başarı açısından
+                # farklı sonuç verebilir: yalnız çarpım kapsamasını saklamıyoruz.
+                # Her maliyet için en iyi adaylardan beam tutulur.
+                beam = {1: [(0.0, [1.0], [])]}
+                for idx, (r, opts) in enumerate(hazir):
+                    yeni = {}
+                    for count, states in beam.items():
+                        for score, dist, plan in states:
+                            for adet, secimler, kapsam in opts:
+                                kolon = count*adet
+                                if kolon > max_kolon:
+                                    continue
+                                nd = dagilim_ekle(dist, kapsam)
+                                # Ara sıralama: kalan maçların tamamı tutsa bile
+                                # hedefe erişme olasılığı; eşitlikte ortak kapsama.
+                                kalan = 14-idx
+                                optimistic = sum(v for hits, v in enumerate(nd) if hits+kalan >= hedef)
+                                ns = score + math.log(max(1e-12, kapsam))
+                                yeni.setdefault(kolon, []).append((ns, nd, plan+[(r, secimler, kapsam)], optimistic))
+                    if not yeni:
+                        return None
+                    beam = {}
+                    for count, states in yeni.items():
+                        states.sort(key=lambda x: (x[3], x[0]), reverse=True)
+                        beam[count] = [(s,d,pl) for s,d,pl,_ in states[:12]]
+
+                candidates = []
+                for count, states in beam.items():
+                    for score, dist, plan in states:
+                        prob = sum(dist[hedef:])
+                        exact = dist[15]
+                        # Farklı amaçlar, aynı aday havuzunu kullanır.
+                        if strateji == "15 doğru":
+                            value = exact
+                        elif strateji == "Dengeli":
+                            value = 0.65*sum(dist[12:]) + 0.25*sum(dist[13:]) + 0.10*exact
+                        else:
+                            value = prob
+                        candidates.append((value, -count, count, score, dist, plan, prob, exact))
+                if not candidates:
+                    return None
+                _, _, kolon, score, dist, plan, prob, exact = max(candidates)
                 return {
-                    'kolon': int(en_iyi_kolon),
-                    'maliyet': float(en_iyi_kolon) * kolon_bedeli,
-                    'plan': en_iyi_plan,
-                    'ortak_kapsam': math.exp(en_iyi_skor),
-                    'max_kolon': max_kolon,
+                    "kolon": kolon, "maliyet": kolon*kolon_bedeli,
+                    "plan": plan, "ortak_kapsam": math.exp(score),
+                    "max_kolon": max_kolon, "hedef": hedef,
+                    "hedef_olasiligi": prob, "tam_olasiligi": exact,
+                    "dagilim": dist, "strateji": strateji,
                 }
+
+            ayar1, ayar2, ayar3 = st.columns(3)
+            with ayar1:
+                st_hedef = st.selectbox("Hedef doğru", [12, 13, 14, 15], key="st_kapatma_hedef")
+            with ayar2:
+                st_strateji = st.selectbox("Kapatma stratejisi", ["Hedef odaklı", "Dengeli", "15 doğru"], key="st_kapatma_strateji")
+            with ayar3:
+                st_cekince = st.slider("Güven ihtiyatı (%)", 0, 50, 20, 5, key="st_kapatma_cekince",
+                                       help="Modelin 1/0/2 yüzdelerini eşit dağılıma yaklaştırır; gerçek kalibrasyon değildir.")
+            st.caption("Hesaplanan olasılıklar model tahminidir, garanti veya geçmişte doğrulanmış kalibrasyon değildir. "
+                       "Manuel tek/çifte/üçlü seçimler değiştirilmez.")
 
             if st.button(
                 "💰 BÜTÇEYE GÖRE TEK KUPON OLUŞTUR",
                 type="primary", use_container_width=True, key="spor_toto_butce_kupon_btn"
             ):
                 st.session_state['spor_toto_butce_kupon'] = _spor_toto_butce_sistem_kuponu(
-                    tamam, spor_toto_butce, spor_toto_kolon_bedeli
+                    tamam, spor_toto_butce, spor_toto_kolon_bedeli,
+                    hedef=st_hedef, strateji=st_strateji, cekince=st_cekince / 100.0
                 )
                 st.session_state['spor_toto_butce_kupon_butce'] = float(spor_toto_butce)
                 st.session_state['spor_toto_butce_kupon_bedel'] = float(spor_toto_kolon_bedeli)
@@ -12499,6 +12574,10 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 kalan = max(0.0, float(st.session_state.get('spor_toto_butce_kupon_butce', 0)) - butce_kupon['maliyet'])
                 k3.metric("Bütçede kalan", f"{kalan:.2f} TL")
 
+                st.metric(f"Tahmini {butce_kupon['hedef']}+ doğru olasılığı",
+                          f"%{butce_kupon['hedef_olasiligi']*100:.2f}")
+                st.caption("Bu oran model varsayımlarına ve maçların bağımsızlığına dayanır; "
+                           "gerçekleşme olasılığı olarak doğrulanmamıştır.")
                 butce_satirlari = []
                 ikili = uclu = 0
                 for r, secimler, kapsam in butce_kupon['plan']:
@@ -12524,6 +12603,132 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 )
             elif float(spor_toto_butce) < float(spor_toto_kolon_bedeli):
                 st.warning("Bütçe, 1 kolon bedelinden düşük. En az bir kolon bedeli kadar bütçe gir.")
+    # ================================================================
+    # SPOR TOTO · GEÇMİŞ KOLON TESTİ (sonuçları tahmin üretiminden ayırır)
+    # ================================================================
+    with st.expander("📊 Geçmiş kolon testi · 12/13/14/15 doğru", expanded=False):
+        st.caption("Önceden kaydedilmiş kolonları gerçek sonuçlarla karşılaştırır. "
+                   "Geçmiş haftaya ait yeni tahmin üretmez; bunun için maç öncesi oran arşivi gerekir.")
+        try:
+            _bt_kayitlar = kayit_deposu().read("spor_toto_kolon_arsivi")
+        except (OSError, ValueError, TypeError, sqlite3.Error) as _bt_error:
+            _bt_kayitlar = []
+            st.error("Kolon arşivi okunamadı: " + str(_bt_error))
+
+        _bt_hazir = (len(_st_sonuclar) == 15 and
+                     all(_st_kolona_uygun(r) for r in _st_sonuclar))
+        if _bt_hazir:
+            if st.button("💾 Mevcut kolonları arşivle", key="st_bt_arsivle"):
+                # Gerçekten gösterilen kolonların sırası ve tüm seçimleri saklanır.
+                _bt_kolonlar = (locals().get("_goster_kolonlar") or {})
+                if not _bt_kolonlar:
+                    st.error("Önce kolonları oluştur.")
+                else:
+                    _bt_maclar = [{"no": int(r["no"]), "ev": str(r["ev"]),
+                                   "dep": str(r["dep"]),
+                                   "zaman": str(r.get("zaman") or "")}
+                                  for r in _st_sonuclar]
+                    _bt_imzalar = [[str(kol.get(r["no"], "")) for r in _st_sonuclar]
+                                   for _, kol in sorted(_bt_kolonlar.items())]
+                    _bt_id = hashlib.sha256(json.dumps(
+                        {"maclar": _bt_maclar, "kolonlar": _bt_imzalar},
+                        ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+                    _bt_yeni = {"id": _bt_id, "kaydedildi": kayit_zamani_iso(),
+                                "maclar": _bt_maclar, "kolonlar": _bt_imzalar,
+                                "model": MODEL_VERSION}
+                    try:
+                        kayit_deposu().update("spor_toto_kolon_arsivi",
+                            lambda eski: [x for x in eski if x.get("id") != _bt_id] + [_bt_yeni])
+                        st.success("Kolonlar arşivlendi. Maçlar bitince buradan kontrol edebilirsin.")
+                        _bt_kayitlar = [x for x in _bt_kayitlar if x.get("id") != _bt_id] + [_bt_yeni]
+                    except (OSError, ValueError, TypeError, sqlite3.Error) as e:
+                        st.error("Arşive kaydedilemedi: " + str(e))
+        else:
+            st.info("Yeni kolon kaydı için önce 15 maçı analiz et. Eski kayıtları yine aşağıdan inceleyebilirsin.")
+
+        if _bt_kayitlar:
+            _bt_idx = st.selectbox("Arşivdeki kupon", range(len(_bt_kayitlar)),
+                format_func=lambda i: f"{_bt_kayitlar[i].get('kaydedildi', '')} · "
+                    f"{len(_bt_kayitlar[i].get('kolonlar', []))} kolon · "
+                    f"{_bt_kayitlar[i].get('id', '')}", key="st_bt_kupon_sec")
+            _bt_sec = _bt_kayitlar[_bt_idx]
+            _bt_maclar = _bt_sec.get("maclar", [])
+            _bt_kolonlar = _bt_sec.get("kolonlar", [])
+            if len(_bt_maclar) != 15 or not _bt_kolonlar or any(len(k) != 15 for k in _bt_kolonlar):
+                st.error("Bu arşiv kaydının 15 maç/kolon biçimi geçersiz.")
+            else:
+                _bt_satirlar = []
+                for i, m in enumerate(_bt_maclar):
+                    _bt_satirlar.append({"No": i + 1, "Maç": f"{m.get('ev')} - {m.get('dep')}",
+                                       "Skor": "", "Sonuç (1/0/2)": ""})
+                st.caption("Skorları 2-2 gibi yazabilir veya Sonuç sütununa doğrudan 1, 0, 2 girebilirsin. "
+                           "Boş maçlar doğru/yanlış sayılmaz.")
+                _bt_edit = st.data_editor(pd.DataFrame(_bt_satirlar), hide_index=True,
+                    use_container_width=True, num_rows="fixed",
+                    disabled=["No", "Maç"], key="st_bt_sonuc_" + _bt_sec["id"])
+                _bt_gercek = []
+                _bt_hatalar = []
+                for _, row in _bt_edit.iterrows():
+                    sonuc = str(row["Sonuç (1/0/2)"]).strip().upper()
+                    skor = str(row["Skor"]).strip()
+                    if skor and skor.lower() != "nan":
+                        match = re.fullmatch(r"(\d+)\s*[-:]\s*(\d+)", skor)
+                        if match:
+                            h, a = map(int, match.groups())
+                            skor_sonuc = "1" if h > a else "2" if h < a else "0"
+                            if sonuc in ("1", "0", "2", "X") and sonuc.replace("X", "0") != skor_sonuc:
+                                _bt_hatalar.append(f"{int(row['No'])}. maç: skor ve sonuç uyuşmuyor")
+                            sonuc = skor_sonuc
+                        else:
+                            _bt_hatalar.append(f"{int(row['No'])}. maç: skor biçimi hatalı")
+                    sonuc = "0" if sonuc == "X" else sonuc
+                    if sonuc and sonuc not in ("1", "0", "2"):
+                        _bt_hatalar.append(f"{int(row['No'])}. maç: sonuç geçersiz")
+                    _bt_gercek.append(sonuc if sonuc in ("1", "0", "2") else None)
+                if _bt_hatalar:
+                    st.error("; ".join(_bt_hatalar))
+                else:
+                    _bt_tamamlanan = sum(x is not None for x in _bt_gercek)
+                    st.write(f"**Sonuç girilen maç:** {_bt_tamamlanan}/15")
+                    _bt_ozet = []
+                    for k, kolon in enumerate(_bt_kolonlar, 1):
+                        dogru = sum((_bt_gercek[i] is not None and
+                                     str(sec).upper().replace("X", "0") == _bt_gercek[i])
+                                    for i, sec in enumerate(kolon))
+                        _bt_ozet.append({"Kolon": k, "Doğru": dogru,
+                                         "Yanlış": _bt_tamamlanan - dogru,
+                                         "Bekleyen": 15 - _bt_tamamlanan})
+                    st.dataframe(pd.DataFrame(_bt_ozet).sort_values(
+                        ["Doğru", "Kolon"], ascending=[False, True]),
+                        hide_index=True, use_container_width=True)
+                    if _bt_tamamlanan == 15:
+                        c1, c2, c3, c4 = st.columns(4)
+                        for col, n in zip((c1, c2, c3, c4), (12, 13, 14, 15)):
+                            col.metric(f"{n} bilen", sum(x["Doğru"] == n for x in _bt_ozet))
+                        st.success(f"En iyi kolon: {max(x['Doğru'] for x in _bt_ozet)}/15")
+                        _bt_hedef = st.selectbox("Hedef", [12, 13, 14, 15], key="st_bt_hedef")
+                        _bt_ilk = next((x["Kolon"] for x in sorted(_bt_ozet, key=lambda x: x["Kolon"])
+                                        if x["Doğru"] >= _bt_hedef), None)
+                        st.write(f"**En az {_bt_hedef} doğruya ulaşan ilk kolon:** " +
+                                 (str(_bt_ilk) if _bt_ilk else "Bu kayıtta yok"))
+                    else:
+                        st.info("Kesin 12–15 bilen sayıları için 15 maçın tüm sonuçlarını gir.")
+                    _bt_detay = []
+                    for i, m in enumerate(_bt_maclar):
+                        rr = {"No": i + 1, "Maç": f"{m.get('ev')} - {m.get('dep')}",
+                              "Gerçek": _bt_gercek[i] or "—"}
+                        for k, kolon in enumerate(_bt_kolonlar, 1):
+                            sec = str(kolon[i]).upper().replace("X", "0")
+                            rr[f"{k}. Kolon"] = sec + (" ✅" if _bt_gercek[i] == sec else
+                                                          " ❌" if _bt_gercek[i] else "")
+                        _bt_detay.append(rr)
+                    with st.expander("15 maç · kolon kolon karşılaştırma"):
+                        st.dataframe(pd.DataFrame(_bt_detay), hide_index=True, use_container_width=True)
+        else:
+            st.info("Henüz kayıtlı kolon yok. Maç başlamadan oluşturduğun kuponları arşivle.")
+        st.warning("Dürüst backtest için kolonların maçlar başlamadan kaydedilmiş olması gerekir. "
+                   "Sonuçlar bilindikten sonra oluşturulan kolonlar geçmiş tahmin başarısı sayılmaz.")
+
     legal_footer()
     st.stop()
 
