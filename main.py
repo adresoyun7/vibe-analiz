@@ -15070,6 +15070,34 @@ def takim_modeli_goster(gecmis_df, m, t):
 def detay_ana_icerik():
     item = secili_detay_itemi()
     m, t, b_det = item["m"], item["t"], item["b"]
+    # Eski kayıtlar / farklı analiz yolları tüm detay alanlarını üretmeyebilir.
+    # Sadece görünüm için yerel kopya kullan; model sonucunu değiştirme.
+    t = dict(t or {})
+    _detay_defaults = {
+        "ana_label": "Tahmin yok", "ana_p": 0, "eg": "-", "dg": "-",
+        "canli_label": "", "canli_p": 0, "flip_p": 0,
+        "goal_profile": {}, "guven_carpani": 1, "htft_mod": "", "htft_p": 0,
+        "iy05_p": 0, "iy05a_p": 0, "iy1_p": 0, "iy2_p": 0, "iyx_p": 0,
+        "kg_var_p": 0, "kg_yok_p": 0, "kullanilan_tolerans": 0,
+        "match_type": "", "ms1_p": 0, "ms25_p": 0, "ms25a_p": 0,
+        "ms2_p": 0, "ms35_p": 0, "msx_p": 0, "nedenler": [],
+        "onerilen_tolerans": 0, "tolerans_tavsiyesi": "",
+        "tolerans_yorumu": "",
+    }
+    for _key, _default in _detay_defaults.items():
+        if _key not in t:
+            t[_key] = _default
+    # Güven rozeti, varsa gerçek ana güven yüzdesinden yeniden türetilir.
+    try:
+        _detay_guven = float(t.get("ana_p") or 0)
+        if not math.isfinite(_detay_guven):
+            _detay_guven = 0
+    except (ValueError, TypeError):
+        _detay_guven = 0
+    _renk, _badge_cls, _badge_lbl = guven_renk(_detay_guven)
+    t.setdefault("guven_renk", _renk)
+    t.setdefault("guven_badge_cls", _badge_cls)
+    t.setdefault("guven_badge_lbl", _badge_lbl)
 
     durum_color, durum_text = mac_durum_badge(m["zaman"])
     _nl_market_mode = bool(t.get("nations_league_market_mode"))
