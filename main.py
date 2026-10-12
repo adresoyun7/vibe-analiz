@@ -529,6 +529,13 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
                                                      ms_belirsiz_ceza=ms_soft_penalty,
                                                      tol=tol, t=t, b=b, mk=candidate))
     result = []
+    _pool_signature_cache = {}
+    def _pool_signature(frame):
+        key = id(frame)
+        if key not in _pool_signature_cache:
+            cols = [c for c in ("Date", "league_code", "HomeTeam", "AwayTeam") if c in frame.columns]
+            _pool_signature_cache[key] = frozenset(pd.util.hash_pandas_object(frame[cols], index=False).tolist())
+        return _pool_signature_cache[key]
     for label, records in groups.items():
         supported = [r for r in records if r["guven"] > 60]
         if len(supported) < 3:
@@ -542,9 +549,7 @@ def birlesik_market_havuzu(b_df, m, min_ornek, sadece_ayni_lig=False,
         median = float(pd.Series([record["ornek"] for record in records]).median())
         effective_median = float(pd.Series([record["etkin"] for record in records]).median())
         ms_belirsiz_cezasi = float(pd.Series([record.get("ms_belirsiz_ceza", 0) for record in records]).median())
-        sample_keys = [frozenset(pd.util.hash_pandas_object(
-            record["b"][[column for column in ("Date", "league_code", "HomeTeam", "AwayTeam")
-                         if column in record["b"]]], index=False).tolist()) for record in records]
+        sample_keys = [_pool_signature(record["b"]) for record in records]
         unique_pools = len(set(sample_keys))
         unique_samples = len(frozenset().union(*sample_keys))
         supported_pools = [pool for record, pool in zip(records, sample_keys) if record["guven"] > 60]
@@ -8382,6 +8387,7 @@ def kupon_marketi_uygun(label):
     return bool(parcalar) and all(parca in izinli for parca in parcalar)
 
 
+@st.cache_data(ttl=600, max_entries=12, show_spinner=False)
 def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                          sadece_ayni_lig=False, kupon_modu=False,
                          kupon_profili=None, tum_marketler=False,
@@ -8389,8 +8395,9 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
     if gecmis_df is None or bulten_df is None or gecmis_df.empty or bulten_df.empty:
         return []
     adaylar = []
-    for _, m in bulten_df.iterrows():
-        scan = taramalar.get(mac_key(m.to_dict())) if taramalar is not None else None
+    for match_data in bulten_df.to_dict("records"):
+        m = pd.Series(match_data)
+        scan = taramalar.get(mac_key(match_data)) if taramalar is not None else None
         havuz = birlesik_market_havuzu(gecmis_df, m, min_ornek, sadece_ayni_lig,
                                       market_gecmis_kayitlari, ek_marketler=True,
                                       filtreler=filtreler, taramalar=scan)
@@ -8411,7 +8418,7 @@ def gunun_en_iyi_10_uret(gecmis_df, bulten_df, min_ornek=1, limit=10,
                      top10_market_oran=t["ana_odd"], top10_market_oran_tahmini=False,
                      top10_hassasiyetler=tols, top10_hassasiyet_sayisi=len(tols),
                      top10_stabilite_skoru=t["score"], top10_stabilite_orani=t["stability_pct"], hassasiyet_taramali=True)
-            match = m.to_dict()
+            match = dict(match_data)
             match["durum"] = mac_canli_durumu(match.get("zaman"))
             adaylar.append({"m": match, "t": t, "b": b,
                             "top10_tol": t["kullanilan_tolerans"], "top10_skor": t["score"], "top10_market": mk,
