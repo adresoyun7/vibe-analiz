@@ -15279,6 +15279,89 @@ def takim_modeli_goster(gecmis_df, m, t):
     st.caption("ℹ️ Takım Modeli oranlardan bağımsız izleme katmanıdır. Toplam şut seçeneği açıksa ve şut adayı daha güçlü ise Ana Tahmin yarışına katılabilir.")
 
 
+# FIX MA6: Maç Analizi tanı paneli. Tahmin/puan seçimini değiştirmez.
+# Backtest kalibrasyonu yalnızca mevcut sonuçları betimler; dış örnek doğrulaması değildir.
+def _ma6_kalibrasyon(bt, label, guven):
+    if not isinstance(bt, pd.DataFrame) or bt.empty or not {"Tahmin", "Güven", "Tuttu"}.issubset(bt.columns):
+        return None
+    try:
+        guven = float(guven)
+        if not math.isfinite(guven):
+            return None
+        data = bt.loc[bt["Tahmin"].astype(str) == str(label)].copy()
+        data["_g"] = pd.to_numeric(data["Güven"], errors="coerce")
+        # Yakın güven bandı; küçük örnekte yanıltıcı yüzde göstermemek için n>=20.
+        data = data.loc[(data["_g"] >= guven - 7.5) & (data["_g"] <= guven + 7.5)]
+        n = len(data)
+        if n < 20:
+            return {"n": n, "rate": None}
+        wins = int(data["Tuttu"].fillna(False).astype(bool).sum())
+        # Wilson %95 aralığı: az örnek belirsizliğini açıkça göster.
+        z = 1.96
+        q = wins / n
+        denom = 1 + z*z/n
+        center = (q + z*z/(2*n))/denom
+        half = z * math.sqrt(q*(1-q)/n + z*z/(4*n*n))/denom
+        return {"n": n, "rate": q*100, "low": max(0, (center-half)*100), "high": min(100, (center+half)*100)}
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _ma6_tani_paneli(m, t):
+    with st.expander("🔬 Gelişmiş Maç Analizi · 6 kontrol", expanded=False):
+        label = str(t.get("ana_label") or "")
+        confidence = t.get("ana_p", 0)
+        bt = st.session_state.get("backtest_df")
+        st.caption("Tanı amaçlıdır; model tahminini değiştirmez. Backtest verisi seçili sezon ve filtrelerle sınırlıdır.")
+        cal = _ma6_kalibrasyon(bt, label, confidence)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Model güveni", f"%{float(confidence or 0):.1f}")
+        if cal and cal.get("rate") is not None:
+            c2.metric("Benzer geçmiş başarı", f"%{cal['rate']:.1f}")
+            c3.metric("Karşılaştırma örneği", str(cal['n']))
+            st.caption(f"Aynı market ve ±7,5 güven puanı bandı · Wilson %95 aralık: %{cal['low']:.1f}–%{cal['high']:.1f}. Bu bağımsız kalibrasyon değildir.")
+        else:
+            c2.metric("Benzer geçmiş başarı", "Yetersiz veri")
+            c3.metric("Örnek", str(cal['n']) if cal else "—")
+            st.caption("Geçmiş başarı için aynı market/güven bandında en az 20 backtest kaydı gerekli.")
+        count = t.get("stability_count")
+        tols = t.get("stability_tols") or []
+        if isinstance(count, (int, float)) and (count > 0 or tols):
+            st.write(f"**11 hassasiyet uzlaşması:** {int(count)}/11 · {', '.join(map(str, tols)) or 'ayrıntı yok'}")
+        else:
+            st.info("11 hassasiyet uzlaşması ölçülmedi. Maç Analizi ayarlarından isteğe bağlı stabilite taramasını açıp analizi yenile.")
+        if isinstance(bt, pd.DataFrame) and not bt.empty and {"Tahmin", "Tuttu"}.issubset(bt.columns):
+            same = bt.loc[bt["Tahmin"].astype(str) == label]
+            if len(same):
+                hit = int(same["Tuttu"].fillna(False).astype(bool).sum())
+                st.write(f"**Market geçmişi:** {label} · {hit}/{len(same)} (%{hit/len(same)*100:.1f})")
+            else:
+                st.caption("Bu market için seçili backtestte kayıt yok.")
+        else:
+            st.caption("Market geçmişi için önce Backtest bölümünde test çalıştır.")
+        market = _piyasa_25_baglam_destegi(m, label)
+        if market.get("aktif"):
+            try:
+                modelp = float(confidence)
+                marketp = float(market["olasilik"])
+                st.write(f"**2.5 piyasa karşılaştırması:** model güven skoru %{modelp:.1f} · marjsız piyasa olasılığı %{marketp:.1f}")
+                st.caption("Güven skoru kalibre olasılık değildir; aradaki fark doğrudan değer avantajı sayılmaz.")
+                if abs(modelp - marketp) >= 15:
+                    st.warning("Model güveni ile piyasa olasılığı arasında büyük fark var; tahmin otomatik elenmedi.")
+            except (TypeError, ValueError):
+                pass
+        else:
+            st.caption("2.5 piyasa karşılaştırması için iki yönlü gerçek Alt/Üst oranı gerekir; bu markette veri yok.")
+        first = t.get("takip_ilk_tahmin")
+        last = label
+        if first:
+            st.write(f"**İlk → güncel tahmin:** {first} → {last}")
+            st.caption(f"İlk güven: %{float(t.get('takip_ilk_guven') or 0):.1f} · Güncel: %{float(confidence or 0):.1f}. Tam zaman serisi kayıtlı değilse ara değişimler gösterilemez.")
+        else:
+            st.caption("İlk tahmin kaydı bulunamadı; zamansal karşılaştırma mevcut değil.")
+        st.caption("⚡ Hız: Ağır geçmiş maç/H2H paneli mevcut 'Geçmişi Aç' düğmesine basılana kadar açılmaz. Bu tanı paneli de yalnızca açıldığında çizilir; 11 hassasiyet taraması isteğe bağlıdır.")
+
+
 def detay_ana_icerik():
     item = secili_detay_itemi()
     m, t, b_det = item["m"], item["t"], item["b"]
@@ -15373,6 +15456,8 @@ def detay_ana_icerik():
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    _ma6_tani_paneli(m, t)
 
     _det_degisim = str(t.get("takip_degisim_tipi", "") or "")
     if _det_degisim:
