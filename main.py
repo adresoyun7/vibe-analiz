@@ -12421,6 +12421,96 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 gor.append(satir)
             st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
 
+            # FIX43: Kolon optimizasyon karşılaştırması (yalnız maç öncesi dağılımlar).
+            # Gerçek maç sonuçları optimizasyona KESİNLİKLE dahil edilmez.
+            with st.expander("🧪 Kolon optimizasyon karşılaştırması", expanded=False):
+                st.caption("Mevcut kolonları, aynı sayıda ve aynı maç başına 1/X/2 adetlerini "
+                           "koruyan ortak optimizasyonla karşılaştırır. Monte Carlo yalnız model "
+                           "olasılıklarını kullanır; gerçek 15 maç sonucu kullanılmaz. "
+                           "Bunlar tahmini senaryo oranlarıdır, geçmiş başarı kanıtı değildir.")
+                _cmp_n = int(gosterilecek_kolon)
+                _cmp_labels = ('1', 'X', '2')
+                _cmp_base = [tuple(_goster_kolonlar[k][no] for no in mac_nolari)
+                             for k in range(1, _cmp_n + 1)]
+                _cmp_probs = []
+                for _r in tamam:
+                    _d = _r.get('spor_toto_dagilim') or {}
+                    _v = [max(0.0, float(_d.get(t, 0) or 0)) for t in _cmp_labels]
+                    _allow = _manuel_secimler.get(int(_r['no']))
+                    if _allow is not None:
+                        _v = [v if t in _allow else 0.0 for t, v in zip(_cmp_labels, _v)]
+                    _sum = sum(_v)
+                    if _sum <= 0:
+                        _v = [1.0 if (_allow is None or t in _allow) else 0.0 for t in _cmp_labels]
+                        _sum = sum(_v)
+                    _cmp_probs.append([v / _sum for v in _v])
+
+                def _cmp_run(base, probs, seed=20261013, draws=2400, steps=180):
+                    import numpy as np
+                    rng = np.random.default_rng(seed)
+                    n, m = len(base), len(probs)
+                    # Ortak senaryo örnekleri: her iki yöntem aynı çekilişlerle ölçülür.
+                    outcomes = np.column_stack([rng.choice(3, size=draws, p=p) for p in probs])
+                    enc = {'1': 0, 'X': 1, '2': 2}
+                    original = np.asarray([[enc[t] for t in row] for row in base], dtype=np.int8)
+                    candidate = original.copy()
+                    def measure(cols):
+                        hits = (outcomes[:, None, :] == cols[None, :, :]).sum(axis=2)
+                        best = hits.max(axis=1)
+                        # 12+ kapsaması öncelikli; 13/14/15 daha yüksek değerli.
+                        score = (best >= 12).mean() + 1.6*(best >= 13).mean() + 2.5*(best >= 14).mean() + 4*(best == 15).mean()
+                        return float(score), best
+                    best_score, _ = measure(candidate)
+                    # İlk kolon sabit, diğerleri arasında aynı maçın hücreleri takas edilir.
+                    # Bu nedenle her maçın 1/X/2 frekansları ve manuel izinler değişmez.
+                    for _ in range(steps):
+                        if n <= 2:
+                            break
+                        i = int(rng.integers(m))
+                        a, b = rng.choice(np.arange(1, n), size=2, replace=False)
+                        if candidate[a, i] == candidate[b, i]:
+                            continue
+                        candidate[a, i], candidate[b, i] = candidate[b, i], candidate[a, i]
+                        # Aynı kolonun iki kez üretilmesini engelle.
+                        if len({tuple(row) for row in candidate.tolist()}) < n:
+                            candidate[a, i], candidate[b, i] = candidate[b, i], candidate[a, i]
+                            continue
+                        score, _ = measure(candidate)
+                        if score > best_score + 1e-10:
+                            best_score = score
+                        else:
+                            candidate[a, i], candidate[b, i] = candidate[b, i], candidate[a, i]
+                    _, before = measure(original)
+                    _, after = measure(candidate)
+                    def summary(best):
+                        return {f'{threshold}+ doğru': round(100*float((best >= threshold).mean()), 2)
+                                for threshold in (12, 13, 14, 15)}
+                    return summary(before), summary(after), candidate
+
+                if st.button("Aynı bütçeyle iki yöntemi karşılaştır", key="st_fix43_compare"):
+                    if _cmp_n < 3:
+                        st.info("Ortak optimizasyon için en az 3 kolon seç.")
+                    else:
+                        with st.spinner("Aynı model senaryolarında karşılaştırılıyor..."):
+                            _old, _new, _optimized = _cmp_run(_cmp_base, _cmp_probs)
+                        st.dataframe(pd.DataFrame({"Ölçüt": list(_old),
+                            "Mevcut (%)": list(_old.values()), "Ortak optimizasyon (%)": list(_new.values())}),
+                            use_container_width=True, hide_index=True)
+                        st.caption("Bu sonuçlar 2.400 sabit tohumlu yapay senaryoda hesaplandı. "
+                                   "Gelecek maçların gerçek kazanma oranı veya kâr garantisi değildir. "
+                                   "Karşılaştırma için aynı senaryolar kullanıldı; "
+                                   "bağımsız geçmiş haftalarla ayrıca test edilmelidir.")
+                        _opt_table = []
+                        for _idx, _r in enumerate(tamam):
+                            _rr = {'#': _r['no'], 'Maç': f"{_r.get('ev','')} - {_r.get('dep','')}"}
+                            for _k in range(_cmp_n):
+                                _rr[f'{_k+1}. Kolon'] = _cmp_labels[int(_optimized[_k, _idx])]
+                            _opt_table.append(_rr)
+                        st.markdown("**Ortak optimizasyonun alternatif kolonları**")
+                        st.dataframe(pd.DataFrame(_opt_table), use_container_width=True, hide_index=True)
+                        st.info("Alternatif kolonlar karşılaştırma amaçlıdır; mevcut kupon oluşturma, "
+                                "arşivleme ve sistem kuponu değiştirilmedi.")
+
             # ----------------------------------------------------------
             # ALTERNATİF 2 · Bütçeye göre tek sistem kuponu
             # Mevcut dinamik kolon sistemi korunur. Bu ikinci seçenek, kullanıcının
