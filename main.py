@@ -16764,61 +16764,65 @@ else:
             )
             with st.popover("+ Kupona", use_container_width=True):
                 st.caption("Kupona eklenecek tercihi seç")
-                if st.button(
-                    f"Ana tercih · {t.get('ana_label', '-')}",
-                    key=f"k_ana_{real_i}_{i}",
-                    use_container_width=True,
-                ):
-                    manuel_kupona_ekle(
-                        m, t, t.get("ana_label", "-"), t.get("ana_p", 0),
-                        oran=t.get("ana_odd"), oran_tahmini=False,
-                    )
-                    st.rerun()
-                # FIX46: Birlikte gerçekleşme analizi; ham tarihsel oran model güveni değildir.
-                st.markdown("**Kombo karşılaştırması · geçmiş örnekler**")
-                _kombo_adaylari = [
-                    "MS 1 + Ev 1.5 Üst", "MS 1 + 2.5 Üst", "2.5 Üst + KG Var",
-                    "MS 2 + Dep 1.5 Üst", "MS 2 + 2.5 Üst",
-                ]
-                _kombo_b = item.get("b")
-                _kombo_b = _kombo_b if isinstance(_kombo_b, pd.DataFrame) else pd.DataFrame()
-                if _kombo_b.empty:
-                    st.caption("Bu maç için geçmiş örnek verisi bulunamadı.")
-                else:
-                    _kombo_sonuclar = []
-                    for _kl in _kombo_adaylari:
-                        _sonuclar = [tahmin_tuttu_mu(_kl, _r) for _, _r in _kombo_b.iterrows()]
-                        _gecerli = [v for v in _sonuclar if v is not None]
-                        if not _gecerli:
-                            continue
-                        _isabet = sum(bool(v) for v in _gecerli)
-                        _oran = market_label_to_odd(m, _kl)
-                        _kombo_sonuclar.append((_kl, _isabet, len(_gecerli), _oran))
-                    _kombo_sonuclar.sort(key=lambda x: (x[1] / x[2], x[2]), reverse=True)
-                    for _ki, (_kl, _isabet, _adet, _oran) in enumerate(_kombo_sonuclar):
-                        _ham = 100.0 * _isabet / _adet
-                        _oran_yazi = f" · Oran {_oran:.2f}" if isinstance(_oran, (int, float)) and math.isfinite(_oran) and _oran > 1 else " · Oran yok"
-                        st.caption(f"{_kl} · {_isabet}/{_adet} · %{_ham:.1f} ham başarı{_oran_yazi}")
-                        if st.button(f"+ Kupona ekle · {_kl}", key=f"fix46_combo_{real_i}_{i}_{_ki}",
-                                     disabled=not (isinstance(_oran, (int, float)) and math.isfinite(_oran) and _oran > 1),
-                                     use_container_width=True):
-                            manuel_kupona_ekle(m, t, _kl, round(_ham, 1), oran=_oran, oran_tahmini=False)
+                _market_b = item.get("b")
+                _market_b = _market_b if isinstance(_market_b, pd.DataFrame) else pd.DataFrame()
+                _ana_label = str(t.get("ana_label", "") or "")
+                _alt_label = str(t.get("alt_label", "") or "")
+                _combo_label = str(t.get("combo_label", "") or "") if t.get("combo_var") else ""
+                _gruplar = {
+                    "Ana tercih": [_ana_label] if _ana_label else [],
+                    "Alternatif": [_alt_label] if _alt_label and _alt_label != _ana_label else [],
+                    "Maç sonucu": ["MS 1", "Beraberlik", "MS 2"],
+                    "Toplam gol": ["0.5 Üst", "0.5 Alt", "1.5 Üst", "1.5 Alt",
+                                   "2.5 Üst", "2.5 Alt", "3.5 Üst", "3.5 Alt"],
+                    "Karşılıklı gol": ["KG Var", "KG Yok"],
+                    "Takım golü": ["Ev 1.5 Üst", "Dep 1.5 Üst"],
+                    "İlk yarı": ["İY 0.5 Üst", "İY 0.5 Alt", "İY 1.5 Üst", "İY 1.5 Alt",
+                                  "İY KG Var", "İY KG Yok"],
+                    "İlk yarı / maç sonucu": [f"HT/FT {a}/{b}" for a in ("1", "X", "2") for b in ("1", "X", "2")],
+                    "Kombolar": ["MS 1 + Ev 1.5 Üst", "MS 1 + 2.5 Üst", "2.5 Üst + KG Var",
+                                 "MS 2 + Dep 1.5 Üst", "MS 2 + 2.5 Üst"],
+                }
+                if _combo_label and _combo_label not in _gruplar["Kombolar"]:
+                    _gruplar["Kombolar"].insert(0, _combo_label)
+
+                _secim_grubu = st.selectbox(
+                    "Market grubu", list(_gruplar), key=f"fix47_group_{real_i}_{i}",
+                )
+                _etiketler = list(dict.fromkeys(_gruplar[_secim_grubu]))
+                if not _etiketler:
+                    st.info("Bu maçta bu grupta öneri bulunmuyor.")
+                for _ki, _etiket in enumerate(_etiketler):
+                    _oran = market_label_to_odd(m, _etiket)
+                    _oran_gecerli = isinstance(_oran, (int, float)) and math.isfinite(_oran) and _oran > 1
+                    _sonuclar = ([tahmin_tuttu_mu(_etiket, _r) for _, _r in _market_b.iterrows()]
+                                 if not _market_b.empty else [])
+                    _gecerli = [v for v in _sonuclar if v is not None]
+                    _isabet = sum(bool(v) for v in _gecerli)
+                    _ham = 100.0 * _isabet / len(_gecerli) if _gecerli else None
+                    _guven = (t.get("ana_p", 0) if _etiket == _ana_label else
+                              t.get("alt_p", 0) if _etiket == _alt_label else
+                              t.get("combo_p", 0) if _etiket == _combo_label else 0)
+                    _detaylar = [f"Oran: {_oran:.2f}" if _oran_gecerli else "Oran eksik"]
+                    if _ham is not None:
+                        _detaylar.append(f"Geçmiş: {_isabet}/{len(_gecerli)} (%{_ham:.1f})")
+                    if _etiket in (_ana_label, _alt_label, _combo_label) and _guven:
+                        _detaylar.append(f"Model güveni: %{float(_guven):.0f}")
+                    st.caption(f"**{_etiket}** · " + " · ".join(_detaylar))
+                    if st.button(f"+ Kupona ekle · {_etiket}",
+                                 key=f"fix47_add_{real_i}_{i}_{_secim_grubu}_{_ki}",
+                                 use_container_width=True):
+                        # Ham geçmiş oranını kalibre edilmiş güven gibi kaydetme.
+                        _kayit_guveni = _guven if _etiket in (_ana_label, _alt_label, _combo_label) else 0
+                        _eklendi = manuel_kupona_ekle(
+                            m, t, _etiket, _kayit_guveni,
+                            oran=_oran if _oran_gecerli else None, oran_tahmini=False,
+                        )
+                        if _eklendi:
                             st.rerun()
-                    st.caption("Ham başarı, seçilmiş geçmiş örneklerin oranıdır; kalibre edilmiş güven değildir. Oranı olmayan seçim eklenmez.")
-                combo_uygun = bool(t.get("combo_var") and t.get("combo_label"))
-                combo_label = str(t.get("combo_label", "Kombo bulunamadı"))
-                if st.button(
-                    f"Kombo · {combo_label}",
-                    key=f"k_kombo_{real_i}_{i}",
-                    use_container_width=True,
-                    disabled=not combo_uygun,
-                ):
-                    combo_oran = market_label_to_odd(m, combo_label)
-                    manuel_kupona_ekle(
-                        m, t, combo_label, t.get("combo_p", 0),
-                        oran=combo_oran, oran_tahmini=False,
-                    )
-                    st.rerun()
+                        else:
+                            st.warning("Bu maç ve tercih kuponda zaten bulunuyor.")
+                st.caption("Geçmiş başarı model güveni değildir. Oranı eksik marketler kupona eklenebilir; toplam oran hesabında eksik olarak gösterilmelidir.")
 
     kupon_mesaji = None
     def _secim_hassasiyetleri(secim):
