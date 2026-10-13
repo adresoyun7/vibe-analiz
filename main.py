@@ -5191,8 +5191,8 @@ def manuel_kupona_ekle(m, t, tahmin, guven, oran=None, oran_tahmini=False):
     coupon_item["model_version"] = MODEL_VERSION
     coupon_item = kupon_secimlerini_tamamla([coupon_item])[0]
     st.session_state.kupona.append(coupon_item)
-    st.session_state.coupon_popup_open = True
-    st.session_state.scroll_to_coupon = True
+    # FIX48: Kupona eklemek Kuponlarım kartını kendiliğinden açmaz.
+    # Mevcut açık/kapalı durumunu ve kullanıcının kaydırma konumunu koru.
     return True
 
 
@@ -16819,7 +16819,7 @@ else:
                             oran=_oran if _oran_gecerli else None, oran_tahmini=False,
                         )
                         if _eklendi:
-                            st.rerun()
+                            st.toast("Seçim kupona eklendi.")
                         else:
                             st.warning("Bu maç ve tercih kuponda zaten bulunuyor.")
                 st.caption("Geçmiş başarı model güveni değildir. Oranı eksik marketler kupona eklenebilir; toplam oran hesabında eksik olarak gösterilmelidir.")
@@ -17069,9 +17069,7 @@ else:
                                     )
                                     if imza not in mevcutlar:
                                         st.session_state.kupona.append(coupon_item)
-                                        st.session_state.coupon_popup_open = True
-                                        st.session_state.scroll_to_coupon = True
-                                        st.rerun()
+                                        st.toast("Seçim kupona eklendi.")
                                     else:
                                         st.toast("Bu seçim zaten Kendi Kuponum'da.")
 
