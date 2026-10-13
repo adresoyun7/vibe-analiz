@@ -17499,4 +17499,74 @@ else:
             st.session_state.coupon_popup_open = False
             st.rerun()
 
+
+
+# FIX44 — Her sekmede görünen sağ-alt sabit, açılır/kapanır kupon çekmecesi.
+# st.popover, Streamlit widget'larını ana uygulama oturumuyla paylaşır.
+def sabit_kupon_cekmecesi():
+    st.markdown("""
+    <style>
+    .st-key-fix44_floating_coupon {
+        position: fixed !important;
+        right: 18px !important;
+        bottom: 18px !important;
+        z-index: 999990 !important;
+        width: min(245px, calc(100vw - 28px)) !important;
+        background: #303b42 !important;
+        border: 1px solid #52616b !important;
+        border-radius: 10px !important;
+        padding: 6px !important;
+        box-shadow: 0 8px 30px rgba(0,0,0,.38) !important;
+    }
+    .st-key-fix44_floating_coupon [data-testid="stPopover"] > button {
+        width: 100% !important;
+        background: #303b42 !important;
+        color: #fff !important;
+        border: 0 !important;
+        font-weight: 700 !important;
+        justify-content: space-between !important;
+    }
+    @media(max-width: 640px) {
+        .st-key-fix44_floating_coupon { right: 9px !important; bottom: 9px !important; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    with st.container(key="fix44_floating_coupon"):
+        secimler = [x for x in st.session_state.get("kupona", []) if isinstance(x, dict)]
+        toplam = 1.0
+        eksik = 0
+        for secim in secimler:
+            try:
+                oran = float(secim.get("oran"))
+                if math.isfinite(oran) and oran > 1:
+                    toplam *= oran
+                else:
+                    eksik += 1
+            except (ValueError, TypeError):
+                eksik += 1
+        oran_text = f"{toplam:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".") if secimler and not eksik else "—"
+        with st.popover(f"🎫 Kuponum · {len(secimler)} maç · {oran_text}", use_container_width=True):
+            st.markdown("**Kuponum**")
+            st.caption(f"{len(secimler)} maç · Toplam oran: {oran_text}" + (" · Eksik oran var" if eksik else ""))
+            if not secimler:
+                st.info("Henüz kupona maç eklenmedi.")
+            for index, secim in enumerate(list(secimler)):
+                a, b = st.columns([5, 1], gap="small")
+                with a:
+                    st.markdown(f"**{escape(str(secim.get('ev','')))} – {escape(str(secim.get('dep','')))}**")
+                    st.caption(f"{escape(str(secim.get('tahmin','-')))} · {escape(str(secim.get('zaman_text','')))} · {secim.get('oran') or 'Oran yok'}")
+                with b:
+                    if st.button("✕", key=f"fix44_remove_{index}", help="Kupondan çıkar"):
+                        # Liste başka bir bölümce değiştirilmiş olsa bile aynı kaydı hedefle.
+                        current = st.session_state.get("kupona", [])
+                        if secim in current:
+                            current.remove(secim)
+                        st.rerun()
+            if secimler and st.button("Kuponu temizle", key="fix44_clear", use_container_width=True):
+                st.session_state.kupona = []
+                st.rerun()
+
+
+sabit_kupon_cekmecesi()
+
 legal_footer()
