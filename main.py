@@ -16774,6 +16774,37 @@ else:
                         oran=t.get("ana_odd"), oran_tahmini=False,
                     )
                     st.rerun()
+                # FIX46: Birlikte gerçekleşme analizi; ham tarihsel oran model güveni değildir.
+                st.markdown("**Kombo karşılaştırması · geçmiş örnekler**")
+                _kombo_adaylari = [
+                    "MS 1 + Ev 1.5 Üst", "MS 1 + 2.5 Üst", "2.5 Üst + KG Var",
+                    "MS 2 + Dep 1.5 Üst", "MS 2 + 2.5 Üst",
+                ]
+                _kombo_b = item.get("b")
+                _kombo_b = _kombo_b if isinstance(_kombo_b, pd.DataFrame) else pd.DataFrame()
+                if _kombo_b.empty:
+                    st.caption("Bu maç için geçmiş örnek verisi bulunamadı.")
+                else:
+                    _kombo_sonuclar = []
+                    for _kl in _kombo_adaylari:
+                        _sonuclar = [tahmin_tuttu_mu(_kl, _r) for _, _r in _kombo_b.iterrows()]
+                        _gecerli = [v for v in _sonuclar if v is not None]
+                        if not _gecerli:
+                            continue
+                        _isabet = sum(bool(v) for v in _gecerli)
+                        _oran = market_label_to_odd(m, _kl)
+                        _kombo_sonuclar.append((_kl, _isabet, len(_gecerli), _oran))
+                    _kombo_sonuclar.sort(key=lambda x: (x[1] / x[2], x[2]), reverse=True)
+                    for _ki, (_kl, _isabet, _adet, _oran) in enumerate(_kombo_sonuclar):
+                        _ham = 100.0 * _isabet / _adet
+                        _oran_yazi = f" · Oran {_oran:.2f}" if isinstance(_oran, (int, float)) and math.isfinite(_oran) and _oran > 1 else " · Oran yok"
+                        st.caption(f"{_kl} · {_isabet}/{_adet} · %{_ham:.1f} ham başarı{_oran_yazi}")
+                        if st.button(f"+ Kupona ekle · {_kl}", key=f"fix46_combo_{real_i}_{i}_{_ki}",
+                                     disabled=not (isinstance(_oran, (int, float)) and math.isfinite(_oran) and _oran > 1),
+                                     use_container_width=True):
+                            manuel_kupona_ekle(m, t, _kl, round(_ham, 1), oran=_oran, oran_tahmini=False)
+                            st.rerun()
+                    st.caption("Ham başarı, seçilmiş geçmiş örneklerin oranıdır; kalibre edilmiş güven değildir. Oranı olmayan seçim eklenmez.")
                 combo_uygun = bool(t.get("combo_var") and t.get("combo_label"))
                 combo_label = str(t.get("combo_label", "Kombo bulunamadı"))
                 if st.button(
