@@ -11729,6 +11729,31 @@ def _spor_toto_kodlari_akilli(api_key, normal_kodlar, spor_maclar):
     return _spor_toto_api_kodlari(api_key, normal_kodlar)
 
 
+# FIX61: Spor Toto kuponu, Maç Analizi ekranındaki seçili liglerle sınırlanamaz.
+# Listede yer alan kulüplerin liglerini mutlaka sorgula; aktif olmayan API
+# sport key'leri için sonuç uydurma, gerçek API hata/kapsam bilgisini göster.
+def _spor_toto_zorunlu_ligler(spor_maclar):
+    turkiye = {"corum", "rizespor", "erzurumspor", "eyupspor", "amedspor", "konyaspor",
+               "genclerbirligi", "galatasaray", "fenerbahce", "alanyaspor", "kasimpasa",
+               "samsunspor", "kocaelispor", "goztepe", "basaksehir", "gaziantep",
+               "trabzonspor", "besiktas"}
+    ingiltere = {"everton", "chelsea", "brentford", "liverpool", "arsenal", "manchester"}
+    ispanya = {"betis", "barcelona", "realmadrid", "sevilla"}
+    italya = {"milan", "atalanta", "juventus", "lazio"}
+    groups = ((turkiye, "soccer_turkey_super_league"),
+              (ingiltere, "soccer_epl"),
+              (ispanya, "soccer_spain_la_liga"),
+              (italya, "soccer_italy_serie_a"))
+    required = []
+    for mac in spor_maclar:
+        names = (takim_anahtari(mac.get("ev", "")), takim_anahtari(mac.get("dep", "")))
+        for words, key in groups:
+            if any(any(word in name for word in words) for name in names):
+                if key not in required:
+                    required.append(key)
+    return required
+
+
 if spor_toto_btn:
     spor_maclar = _spor_toto_satirlari_parse(st.session_state.get('spor_toto_metin', ''))
     if len(spor_maclar) != 15:
@@ -11738,13 +11763,31 @@ if spor_toto_btn:
     elif len(spor_maclar) == 15:
         with st.spinner("⚽ Spor Toto maçları bültenle eşleştiriliyor ve 11 hassasiyet taranıyor..."):
             gecmis_st = futbol_veri_motoru(tuple(yillar))
-            spor_toto_kodlari = _spor_toto_kodlari_akilli(API_KEY, secili_kodlar, spor_maclar)
+            spor_toto_kodlari = list(dict.fromkeys(
+                _spor_toto_kodlari_akilli(API_KEY, secili_kodlar, spor_maclar)
+                + _spor_toto_zorunlu_ligler(spor_maclar)
+            ))
             st.session_state["spor_toto_kullanilan_sport_keys"] = list(spor_toto_kodlari)
             tarih_bultenleri = []
+            _st_api_teshis = []
             for gun in sorted({x["zaman"].date() for x in spor_maclar}):
                 df_gun = bulten_saglam_al(API_KEY, spor_toto_kodlari, gun)
+                _gun_hata = str(st.session_state.get("odds_api_last_error") or "")
+                for _kod in spor_toto_kodlari:
+                    _kayit = st.session_state.get("odds_league_cache", {}).get(
+                        odds_cache_key(_kod, gun, API_KEY), {})
+                    _parca = _kayit.get("df")
+                    _adet = (int(len(_parca)) if isinstance(_parca, pd.DataFrame) else 0)
+                    _st_api_teshis.append({
+                        "Tarih": gun.strftime("%d.%m.%Y"), "API lig kodu": _kod,
+                        "Oranlı maç": _adet,
+                        "Durum": (str(_kayit.get("error")) if _kayit.get("error") else
+                                  "API yanıtı alınamadı" if not _kayit.get("success") else
+                                  "Bu tarihte oranlı maç yok" if _adet == 0 else "Veri alındı"),
+                    })
                 if isinstance(df_gun, pd.DataFrame) and not df_gun.empty:
                     tarih_bultenleri.append(df_gun)
+            st.session_state["spor_toto_api_teshis"] = _st_api_teshis
             st_bulten = pd.concat(tarih_bultenleri, ignore_index=True) if tarih_bultenleri else pd.DataFrame()
             if not st_bulten.empty and all(c in st_bulten.columns for c in ["ev", "dep", "zaman"]):
                 st_bulten = st_bulten.drop_duplicates(subset=["ev", "dep", "zaman"])
@@ -11792,6 +11835,13 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
     _st_keys = st.session_state.get("spor_toto_kullanilan_sport_keys", [])
     if _st_keys:
         st.caption("Spor Toto API kapsamı: " + ", ".join(_st_keys))
+    _st_api_rows = st.session_state.get("spor_toto_api_teshis", [])
+    if _st_api_rows:
+        with st.expander("📡 API lig/tarih kontrolü (gerçek çekilen veri)", expanded=True):
+            st.caption("Her lig ve tarih için gelen oranlı maç sayısı. Sıfır, maçın kesinlikle oynanmayacağı anlamına gelmez; API'de henüz oran olmayabilir.")
+            st.dataframe(pd.DataFrame(_st_api_rows), use_container_width=True, hide_index=True)
+            if not any(int(x.get("Oranlı maç", 0)) > 0 for x in _st_api_rows):
+                st.warning("Seçilen tarihlerde sorgulanan liglerden oranlı karşılaşma gelmedi. API erişimini, kota ve lig kapsamını kontrol et.")
     _st_sonuclar = st.session_state.get('spor_toto_sonuclar', [])
     if not _st_sonuclar:
         st.info("15 maçı kontrol ettikten sonra **⚽ SPOR TOTO ANALİZ ET** butonuna bas.")
