@@ -13250,38 +13250,49 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                               tuple(yillar), bool(gecmis_ayni_lig))).encode('utf-8')
                     ).hexdigest()[:18]
                     fix49_secim_key = f"fix49_tol_{fix49_mac_kimlik}"
-                    fix49_seviyeler = [round(i / 100, 2) for i in range(11)]
-                    if fix49_secim_key not in st.session_state:
-                        st.session_state[fix49_secim_key] = min(
-                            fix49_seviyeler, key=lambda x: abs(x - float(TOLERANS))
+                    # FIX52: Bu maç için geniş havuzdan örneği olan seviyeleri bul.
+                    # Yalnızca bir kere 0.10 havuzu alınır; diğer seviyeler API çağrısı yapmaz.
+                    fix49_cache = st.session_state.setdefault('fix49_genis_havuzlar', {})
+                    if fix49_mac_kimlik not in fix49_cache:
+                        fix49_kaynak = futbol_veri_motoru(tuple(yillar))
+                        fix49_cache[fix49_mac_kimlik] = gecmis_ornekleri_bul(
+                            fix49_kaynak, pd.Series(dict(m)), 0.10,
+                            sadece_ayni_lig=bool(gecmis_ayni_lig), limit=100000,
                         )
-                    fix49_tol = st.select_slider(
-                        "Bu maçta hızlı hassasiyet",
-                        options=fix49_seviyeler,
-                        key=fix49_secim_key,
-                        format_func=lambda x: f"{x:.2f}",
-                        help="Yalnızca bu maçın geçmiş örneklerini değiştirir; genel hassasiyet ve diğer maçlar sabit kalır.",
-                    )
-                    if abs(float(fix49_tol) - float(TOLERANS)) > 1e-8:
-                        fix49_cache = st.session_state.setdefault('fix49_genis_havuzlar', {})
-                        if fix49_mac_kimlik not in fix49_cache:
-                            fix49_kaynak = futbol_veri_motoru(tuple(yillar))
-                            fix49_cache[fix49_mac_kimlik] = gecmis_ornekleri_bul(
-                                fix49_kaynak, pd.Series(dict(m)), 0.10,
-                                sadece_ayni_lig=bool(gecmis_ayni_lig), limit=100000,
+                        while len(fix49_cache) > 30:
+                            fix49_cache.pop(next(iter(fix49_cache)))
+                    fix49_genis = fix49_cache[fix49_mac_kimlik]
+                    fix49_seviyeler = [round(i / 100, 2) for i in range(11)]
+                    fix52_havuzlar = {}
+                    if fix49_genis is not None and not fix49_genis.empty:
+                        for _seviye in fix49_seviyeler:
+                            _mask = oran_eslesme_maskesi(fix49_genis, m, _seviye)
+                            _eslesen = fix49_genis.loc[_mask]
+                            if not _eslesen.empty:
+                                fix52_havuzlar[_seviye] = _eslesen
+                    fix52_mevcut = list(fix52_havuzlar)
+                    if fix52_mevcut:
+                        # Önceki seçim artık geçerli değilse en yakın mevcut seviyeye geç.
+                        _onceki = st.session_state.get(fix49_secim_key, float(TOLERANS))
+                        if _onceki not in fix52_mevcut:
+                            st.session_state[fix49_secim_key] = min(
+                                fix52_mevcut, key=lambda x: (abs(x - float(_onceki)), x)
                             )
-                            # Uzun oturumlarda eski maçların RAM kullanımını sınırla.
-                            while len(fix49_cache) > 30:
-                                fix49_cache.pop(next(iter(fix49_cache)))
-                        fix49_genis = fix49_cache[fix49_mac_kimlik]
-                        if fix49_genis is None or fix49_genis.empty:
-                            ornekler = pd.DataFrame()
-                        else:
-                            ornekler = fix49_genis.loc[
-                                oran_eslesme_maskesi(fix49_genis, m, fix49_tol)
-                            ].copy()
-                            if gecmis_limit is not None and str(gecmis_limit).isdigit():
-                                ornekler = ornekler.head(int(gecmis_limit))
+                        fix49_tol = st.select_slider(
+                            "Bu maçta hızlı hassasiyet",
+                            options=fix52_mevcut,
+                            key=fix49_secim_key,
+                            format_func=lambda x: f"{x:.2f} ({len(fix52_havuzlar[x])} örnek)",
+                            help="Sadece geçmiş örneği bulunan hassasiyetler listelenir. Diğer maçlar değişmez.",
+                        )
+                        ornekler = fix52_havuzlar[fix49_tol].copy()
+                        if gecmis_limit is not None and str(gecmis_limit).isdigit():
+                            ornekler = ornekler.head(int(gecmis_limit))
+                        st.caption("Örneği olmayan hassasiyetler seçimden çıkarıldı.")
+                    else:
+                        fix49_tol = float(TOLERANS)
+                        ornekler = pd.DataFrame()
+                        st.info("Bu maç için 0.00–0.10 arasında geçmiş örnek bulunan hassasiyet yok.")
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
                         f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f}"
