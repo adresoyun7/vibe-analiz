@@ -12829,6 +12829,17 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
     legal_footer()
     st.stop()
 
+# FIX57: Geçmiş Örnekleri daha önce yüklendiyse genel hassasiyetin
+# değişmesi, ÖRNEKLERİ GETİR düğmesine gerek kalmadan yeniden arama yapar.
+# Diğer widget rerun'larında gereksiz API isteği oluşmaz.
+if st.session_state.get("sayfa_modu") == "Geçmiş Örnekleri":
+    _fix57_onceki_tol = st.session_state.get("gecmis_aranan_tolerans")
+    _fix57_mevcut_liste = st.session_state.get("gecmis_inceleme_list")
+    if (_fix57_onceki_tol is not None
+            and _fix57_mevcut_liste is not None
+            and abs(float(_fix57_onceki_tol) - float(TOLERANS)) > 1e-9):
+        gecmis_btn = True
+
 if gecmis_btn:
     # FIX50: Yeni arama eski maç-bazlı hassasiyet seçimlerini sıfırlar.
     for _fix50_key in list(st.session_state.keys()):
