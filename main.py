@@ -13282,10 +13282,10 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             "Bu maçta hızlı hassasiyet",
                             options=fix52_mevcut,
                             key=fix49_secim_key,
-                            format_func=lambda x: f"{x:.2f} ({len(fix52_havuzlar[x])} örnek)",
+                            format_func=lambda x: f"{float(x):.2f} ({len(fix52_havuzlar.get(round(float(x), 2), []))} örnek)",
                             help="Sadece geçmiş örneği bulunan hassasiyetler listelenir. Diğer maçlar değişmez.",
                         )
-                        ornekler = fix52_havuzlar[fix49_tol].copy()
+                        ornekler = fix52_havuzlar.get(round(float(fix49_tol), 2), pd.DataFrame()).copy()
                         if gecmis_limit is not None and str(gecmis_limit).isdigit():
                             ornekler = ornekler.head(int(gecmis_limit))
                         st.caption("Örneği olmayan hassasiyetler seçimden çıkarıldı.")
