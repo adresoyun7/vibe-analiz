@@ -10238,7 +10238,10 @@ def clear_detail_and_rebuild_top_markets():
         if gecmis is not None and bulten is not None and not getattr(gecmis, "empty", True) and not getattr(bulten, "empty", True):
             ayni_lig = bool(st.session_state.get("sadece_ayni_lig", False))
             st.session_state.top50_list = gunun_en_iyi_10_uret(
-                gecmis, bulten, min_ornek=min_ornek_val, limit=50, sadece_ayni_lig=ayni_lig
+                gecmis, bulten, min_ornek=min_ornek_val, limit=50, sadece_ayni_lig=ayni_lig,
+                filtreler={k: st.session_state.get(k, True) for k in (
+                    "top10_filter_ms", "top10_filter_25", "top10_filter_kg",
+                    "top10_filter_iy15", "top10_filter_combo")},
             )
     except Exception:
         # Filtre değişimi UI'ı bozmasın; gerekirse kullanıcı Analizi Başlat ile yeniden üretir.
@@ -14923,7 +14926,12 @@ if analiz_btn:
                 _sayac_gecen += 1
 
         if st.session_state.get("sayfa_modu") == "Top 50 Market":
-            final = gunun_en_iyi_10_uret(gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig)
+            final = gunun_en_iyi_10_uret(
+                gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig,
+                filtreler={k: st.session_state.get(k, True) for k in (
+                    "top10_filter_ms", "top10_filter_25", "top10_filter_kg",
+                    "top10_filter_iy15", "top10_filter_combo")},
+            )
             final = [item for item in final if int(item["t"]["ana_p"]) >= int(oynanabilir_esik or 0)]
             _sayac_toplam, _sayac_gecen = len(bulten), len(final)
         elif _ilk_ana_registry_degisti:
@@ -16143,6 +16151,24 @@ else:
     top_baslik = "🔥 TOP 50 MARKET"
 
     if aktif_sayfa_modu == "Top 50 Market":
+        # FIX60: Önbellekten veya önceki analizden kalan kartlar da güncel filtreyi aşamasın.
+        # Ana market etiketine göre filtrele; alternatif marketler kartı kurtarmaz.
+        def _fix60_top_market_aktif(item):
+            t = item.get("t", {})
+            label = str(t.get("top10_market_label") or t.get("ana_label") or "").strip()
+            if label in ("MS 1", "MS 2", "MS X", "MS1", "MS2", "MSX", "Beraberlik"):
+                return bool(st.session_state.get("top10_filter_ms", True))
+            if "+" in label or label.startswith("HT/FT"):
+                return bool(st.session_state.get("top10_filter_combo", True))
+            if label in ("İY 1.5 Üst", "İY KG Var", "İY KG Yok"):
+                return bool(st.session_state.get("top10_filter_iy15", True))
+            if "KG" in label:
+                return bool(st.session_state.get("top10_filter_kg", True))
+            if "Üst" in label or "Alt" in label or "2.5" in label:
+                return bool(st.session_state.get("top10_filter_25", True))
+            return True
+
+        gunun_top_liste = [item for item in gunun_top_liste if _fix60_top_market_aktif(item)]
         if gunun_top_liste:
             st.markdown(f"""<div class="list-heading">{top_baslik}</div>""", unsafe_allow_html=True)
             st.markdown(
@@ -16226,7 +16252,7 @@ else:
                         st.rerun()
             st.markdown("<br>", unsafe_allow_html=True)
         else:
-            st.info(f"{top_baslik} listesi için önce analizi başlatmalısın.")
+            st.info("Seçili market filtrelerine uygun Top 50 tahmini bulunamadı. Filtreleri açabilir veya analizi yeniden başlatabilirsin.")
         st.stop()
 
     fc1, fc2, fc3, fc4 = st.columns(4)
