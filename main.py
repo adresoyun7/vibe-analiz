@@ -16292,15 +16292,15 @@ else:
             on_change=_mac_analizi_oran_filtresi_degisti,
         )
 
-    # FIX58: Maç Analizi kartındaki oran kutularını kullanıcı seçer.
-    # Sadece görünüm filtresi: tahmin motoru, kuponlar ve maç listesi değişmez.
+    # FIX59: Maç Analizi ana tahmin marketine göre kartları filtrele.
+    # Tahmin motorunu değiştirme; yalnızca hesaplanan ana tahmin etiketini kontrol et.
     if aktif_sayfa_modu == "Maç Analizi":
         mac_kart_marketleri = st.multiselect(
-            "Kartta gösterilecek marketler",
+            "Ana tahmine göre gösterilecek marketler",
             options=["MS (1-X-2)", "Alt/Üst 2.5", "KG"],
             default=["MS (1-X-2)", "Alt/Üst 2.5", "KG"],
             key="fix58_mac_kart_marketleri",
-            help="Örneğin yalnızca KG ve Alt/Üst seçerek diğer oran kutularını gizleyebilirsin. Hesaplamalar etkilenmez.",
+            help="Yalnızca ana tahmini seçilen marketlerden olan maçlar gösterilir. Alternatif tahminler filtreye dahil edilmez.",
         )
     else:
         mac_kart_marketleri = ["MS (1-X-2)", "Alt/Üst 2.5", "KG"]
@@ -16403,6 +16403,20 @@ else:
         if _secim_pair is not None:
             _filtrelenmis_goster.append(_secim_pair)
     goster = _filtrelenmis_goster
+
+    # FIX59: Filtre, minimum oran filtresi sonrası kartta gösterilen gerçek ana tahmine uygulanır.
+    # Alternatif / kombo tahmini uygun diye bir maç bu filtreden geçemez.
+    if aktif_sayfa_modu == "Maç Analizi":
+        def _fix59_ana_market_uygun(pair):
+            tahmin = str(pair[1]["t"].get("ana_label", "") or "").strip()
+            if tahmin in {"MS 1", "MS 2", "Beraberlik"}:
+                return "MS (1-X-2)" in mac_kart_marketleri
+            if tahmin in {"2.5 Üst", "2.5 Alt"}:
+                return "Alt/Üst 2.5" in mac_kart_marketleri
+            if tahmin in {"KG Var", "KG Yok"}:
+                return "KG" in mac_kart_marketleri
+            return False
+        goster = [pair for pair in goster if _fix59_ana_market_uygun(pair)]
 
     def _mac_analizi_siralama_anahtari(pair):
         t = pair[1]["t"]
@@ -16759,19 +16773,14 @@ else:
                 _shot_html = (f'<div style="margin-top:6px;font-size:.69rem;color:#64748b">'
                               f'🎯 Şut tahmini: {escape(str(_shot.get("neden","yeterli veri yok")))}{_shot_diag}</div>')
 
-        # FIX58: Oran kutuları tek bir görünüm filtresinden üretilir.
-        _fix58_oran_kutulari = []
-        if "MS (1-X-2)" in mac_kart_marketleri:
-            _fix58_oran_kutulari.extend([
-                f'<div class="oran-box"><div class="ov">1</div><div class="val">{m["h"]:.2f}</div></div>',
-                f'<div class="oran-box"><div class="ov">X</div><div class="val">{m["b"]:.2f}</div></div>',
-                f'<div class="oran-box"><div class="ov">2</div><div class="val">{m["a"]:.2f}</div></div>',
-            ])
-        if "Alt/Üst 2.5" in mac_kart_marketleri:
-            _fix58_oran_kutulari.append(f'<div class="oran-box"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>')
-        if "KG" in mac_kart_marketleri:
-            _fix58_oran_kutulari.append(f'<div class="oran-box"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>')
-        _fix58_oran_html = "".join(_fix58_oran_kutulari) if _fix58_oran_kutulari else '<span class="mk-mini">Gösterilecek market seçilmedi</span>'
+        # FIX59: Kartın oran kutularını gizleme; yalnızca ana tahmine göre maç ele.
+        _fix58_oran_html = (
+            f'<div class="oran-box"><div class="ov">1</div><div class="val">{m["h"]:.2f}</div></div>'
+            f'<div class="oran-box"><div class="ov">X</div><div class="val">{m["b"]:.2f}</div></div>'
+            f'<div class="oran-box"><div class="ov">2</div><div class="val">{m["a"]:.2f}</div></div>'
+            f'<div class="oran-box"><div class="ov">{_ou_label}</div><div class="val">{_ou_oran_txt}</div></div>'
+            f'<div class="oran-box"><div class="ov">{_kg_label}</div><div class="val">{_kg_oran_txt}</div></div>'
+        )
 
         kc, bc = st.columns([9, 1.4])
         with kc:
