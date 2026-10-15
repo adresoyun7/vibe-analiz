@@ -10459,6 +10459,22 @@ with st.container(key="sticky_analysis_controls"):
                 st.session_state.get("special_date", bugun),
             )
             st.caption(f"Seçili tarih: {format_tr_date(secili_tarih)}")
+            # FIX68: Maç Analizi saat filtresi, açılır ayarlarda tarih seçiminin yanında.
+            # Yalnızca görünümü filtreler; API/analiz hesaplamasını tetiklemez.
+            if st.session_state.get("sayfa_modu") == "Maç Analizi":
+                st.markdown("**🕒 Maç saati filtresi**")
+                _saat_secimi = st.selectbox(
+                    "Saat aralığı",
+                    ["Tüm Saatler", "12:00–18:00", "18:00–23:00", "Özel Aralık"],
+                    key="mac_analizi_saat_secimi",
+                )
+                if _saat_secimi == "Özel Aralık":
+                    _saat_sol, _saat_sag = st.columns(2, gap="small")
+                    with _saat_sol:
+                        st.time_input("Başlangıç", value=datetime.strptime("12:00", "%H:%M").time(), key="mac_saat_baslangic")
+                    with _saat_sag:
+                        st.time_input("Bitiş", value=datetime.strptime("23:00", "%H:%M").time(), key="mac_saat_bitis")
+
 
         with sezon_col:
             sezon_secenekleri = ["2122", "2223", "2324", "2425", "2526", "2627"]
@@ -16239,18 +16255,10 @@ _filtreli_indexed_fl = [
 
 # Maç Analizi saat filtresi: yalnızca görünümü etkiler, analizi/API çağrısını yenilemez.
 if st.session_state.get("sayfa_modu") == "Maç Analizi":
-    st.markdown("#### 🕒 Maç saati filtresi")
-    saat_secimi = st.selectbox(
-        "Saat aralığı",
-        ["Tüm Saatler", "12:00–18:00", "18:00–23:00", "Özel Aralık"],
-        key="mac_analizi_saat_secimi",
-    )
+    saat_secimi = st.session_state.get("mac_analizi_saat_secimi", "Tüm Saatler")
     if saat_secimi == "Özel Aralık":
-        saat_sol, saat_sag = st.columns(2)
-        with saat_sol:
-            saat_baslangic = st.time_input("Başlangıç", value=datetime.strptime("12:00", "%H:%M").time(), key="mac_saat_baslangic")
-        with saat_sag:
-            saat_bitis = st.time_input("Bitiş", value=datetime.strptime("23:00", "%H:%M").time(), key="mac_saat_bitis")
+        saat_baslangic = st.session_state.get("mac_saat_baslangic", datetime.strptime("12:00", "%H:%M").time())
+        saat_bitis = st.session_state.get("mac_saat_bitis", datetime.strptime("23:00", "%H:%M").time())
     elif saat_secimi == "12:00–18:00":
         saat_baslangic, saat_bitis = datetime.strptime("12:00", "%H:%M").time(), datetime.strptime("18:00", "%H:%M").time()
     elif saat_secimi == "18:00–23:00":
