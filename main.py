@@ -12573,6 +12573,42 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 gor.append(satir)
             st.dataframe(pd.DataFrame(gor), use_container_width=True, hide_index=True)
 
+            # FIX64: Kolonları sırasıyla, bire bir dışa aktar. Hiçbir kombinasyonu birleştirme.
+            _aktar_kolonlar = [
+                [str(_goster_kolonlar[k].get(no, "")) for no in mac_nolari]
+                for k in range(1, int(gosterilecek_kolon) + 1)
+            ]
+            _aktar_gecerli = (len(mac_nolari) == 15 and len(set(mac_nolari)) == 15
+                              and all(len(kolon) == 15 and all(x in ("1", "X", "2") for x in kolon)
+                                      for kolon in _aktar_kolonlar))
+            with st.expander("📤 iddaa.com için kolon dışa aktarımı", expanded=False):
+                st.caption("Seçtiğin kolonlar sıraları değiştirilmeden dışa aktarılır. "
+                           "Bu dosya otomatik bahis göndermez; yerel tarayıcı yardımcısında kullanılabilir.")
+                if _aktar_gecerli:
+                    _aktar_payload = {
+                        "format": "yapaikupon-spor-toto-kolon-v1",
+                        "mac_sayisi": 15,
+                        "kolon_sayisi": len(_aktar_kolonlar),
+                        "maclar": [{"sira": i + 1, "no": int(no),
+                                   "ev": str(next((r.get("ev", "") for r in _st_sonuclar if r.get("no") == no), "")),
+                                   "dep": str(next((r.get("dep", "") for r in _st_sonuclar if r.get("no") == no), ""))}
+                                  for i, no in enumerate(mac_nolari)],
+                        "kolonlar": _aktar_kolonlar,
+                    }
+                    st.download_button("⬇️ Gösterilen kolonları JSON indir",
+                                       data=json.dumps(_aktar_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                                       file_name="yapaikupon_spor_toto_kolonlar.json",
+                                       mime="application/json", key="st_fix64_export_json")
+                    _aktar_txt = "\n".join(" ".join(k) for k in _aktar_kolonlar)
+                    st.download_button("⬇️ Kolonları TXT indir", data=_aktar_txt.encode("utf-8"),
+                                       file_name="yapaikupon_spor_toto_kolonlar.txt",
+                                       mime="text/plain", key="st_fix64_export_txt")
+                    st.code(_aktar_txt, language="text")
+                    st.caption(f"{len(_aktar_kolonlar)} ayrı kolon · her kolonda 15 seçim. "
+                               "TXT'de X beraberliktir; bazı sitelerde 0 olarak gösterilir.")
+                else:
+                    st.warning("15 maçın tamamı ve bütün kolon seçimleri hazır olmadan aktarım yapılamaz.")
+
             # FIX43: Kolon optimizasyon karşılaştırması (yalnız maç öncesi dağılımlar).
             # Gerçek maç sonuçları optimizasyona KESİNLİKLE dahil edilmez.
             with st.expander("🧪 Kolon optimizasyon karşılaştırması", expanded=False):
