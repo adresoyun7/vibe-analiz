@@ -12597,13 +12597,19 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                                        data=json.dumps(_aktar_payload, ensure_ascii=False, indent=2).encode("utf-8"),
                                        file_name="yapaikupon_spor_toto_kolonlar.json",
                                        mime="application/json", key="st_fix64_export_json")
-                    _aktar_txt = "\n".join(" ".join(k) for k in _aktar_kolonlar)
+                    # FIX66: TXT'de satırlar 15 maçı, sütunlar seçilen N kolonu temsil eder.
+                    # JSON yapısı tarayıcı yardımcısıyla uyumlu kalır (kolon başına 15 seçim).
+                    _aktar_txt = "\n".join(
+                        " ".join(kolon[mac_idx] for kolon in _aktar_kolonlar)
+                        for mac_idx in range(15)
+                    )
                     st.download_button("⬇️ Seçili tüm kolonları TXT indir", data=_aktar_txt.encode("utf-8"),
                                        file_name="yapaikupon_spor_toto_kolonlar.txt",
                                        mime="text/plain", key="st_fix64_export_txt")
                     st.code(_aktar_txt, language="text")
-                    st.caption(f"{len(_aktar_kolonlar)} ayrı kolon · her kolonda 15 seçim. "
-                               "TXT'de X beraberliktir; bazı sitelerde 0 olarak gösterilir.")
+                    st.caption(f"TXT: 15 satır (maç) × {len(_aktar_kolonlar)} sütun (kolon). "
+                               "JSON: {len(_aktar_kolonlar)} kolon × 15 maç; tarayıcı yardımcısıyla uyumlu. "
+                               "X beraberliktir; bazı sitelerde 0 olarak gösterilir.")
                 else:
                     st.warning("15 maçın tamamı ve bütün kolon seçimleri hazır olmadan aktarım yapılamaz.")
 
