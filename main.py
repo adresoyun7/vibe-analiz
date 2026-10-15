@@ -14894,6 +14894,30 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
     st.stop()
 
 
+# FIX67 · Maç Analizi: hassasiyet değişince Analizi Başlat gerektirmez.
+# İlk analizi kullanıcı başlatır. Sonrasında yalnızca tolerans değişiminde
+# aynı analiz hattını otomatik tetikleriz; mevcut cache mekanizmaları kullanılır.
+# Tarih/lig değişmişse yanlış bülteni sessizce analiz etmeyiz.
+if st.session_state.get("sayfa_modu") == "Maç Analizi":
+    _fix67_tol = round(float(st.session_state.get("top_tol", TOLERANS)), 2)
+    _fix67_context = (
+        str(secili_tarih), tuple(sorted(map(str, secili_kodlar or []))),
+        tuple(map(str, yillar or [])), str(API_KEY or ""),
+    )
+    _fix67_last_context = st.session_state.get("_fix67_last_context")
+    _fix67_last_tol = st.session_state.get("_fix67_last_tol")
+    if analiz_btn:
+        st.session_state["_fix67_last_context"] = _fix67_context
+        st.session_state["_fix67_last_tol"] = _fix67_tol
+    elif (_fix67_last_context == _fix67_context
+          and _fix67_last_tol is not None
+          and _fix67_last_tol != _fix67_tol
+          and st.session_state.get("last_bulten_df") is not None
+          and st.session_state.get("last_gecmis_df") is not None):
+        analiz_btn = True
+        st.session_state["_fix67_last_tol"] = _fix67_tol
+        st.caption(f"🔄 Hassasiyet {_fix67_tol:.2f} olarak değişti; analiz otomatik güncelleniyor.")
+
 # FIX41 · Günün Tahminleri + zorunlu tahmin + Takım Modeli v2
 # Bu görünüm seçildiğinde ayrıca ANALİZİ BAŞLAT düğmesine basmak gerekmez.
 # Seçili tarih + lig kümesi değiştiğinde bir kez otomatik çalışır. Her maç için
