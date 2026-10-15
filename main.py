@@ -10439,7 +10439,7 @@ with st.container(key="sticky_analysis_controls"):
     )
     with st.container(key="tarih_lig_sezon_paneli"):
       with st.expander("📅 Tarih, Lig ve Sezon Seçimi", expanded=False):
-        tarih_col, sezon_col = st.columns([1.35, 1], gap="medium")
+        tarih_col, saat_col, sezon_col = st.columns([1.45, 1.0, 1.55], gap="medium")
         with tarih_col:
             st.radio(
                 "Tarih modu",
@@ -10459,7 +10459,8 @@ with st.container(key="sticky_analysis_controls"):
                 st.session_state.get("special_date", bugun),
             )
             st.caption(f"Seçili tarih: {format_tr_date(secili_tarih)}")
-            # FIX68: Maç Analizi saat filtresi, açılır ayarlarda tarih seçiminin yanında.
+        with saat_col:
+            # FIX69: Saat filtresi, Tarih ve Sezonlar arasında aynı satırda.
             # Yalnızca görünümü filtreler; API/analiz hesaplamasını tetiklemez.
             if st.session_state.get("sayfa_modu") == "Maç Analizi":
                 st.markdown("**🕒 Maç saati filtresi**")
