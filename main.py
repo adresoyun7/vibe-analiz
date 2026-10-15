@@ -12533,18 +12533,16 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
 
             # Arka planda üretilen kolonlar kalite sırasındadır. Kullanıcı yalnızca
             # bu sıralamanın ilk N kolonunu görüntüler; seçim algoritmayı yeniden çalıştırmaz.
-            gosterim_secenekleri = [n for n in (8, onerilen_min_kolon, 16, 32, 64) if 1 <= n <= kolon_sayisi]
-            if kolon_sayisi not in gosterim_secenekleri:
-                gosterim_secenekleri.append(kolon_sayisi)
-            gosterim_secenekleri = sorted(set(gosterim_secenekleri))
-            varsayilan_gosterim = onerilen_min_kolon if onerilen_min_kolon in gosterim_secenekleri else gosterim_secenekleri[-1]
-            gosterilecek_kolon = st.selectbox(
-                "Gösterilecek en iyi kolon",
-                options=gosterim_secenekleri,
-                index=gosterim_secenekleri.index(varsayilan_gosterim),
-                format_func=lambda n: f"En iyi {n} kolon",
-                key="spor_toto_gosterilecek_kolon",
-                help="Model kolonları kalite sırasına dizer. Örneğin 8 seçersen üretilen havuzdaki en iyi ilk 8 kolon gösterilir.",
+            # FIX65: Herhangi bir kolon adedi seçilebilir; 8/16/32/64 ön tanımlarına bağlı değil.
+            # Dışa aktarım, kullanıcı tarafından seçilen adedin tamamını aynen kullanır.
+            gosterilecek_kolon = st.number_input(
+                "Gösterilecek / dışa aktarılacak kolon sayısı",
+                min_value=1,
+                max_value=int(kolon_sayisi),
+                value=max(1, min(int(onerilen_min_kolon), int(kolon_sayisi))),
+                step=1,
+                key="spor_toto_gosterilecek_kolon_fix65",
+                help="1 ile modelin ürettiği toplam kolon sayısı arasında istediğin adedi seç. JSON ve TXT bu kadar kolonu içerir.",
             )
             st.caption(
                 f"Model toplam {kolon_sayisi} kolon üretti · Şu anda kalite sırasındaki "
@@ -12595,12 +12593,12 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                                   for i, no in enumerate(mac_nolari)],
                         "kolonlar": _aktar_kolonlar,
                     }
-                    st.download_button("⬇️ Gösterilen kolonları JSON indir",
+                    st.download_button("⬇️ Seçili tüm kolonları JSON indir",
                                        data=json.dumps(_aktar_payload, ensure_ascii=False, indent=2).encode("utf-8"),
                                        file_name="yapaikupon_spor_toto_kolonlar.json",
                                        mime="application/json", key="st_fix64_export_json")
                     _aktar_txt = "\n".join(" ".join(k) for k in _aktar_kolonlar)
-                    st.download_button("⬇️ Kolonları TXT indir", data=_aktar_txt.encode("utf-8"),
+                    st.download_button("⬇️ Seçili tüm kolonları TXT indir", data=_aktar_txt.encode("utf-8"),
                                        file_name="yapaikupon_spor_toto_kolonlar.txt",
                                        mime="text/plain", key="st_fix64_export_txt")
                     st.code(_aktar_txt, language="text")
