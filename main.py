@@ -11262,6 +11262,17 @@ def _spor_toto_takim_benzerlik(a, b):
     aliaslar = {
         "levante": "levanteud",
         "levanteud": "levanteud",
+        "realbetis": "realbetis",
+        "realbetisseville": "realbetis",
+        "betis": "realbetis",
+        "sevillafc": "sevilla",
+        "sevilla": "sevilla",
+        "atalantabc": "atalanta",
+        "atalanta": "atalanta",
+        "juventusturin": "juventus",
+        "laziorome": "lazio",
+        "acmilan": "milan",
+        "milan": "milan",
         "barcelona": "fcbarcelona",
         "fcbarcelona": "fcbarcelona",
         "bleverkusen": "bayerleverkusen",
@@ -11730,6 +11741,102 @@ def _spor_toto_kodlari_akilli(api_key, normal_kodlar, spor_maclar):
     return _spor_toto_api_kodlari(api_key, normal_kodlar)
 
 
+# FIX63: Spor Toto için tek tarih aralığı / lig sorgusu.
+# Standart bulten_cek tüm bahis marketlerini ve maç başına BTTS endpointini
+# dolaştığından Spor Toto'nun yalnızca MS 1/X/2 ihtiyacında kullanılmaz.
+_SPOR_TOTO_FIX63_TTL = 900
+
+def _spor_toto_aralik_bulteni(api_key, kodlar, maclar, zorla=False):
+    bas = min(m["zaman"].date() for m in maclar)
+    bit = max(m["zaman"].date() for m in maclar)
+    # Türkiye saatindeki günlerin tamamı, UTC aralığına dönüştürülür.
+    bas_utc = datetime.combine(bas, datetime.min.time()).replace(tzinfo=TR_TIMEZONE).astimezone(timezone.utc)
+    bit_utc = (datetime.combine(bit + timedelta(days=1), datetime.min.time())
+               .replace(tzinfo=TR_TIMEZONE).astimezone(timezone.utc))
+    cache = st.session_state.setdefault("spor_toto_fix63_cache", {})
+    now = time.time()
+    satirlar, teshis = [], []
+    for code in dict.fromkeys(kodlar):
+        ck = (hashlib.sha256(str(api_key).encode()).hexdigest()[:12], code, bas.isoformat(), bit.isoformat())
+        cached = cache.get(ck)
+        if not zorla and cached and now - cached[0] < _SPOR_TOTO_FIX63_TTL:
+            rows, status = cached[1], cached[2]
+        else:
+            rows, status = [], ""
+            try:
+                resolved = odds_lig_kodu_coz(api_key, code)
+                if not resolved:
+                    status = "API kataloğunda lig bulunamadı"
+                else:
+                    response = requests.get(
+                        f"https://api.the-odds-api.com/v4/sports/{resolved}/odds/",
+                        params={"apiKey": api_key, "regions": "eu,uk", "markets": "h2h",
+                                "oddsFormat": "decimal",
+                                "commenceTimeFrom": bas_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "commenceTimeTo": bit_utc.strftime("%Y-%m-%dT%H:%M:%SZ")},
+                        timeout=22)
+                    st.session_state["odds_api_quota"] = {
+                        "remaining": response.headers.get("x-requests-remaining"),
+                        "used": response.headers.get("x-requests-used"),
+                        "last": response.headers.get("x-requests-last"),
+                        "updated_at": now}
+                    if response.status_code != 200:
+                        status = f"HTTP {response.status_code}: {response.text[:140]}"
+                    else:
+                        data = response.json()
+                        if not isinstance(data, list):
+                            status = "Geçersiz API yanıtı"
+                        else:
+                            for event in data:
+                                dt = parse_mac_datetime(event.get("commence_time"))
+                                if dt is None or not bas <= dt.date() <= bit:
+                                    continue
+                                home, away = str(event.get("home_team") or ""), str(event.get("away_team") or "")
+                                if not home or not away:
+                                    continue
+                                row = {"match_id": event.get("id"), "sport_key": resolved,
+                                       "lig": event.get("sport_title", resolved), "zaman": dt,
+                                       "ev": home, "dep": away, "h": None, "b": None, "a": None,
+                                       "odds_phase": "preclosing", "bookmaker_key": "",
+                                       "odds_fetched_at": kayit_zamani_iso()}
+                                for book in event.get("bookmakers", []) or []:
+                                    for market in book.get("markets", []) or []:
+                                        if market.get("key") != "h2h":
+                                            continue
+                                        outcomes = {str(x.get("name", "")).strip(): x.get("price")
+                                                    for x in market.get("outcomes", []) or []}
+                                        draw = next((v for k, v in outcomes.items()
+                                                     if k.lower() in ("draw", "tie", "beraberlik")), None)
+                                        try:
+                                            prices = [float(outcomes.get(home)), float(draw), float(outcomes.get(away))]
+                                            if not all(math.isfinite(x) and x > 1 for x in prices):
+                                                continue
+                                        except (TypeError, ValueError):
+                                            continue
+                                        row.update(h=prices[0], b=prices[1], a=prices[2],
+                                                   bookmaker_key=book.get("key", ""),
+                                                   odds_updated_at=market.get("last_update") or book.get("last_update"))
+                                        break
+                                    if row["h"] is not None:
+                                        break
+                                rows.append(row)
+                            status = "Veri alındı" if rows else "Bu aralıkta API maçı yok"
+            except (requests.RequestException, ValueError, TypeError) as exc:
+                status = f"{type(exc).__name__}: {str(exc)[:120]}"
+            # Başarısız sorguları kısa süre sakla; butonla tekrar sorgulanabilir.
+            cache[ck] = (now, rows, status)
+        satirlar.extend(rows)
+        teshis.append({"Tarih": f"{bas:%d.%m}–{bit:%d.%m.%Y}", "API lig kodu": code,
+                       "API maçı": len(rows),
+                       "Oranlı maç": sum(r["h"] is not None for r in rows),
+                       "Oransız maç": sum(r["h"] is None for r in rows),
+                       "Durum": status})
+    if not satirlar:
+        return pd.DataFrame(), teshis
+    frame = pd.DataFrame(satirlar).drop_duplicates(subset=["ev", "dep", "zaman"], keep="first")
+    return frame.reset_index(drop=True), teshis
+
+
 # FIX61: Spor Toto kuponu, Maç Analizi ekranındaki seçili liglerle sınırlanamaz.
 # Listede yer alan kulüplerin liglerini mutlaka sorgula; aktif olmayan API
 # sport key'leri için sonuç uydurma, gerçek API hata/kapsam bilgisini göster.
@@ -11755,6 +11862,12 @@ def _spor_toto_zorunlu_ligler(spor_maclar):
     return required
 
 
+if st.session_state.get('sayfa_modu') == 'Spor Toto':
+    if st.button("🔄 Spor Toto API bültenini yenile ve yeniden analiz et", key="spor_toto_fix63_refresh",
+                 help="16–19 Ekim gibi girilen tüm tarih aralığını API'den yeniden sorgular; API kotası kullanır."):
+        st.session_state["spor_toto_fix63_zorla"] = True
+        spor_toto_btn = True
+
 if spor_toto_btn:
     spor_maclar = _spor_toto_satirlari_parse(st.session_state.get('spor_toto_metin', ''))
     if len(spor_maclar) != 15:
@@ -11769,29 +11882,10 @@ if spor_toto_btn:
                 + _spor_toto_zorunlu_ligler(spor_maclar)
             ))
             st.session_state["spor_toto_kullanilan_sport_keys"] = list(spor_toto_kodlari)
-            tarih_bultenleri = []
-            _st_api_teshis = []
-            for gun in sorted({x["zaman"].date() for x in spor_maclar}):
-                df_gun = bulten_saglam_al(API_KEY, spor_toto_kodlari, gun)
-                _gun_hata = str(st.session_state.get("odds_api_last_error") or "")
-                for _kod in spor_toto_kodlari:
-                    _kayit = st.session_state.get("odds_league_cache", {}).get(
-                        odds_cache_key(_kod, gun, API_KEY), {})
-                    _parca = _kayit.get("df")
-                    _adet = (int(len(_parca)) if isinstance(_parca, pd.DataFrame) else 0)
-                    _st_api_teshis.append({
-                        "Tarih": gun.strftime("%d.%m.%Y"), "API lig kodu": _kod,
-                        "Oranlı maç": _adet,
-                        "Durum": (str(_kayit.get("error")) if _kayit.get("error") else
-                                  "API yanıtı alınamadı" if not _kayit.get("success") else
-                                  "Bu tarihte oranlı maç yok" if _adet == 0 else "Veri alındı"),
-                    })
-                if isinstance(df_gun, pd.DataFrame) and not df_gun.empty:
-                    tarih_bultenleri.append(df_gun)
+            st_bulten, _st_api_teshis = _spor_toto_aralik_bulteni(
+                API_KEY, spor_toto_kodlari, spor_maclar,
+                zorla=bool(st.session_state.pop("spor_toto_fix63_zorla", False)))
             st.session_state["spor_toto_api_teshis"] = _st_api_teshis
-            st_bulten = pd.concat(tarih_bultenleri, ignore_index=True) if tarih_bultenleri else pd.DataFrame()
-            if not st_bulten.empty and all(c in st_bulten.columns for c in ["ev", "dep", "zaman"]):
-                st_bulten = st_bulten.drop_duplicates(subset=["ev", "dep", "zaman"])
             sonuclar = []
             for sm in spor_maclar:
                 es, es_skor = _spor_toto_eslestir(sm, st_bulten)
@@ -11815,6 +11909,10 @@ if spor_toto_btn:
                         continue
                     _durum_es = "API bülteninde yok / lig kapsamı kontrol edilmeli" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi · API takım adlarını kontrol et"
                     sonuclar.append({**sm, "durum": _durum_es, "es_skor": es_skor, "teshis_adaylari": _spor_toto_eslesme_teshisi(sm, st_bulten)})
+                    continue
+                if es.get("h") is None or es.get("b") is None or es.get("a") is None:
+                    sonuclar.append({**sm, "durum": "API maçı bulundu · 1/X/2 oranı henüz yok",
+                                     "es_skor": es_skor, "api_ev": es.get("ev"), "api_dep": es.get("dep")})
                     continue
                 # Spor Toto: geçmiş örnekleri lig ayrımı yapmadan tüm seçili geçmiş liglerde ara.
                 # Ana uygulamadaki "sadece_ayni_lig" ayarı Spor Toto'yu etkilemez.
