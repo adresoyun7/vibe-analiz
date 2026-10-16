@@ -13312,13 +13312,22 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             kg_sonuc, _, kg_pct = ozet["kg"]
             # Sağdaki özet değerlerinden yüzdesi en yüksek olanı ayrı renkle vurgula.
             # Eşitlik varsa aynı en yüksek yüzdeye sahip olanların hepsi vurgulanır.
-            # Dört marketin de en sık görülen sonucunu ve yüzdesini maç başlığında göster.
+            # Ana maç kartında İY gösterilmez; İY yüzdesi geçmiş tablo sütun başlığındadır.
             ozetler = [
-                ("İY", iy_sonuc, float(iy_pct)),
                 ("MS", ms_sonuc, float(ms_pct)),
                 ("2.5", ou_sonuc, float(ou_pct)),
                 ("KG", kg_sonuc, float(kg_pct)),
             ]
+            # Başlıklar mevcut maçın seçili hassasiyetindeki örneklerden hesaplanır.
+            def gecmis_sutun_basligi(etiket, sonuc, yuzde):
+                if ornekler is None or ornekler.empty:
+                    return etiket
+                return f"{etiket} {sonuc} %{float(yuzde):.0f}"
+
+            gecmis_iy_baslik = gecmis_sutun_basligi("İY", iy_sonuc, iy_pct)
+            gecmis_ms_baslik = gecmis_sutun_basligi("MS", ms_sonuc, ms_pct)
+            gecmis_25_baslik = gecmis_sutun_basligi("2.5", ou_sonuc, ou_pct)
+            gecmis_kg_baslik = gecmis_sutun_basligi("KG", kg_sonuc, kg_pct)
             max_ozet_pct = max((x[2] for x in ozetler), default=0.0)
             koyu_aktif = bool(st.session_state.get("koyu_mod", False))
             normal_renk = "#67e8f9" if koyu_aktif else "#0369a1"
@@ -13584,10 +13593,10 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             "2": ornekler["REF_A"].round(2) if "REF_A" in ornekler.columns else ornekler["B365A"].round(2),
                         })
                     tablo_veri.update({
-                        "İY": ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
-                        "MS": ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
-                        "2.5": ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
-                        "KG": ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
+                        gecmis_iy_baslik: ornekler["HTHG"].astype(int).astype(str) + "-" + ornekler["HTAG"].astype(int).astype(str),
+                        gecmis_ms_baslik: ornekler["FTHG"].astype(int).astype(str) + "-" + ornekler["FTAG"].astype(int).astype(str),
+                        gecmis_25_baslik: ((ornekler["FTHG"] + ornekler["FTAG"]) >= 3).map({True: "Üst", False: "Alt"}),
+                        gecmis_kg_baslik: ((ornekler["FTHG"] > 0) & (ornekler["FTAG"] > 0)).map({True: "Var", False: "Yok"}),
                         "Özel olay": ornekler["Olay"],
                     })
                     tablo = pd.DataFrame(tablo_veri)
