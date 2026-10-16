@@ -6436,14 +6436,31 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
     # hazir_havuz=True yalnızca hassasiyet_taramasi tarafından kullanılır:
     # tarih/lig ön hazırlığı bir kez yapılmış havuzu 11 kez yeniden hazırlamayız.
     if not hazir_havuz:
-        b_df = zaman_uyumlu_gecmis(sadece_tam_verili_gecmis(b_df), m_row)
-        b_df = tarih_oncesi_gecmis(b_df, m_row.get("zaman", m_row.get("Date")))
-        if b_df is None or getattr(b_df, "empty", True):
-            return None, pd.DataFrame()
-
-        # Form, oran eşleşmesi yapılmadan önceki tarihsel takım maçlarından hesaplanır.
-        form_kaynagi = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
-        b_df = form_kaynagi
+        # FIX70: Tek bültendeki aynı gün/lig/oran evresi için geçmiş hazırlığını
+        # tekrar etme. Özellikle ±0.01/±0.02 stres testlerinin 12 tekrarında
+        # aynı büyük CSV'nin kopyalanması ve tarih ayrıştırılması pahalıdır.
+        _fast_context = getattr(hesapla, "_fix70_context", None)
+        _prepared = None
+        _cache_key = None
+        if _fast_context is not None and id(b_df) == _fast_context["source_id"]:
+            _kickoff = parse_mac_datetime(m_row.get("zaman", m_row.get("Date")))
+            _cache_key = (
+                oran_fazi(m_row),
+                _kickoff.date().isoformat() if _kickoff is not None else "",
+                bool(sadece_ayni_lig), str(m_row.get("sport_key", "")),
+                bool(m_row.get("history_detail_only", False)),
+            )
+            _prepared = _fast_context["pools"].get(_cache_key)
+        if _prepared is None:
+            b_df = zaman_uyumlu_gecmis(sadece_tam_verili_gecmis(b_df), m_row)
+            b_df = tarih_oncesi_gecmis(b_df, m_row.get("zaman", m_row.get("Date")))
+            if b_df is None or getattr(b_df, "empty", True):
+                return None, pd.DataFrame()
+            b_df = ayni_lig_gecmisi(b_df, m_row, sadece_ayni_lig)
+            if _cache_key is not None:
+                _fast_context["pools"][_cache_key] = b_df
+        else:
+            b_df = _prepared
     else:
         if b_df is None or getattr(b_df, "empty", True):
             return None, pd.DataFrame()
@@ -15013,6 +15030,9 @@ if analiz_btn:
         ) and not _sonuc_reset_genis_tarama
 
         if not bulten.empty and not gecmis.empty and st.session_state.get("sayfa_modu") != "Top 50 Market":
+            # FIX70: Bu çalışma süresince ortak tarih/lig havuzlarını paylaş.
+            # Her yeni analizde sıfırlanır; farklı tarih veya CSV'ye sızmaz.
+            hesapla._fix70_context = {"source_id": id(gecmis), "pools": {}}
             for _, m in bulten.iterrows():
                 _sayac_toplam += 1
                 # Maç Analizi: üstte seçilen manuel hassasiyetle TEK kez çalışır.
@@ -15155,6 +15175,8 @@ if analiz_btn:
                 final.append({"m": m_dict, "t": t, "b": b_det})
                 _sayac_gecen += 1
 
+        # FIX70: Analiz sonrasında geçici DataFrame havuzlarını bellekte tutma.
+        hesapla._fix70_context = None
         if st.session_state.get("sayfa_modu") == "Top 50 Market":
             final = gunun_en_iyi_10_uret(
                 gecmis, bulten, min_ornek=min_ornek, limit=50, sadece_ayni_lig=sadece_ayni_lig,
