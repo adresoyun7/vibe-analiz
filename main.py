@@ -9468,13 +9468,15 @@ def gecmis_tablo_stili(tablo):
         return "color:#94a3b8"
 
     stil = tablo.style
-    skor_kolonlari = [c for c in ["İY", "MS"] if c in tablo.columns]
+    skor_kolonlari = [c for c in tablo.columns if str(c) in ("İY", "MS") or str(c).startswith(("İY ", "MS "))]
     if skor_kolonlari:
         stil = stil.map(skor_renk, subset=skor_kolonlari)
-    if "2.5" in tablo.columns:
-        stil = stil.map(alt_ust_renk, subset=["2.5"])
-    if "KG" in tablo.columns:
-        stil = stil.map(kg_renk, subset=["KG"])
+    gol_kolonlari = [c for c in tablo.columns if str(c) == "2.5" or str(c).startswith("2.5 ")]
+    if gol_kolonlari:
+        stil = stil.map(alt_ust_renk, subset=gol_kolonlari)
+    kg_kolonlari = [c for c in tablo.columns if str(c) == "KG" or str(c).startswith("KG ")]
+    if kg_kolonlari:
+        stil = stil.map(kg_renk, subset=kg_kolonlari)
     if "İki yarı 1.5 Üst" in tablo.columns:
         stil = stil.map(evet_hayir_renk, subset=["İki yarı 1.5 Üst"])
 
@@ -13520,7 +13522,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 with st.expander(
                     f"{sira}. {m.get('ev', '')} - {m.get('dep', '')} · {saat}"
                     f"{oran_baslik} · {ornek_baslik}",
-                    expanded=tam_ekran_aktif,
+                    expanded=(tam_ekran_aktif or st.session_state.get("gecmis_acik_mac_kimlik") == fix49_mac_kimlik),
                 ):
                     # FIX72: Seçim üstte okunur; başlık, örnek sayısı ve tablo
                     # aynı hassasiyete göre birlikte güncellenir.
@@ -13528,6 +13530,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         "Bu maçta hızlı hassasiyet",
                         options=fix49_seviyeler,
                         key=fix49_secim_key,
+                        on_change=lambda kimlik=fix49_mac_kimlik: st.session_state.update(gecmis_acik_mac_kimlik=kimlik),
                         format_func=lambda x: f"{x:.2f}",
                         help="Yalnızca bu maçın geçmiş örneklerini ve başlık yüzdelerini değiştirir; genel hassasiyet ve diğer maçlar sabit kalır.",
                     )
