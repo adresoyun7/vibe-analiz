@@ -13494,6 +13494,29 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         st.session_state[fix49_secim_key] = min(
                             fix49_seviyeler, key=lambda x: abs(x - float(TOLERANS))
                         )
+                    # Ligleri rekabet düzeyi ve coğrafi benzerliklerine göre iki
+                    # tamamlayıcı kümeye ayır. Seçim yalnızca bu maçın geçmişini etkiler.
+                    # Birinci grup: Avrupa'nın üst düzey birinci ligleri.
+                    # İkinci grup: alt kademeler ve diğer ülke ligleri.
+                    gecmis_lig_grup_1 = frozenset({
+                        "E0", "SP1", "D1", "I1", "F1", "N1", "P1", "B1",
+                        "T1", "SC0", "G1", "AUT", "SWZ", "DNK",
+                    })
+                    gecmis_lig_grup_secimi = st.radio(
+                        "Geçmiş lig grubu",
+                        ["Tüm ligler", "1 · Avrupa üst ligleri", "2 · Diğer ve alt ligler"],
+                        horizontal=True,
+                        key=f"gecmis_lig_grup_{fix49_mac_kimlik}",
+                        help="1. grup: Avrupa'nın benzer üst ligleri. 2. grup: alt ligler ve diğer ülke ligleri. Bu filtre yalnızca geçmiş örnekleri daraltır; model tahminini değiştirmez.",
+                    )
+                    def _gecmis_lig_grubunu_uygula(frame):
+                        if frame is None or frame.empty or gecmis_lig_grup_secimi == "Tüm ligler":
+                            return frame
+                        if "league_code" not in frame.columns:
+                            return frame.iloc[0:0].copy()
+                        birinci = frame["league_code"].astype(str).isin(gecmis_lig_grup_1)
+                        return frame.loc[birinci if gecmis_lig_grup_secimi.startswith("1 ") else ~birinci].copy()
+
                     fix49_tol = st.select_slider(
                         "Bu maçta hızlı hassasiyet",
                         options=fix49_seviyeler,
@@ -13503,16 +13526,22 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     )
                     if abs(float(fix49_tol) - float(TOLERANS)) > 1e-8:
                         fix49_cache = st.session_state.setdefault('fix49_genis_havuzlar', {})
-                        if fix49_mac_kimlik not in fix49_cache:
+                        fix49_havuz_key = f"{fix49_mac_kimlik}:{gecmis_lig_grup_secimi}"
+                        if fix49_havuz_key not in fix49_cache:
                             fix49_kaynak = futbol_veri_motoru(tuple(yillar))
-                            fix49_cache[fix49_mac_kimlik] = gecmis_ornekleri_bul(
+                            if gecmis_lig_grup_secimi != "Tüm ligler" and "league_code" in fix49_kaynak.columns:
+                                _birinci = fix49_kaynak["league_code"].astype(str).isin(gecmis_lig_grup_1)
+                                fix49_kaynak = fix49_kaynak.loc[
+                                    _birinci if gecmis_lig_grup_secimi.startswith("1 ") else ~_birinci
+                                ]
+                            fix49_cache[fix49_havuz_key] = gecmis_ornekleri_bul(
                                 fix49_kaynak, pd.Series(dict(m)), 0.30,
                                 sadece_ayni_lig=bool(gecmis_ayni_lig), limit=100000,
                             )
                             # Uzun oturumlarda eski maçların RAM kullanımını sınırla.
                             while len(fix49_cache) > 30:
                                 fix49_cache.pop(next(iter(fix49_cache)))
-                        fix49_genis = fix49_cache[fix49_mac_kimlik]
+                        fix49_genis = fix49_cache[fix49_havuz_key]
                         if fix49_genis is None or fix49_genis.empty:
                             ornekler = pd.DataFrame()
                         else:
@@ -13521,6 +13550,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             ].copy()
                             if gecmis_limit is not None and str(gecmis_limit).isdigit():
                                 ornekler = ornekler.head(int(gecmis_limit))
+                    # Filtreyi tablo/başlık istatistiklerinden önce uygula.
+                    ornekler = _gecmis_lig_grubunu_uygula(ornekler)
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
                         f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f}"
@@ -13602,11 +13633,16 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         yuzde = 100.0 * int(sayim.iloc[0]) / int(sayim.sum())
                         return f"{kolon} {sonuc} %{yuzde:.0f}"
 
-                    _iy = tablo["İY"]
+                    _iy_ev = pd.to_numeric(ornekler["HTHG"], errors="coerce")
+                    _iy_dep = pd.to_numeric(ornekler["HTAG"], errors="coerce")
+                    _iy = pd.Series(
+                        ["1" if ev > dep else "2" if ev < dep else "0"
+                         for ev, dep in zip(_iy_ev, _iy_dep)], index=ornekler.index,
+                    )
                     _ev_gol = pd.to_numeric(ornekler["FTHG"], errors="coerce")
                     _dep_gol = pd.to_numeric(ornekler["FTAG"], errors="coerce")
                     _ms = pd.Series(
-                        ["1" if ev > dep else "2" if ev < dep else "X"
+                        ["1" if ev > dep else "2" if ev < dep else "0"
                          for ev, dep in zip(_ev_gol, _dep_gol)],
                         index=ornekler.index,
                     )
