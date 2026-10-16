@@ -9468,13 +9468,15 @@ def gecmis_tablo_stili(tablo):
         return "color:#94a3b8"
 
     stil = tablo.style
-    skor_kolonlari = [c for c in ["İY", "MS"] if c in tablo.columns]
+    skor_kolonlari = [c for c in tablo.columns if str(c) in ("İY", "MS") or str(c).startswith(("İY ", "MS "))]
     if skor_kolonlari:
         stil = stil.map(skor_renk, subset=skor_kolonlari)
-    if "2.5" in tablo.columns:
-        stil = stil.map(alt_ust_renk, subset=["2.5"])
-    if "KG" in tablo.columns:
-        stil = stil.map(kg_renk, subset=["KG"])
+    alt_ust_kolonlari = [c for c in tablo.columns if str(c) == "2.5" or str(c).startswith("2.5 ")]
+    if alt_ust_kolonlari:
+        stil = stil.map(alt_ust_renk, subset=alt_ust_kolonlari)
+    kg_kolonlari = [c for c in tablo.columns if str(c) == "KG" or str(c).startswith("KG ")]
+    if kg_kolonlari:
+        stil = stil.map(kg_renk, subset=kg_kolonlari)
     if "İki yarı 1.5 Üst" in tablo.columns:
         stil = stil.map(evet_hayir_renk, subset=["İki yarı 1.5 Üst"])
 
@@ -13588,6 +13590,32 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         "Özel olay": ornekler["Olay"],
                     })
                     tablo = pd.DataFrame(tablo_veri)
+                    # Yalnızca Geçmiş Örnekleri tablosunun dört sütun başlığına
+                    # en sık görülen sonucu ve mevcut örnek havuzundaki yüzdesini ekle.
+                    # Hesaplama seçilen maçın mevcut hassasiyetle filtrelenmiş
+                    # 'ornekler' verisine dayanır; ana maç kartını değiştirmez.
+                    def _gecmis_baslik_yuzdesi(kolon, sonuc_serisi):
+                        sayim = sonuc_serisi.dropna().value_counts()
+                        if sayim.empty:
+                            return kolon
+                        sonuc = str(sayim.index[0])
+                        yuzde = 100.0 * int(sayim.iloc[0]) / int(sayim.sum())
+                        return f"{kolon} {sonuc} %{yuzde:.0f}"
+
+                    _iy = tablo["İY"]
+                    _ev_gol = pd.to_numeric(ornekler["FTHG"], errors="coerce")
+                    _dep_gol = pd.to_numeric(ornekler["FTAG"], errors="coerce")
+                    _ms = pd.Series(
+                        ["1" if ev > dep else "2" if ev < dep else "X"
+                         for ev, dep in zip(_ev_gol, _dep_gol)],
+                        index=ornekler.index,
+                    )
+                    tablo = tablo.rename(columns={
+                        "İY": _gecmis_baslik_yuzdesi("İY", _iy),
+                        "MS": _gecmis_baslik_yuzdesi("MS", _ms),
+                        "2.5": _gecmis_baslik_yuzdesi("2.5", tablo["2.5"]),
+                        "KG": _gecmis_baslik_yuzdesi("KG", tablo["KG"]),
+                    })
                     if tam_ekran_aktif:
                         # Tam ekran yalnızca inceleme alanını büyütür; tablo görünümü normal modla aynıdır.
                         # Az örnekte satırlar gereksiz büyümez. Çok örnekte ise tablo kendi dikey
