@@ -13269,6 +13269,41 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 else:
                     ornekler = ornekler.iloc[0:0].copy()
 
+            # FIX72: Maç içindeki hızlı hassasiyet, hem tabloyu hem de üst başlık
+            # yüzdelerini aynı örnek havuzundan besler. Slider değeri Streamlit
+            # yeniden çalıştırmasında önceden session_state'e yazılmış olur.
+            fix49_mac_kimlik = hashlib.sha1(
+                repr((m.get('ev'), m.get('dep'), str(m.get('zaman')),
+                      m.get('h'), m.get('b'), m.get('a'),
+                      tuple(yillar), bool(gecmis_ayni_lig))).encode('utf-8')
+            ).hexdigest()[:18]
+            fix49_secim_key = f"fix49_tol_{fix49_mac_kimlik}"
+            fix49_seviyeler = [round(i / 100, 2) for i in range(31)]
+            if fix49_secim_key not in st.session_state:
+                st.session_state[fix49_secim_key] = min(
+                    fix49_seviyeler, key=lambda x: abs(x - float(TOLERANS))
+                )
+            fix49_tol = float(st.session_state[fix49_secim_key])
+            if abs(fix49_tol - float(TOLERANS)) > 1e-8:
+                fix49_cache = st.session_state.setdefault('fix49_genis_havuzlar', {})
+                if fix49_mac_kimlik not in fix49_cache:
+                    fix49_kaynak = futbol_veri_motoru(tuple(yillar))
+                    fix49_cache[fix49_mac_kimlik] = gecmis_ornekleri_bul(
+                        fix49_kaynak, pd.Series(dict(m)), 0.30,
+                        sadece_ayni_lig=bool(gecmis_ayni_lig), limit=100000,
+                    )
+                    while len(fix49_cache) > 30:
+                        fix49_cache.pop(next(iter(fix49_cache)))
+                fix49_genis = fix49_cache[fix49_mac_kimlik]
+                if fix49_genis is None or fix49_genis.empty:
+                    ornekler = pd.DataFrame()
+                else:
+                    ornekler = fix49_genis.loc[
+                        oran_eslesme_maskesi(fix49_genis, m, fix49_tol)
+                    ].copy()
+                    if gecmis_limit is not None and str(gecmis_limit).isdigit():
+                        ornekler = ornekler.head(int(gecmis_limit))
+
             saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
             ozet = gecmis_ornek_ozeti(ornekler)
             iy_sonuc, _, iy_pct = ozet["iy"]
@@ -13277,9 +13312,9 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             kg_sonuc, _, kg_pct = ozet["kg"]
             # Sağdaki özet değerlerinden yüzdesi en yüksek olanı ayrı renkle vurgula.
             # Eşitlik varsa aynı en yüksek yüzdeye sahip olanların hepsi vurgulanır.
-            # Geçmiş Örnekleri başlığında İlk Yarı (İY) özetini gösterme.
-            # İY verisi detay/tablo tarafında korunur; yalnızca başlık özetinden çıkarılır.
+            # Dört marketin de en sık görülen sonucunu ve yüzdesini maç başlığında göster.
             ozetler = [
+                ("İY", iy_sonuc, float(iy_pct)),
                 ("MS", ms_sonuc, float(ms_pct)),
                 ("2.5", ou_sonuc, float(ou_pct)),
                 ("KG", kg_sonuc, float(kg_pct)),
@@ -13314,7 +13349,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         display:flex !important;
                         align-items:center !important;
                         width:100% !important;
-                        padding-right:min(390px, 42vw) !important;
+                        padding-right:min(475px, 52vw) !important;
                         overflow:hidden !important;
                     }}
                     .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary p {{
@@ -13328,7 +13363,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         top:54px !important;
                         transform:translateY(-50%) !important;
                         z-index:18 !important;
-                        max-width:min(380px, 41vw) !important;
+                        max-width:min(465px, 51vw) !important;
                         overflow:hidden !important;
                         text-overflow:ellipsis !important;
                         color:{normal_renk} !important;
@@ -13355,10 +13390,10 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     }}
                     @media (max-width: 1150px) {{
                         .st-key-gecmis_mac_baslik_{sira} [data-testid="stExpander"] summary {{
-                            padding-right:250px !important;
+                            padding-right:310px !important;
                         }}
                         .st-key-gecmis_mac_baslik_{sira} .gecmis-ozet-sag {{
-                            max-width:240px !important;
+                            max-width:300px !important;
                             font-size:.68rem !important;
                         }}
                     }}
@@ -13478,47 +13513,15 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     f"{oran_baslik} · {ornek_baslik}",
                     expanded=tam_ekran_aktif,
                 ):
-                    # FIX51: Bu maçın hassasiyetini genel filtreye dokunmadan değiştir.
-                    # 0.30 havuzu bir kez hazırlanır; tüm toleranslar bu havuzdan
-                    # yalnızca REF_H / REF_D / REF_A farkıyla süzülür.
-                    fix49_mac_kimlik = hashlib.sha1(
-                        repr((m.get('ev'), m.get('dep'), str(m.get('zaman')),
-                              m.get('h'), m.get('b'), m.get('a'),
-                              tuple(yillar), bool(gecmis_ayni_lig))).encode('utf-8')
-                    ).hexdigest()[:18]
-                    fix49_secim_key = f"fix49_tol_{fix49_mac_kimlik}"
-                    fix49_seviyeler = [round(i / 100, 2) for i in range(31)]
-                    if fix49_secim_key not in st.session_state:
-                        st.session_state[fix49_secim_key] = min(
-                            fix49_seviyeler, key=lambda x: abs(x - float(TOLERANS))
-                        )
+                    # FIX72: Seçim üstte okunur; başlık, örnek sayısı ve tablo
+                    # aynı hassasiyete göre birlikte güncellenir.
                     fix49_tol = st.select_slider(
                         "Bu maçta hızlı hassasiyet",
                         options=fix49_seviyeler,
                         key=fix49_secim_key,
                         format_func=lambda x: f"{x:.2f}",
-                        help="Yalnızca bu maçın geçmiş örneklerini değiştirir; genel hassasiyet ve diğer maçlar sabit kalır.",
+                        help="Yalnızca bu maçın geçmiş örneklerini ve başlık yüzdelerini değiştirir; genel hassasiyet ve diğer maçlar sabit kalır.",
                     )
-                    if abs(float(fix49_tol) - float(TOLERANS)) > 1e-8:
-                        fix49_cache = st.session_state.setdefault('fix49_genis_havuzlar', {})
-                        if fix49_mac_kimlik not in fix49_cache:
-                            fix49_kaynak = futbol_veri_motoru(tuple(yillar))
-                            fix49_cache[fix49_mac_kimlik] = gecmis_ornekleri_bul(
-                                fix49_kaynak, pd.Series(dict(m)), 0.30,
-                                sadece_ayni_lig=bool(gecmis_ayni_lig), limit=100000,
-                            )
-                            # Uzun oturumlarda eski maçların RAM kullanımını sınırla.
-                            while len(fix49_cache) > 30:
-                                fix49_cache.pop(next(iter(fix49_cache)))
-                        fix49_genis = fix49_cache[fix49_mac_kimlik]
-                        if fix49_genis is None or fix49_genis.empty:
-                            ornekler = pd.DataFrame()
-                        else:
-                            ornekler = fix49_genis.loc[
-                                oran_eslesme_maskesi(fix49_genis, m, fix49_tol)
-                            ].copy()
-                            if gecmis_limit is not None and str(gecmis_limit).isdigit():
-                                ornekler = ornekler.head(int(gecmis_limit))
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
                         f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f}"
