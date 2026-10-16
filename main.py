@@ -9931,6 +9931,23 @@ KARLI_LIG_PRESETLERI = {
 }
 
 
+# FIX77: Genel lig filtresi için iki birbirini dışlayan hazır seçim (29 + 30).
+# Benzer organizasyonları aynı grupta tutar; geçmiş örnek havuzunu değiştirmez.
+GENEL_LIG_GRUP_1_ADLARI = {
+    "Şampiyonlar Ligi", "Şampiyonlar Ligi Kadınlar", "Avrupa Ligi", "Konferans Ligi",
+    "Süper Lig", "1. Lig", "Premier League", "Championship", "League 1", "League 2", "FA Cup", "EFL Cup",
+    "La Liga", "La Liga 2", "Copa del Rey", "Bundesliga", "Bundesliga 2", "3. Liga", "DFB-Pokal",
+    "Serie A", "Serie B", "Coppa Italia", "Ligue 1", "Ligue 2", "Coupe de France",
+    "Hollanda", "Belçika", "Portekiz", "İskoçya",
+}
+
+def genel_lig_gruplari():
+    birinci = [kod for ligler in FUTBOL_LIGLERI.values() for ad, kod in ligler.items()
+               if ad in GENEL_LIG_GRUP_1_ADLARI]
+    ikinci = [kod for ligler in FUTBOL_LIGLERI.values() for ad, kod in ligler.items()
+              if ad not in GENEL_LIG_GRUP_1_ADLARI]
+    return birinci, ikinci
+
 def tum_lig_kodlari():
     return [kod for ligler in FUTBOL_LIGLERI.values() for kod in ligler.values()]
 
@@ -10502,13 +10519,6 @@ with st.container(key="sticky_analysis_controls"):
                 "Sezonlar", options=sezon_secenekleri, default=sezon_secenekleri,
                 key="top_seasons", on_change=clear_backtest_on_change,
             )
-            if st.session_state.get("sayfa_modu") == "Geçmiş Örnekleri":
-                st.selectbox(
-                    "Geçmiş örnek lig grubu",
-                    ["Tüm ligler", "1 · Avrupa üst ligleri", "2 · Diğer ve alt ligler"],
-                    key="gecmis_lig_grubu_ust",
-                    help="Tarih ve lig seçimiyle birlikte geçmiş havuzunu filtreler.",
-                )
             sadece_ayni_lig = st.checkbox(
                 "Sadece aynı lig verilerini kullan", value=False,
                 key="sadece_ayni_lig",
@@ -10533,6 +10543,22 @@ with st.container(key="sticky_analysis_controls"):
         with preset4:
             if st.button("Avrupa Ana + Alt", use_container_width=True, key="preset_core_top"):
                 toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek_value"])
+                st.rerun()
+
+        # Genel lig seçimi: 59 ligin tamamı iki gruba ayrılır.
+        genel_grup_1, genel_grup_2 = genel_lig_gruplari()
+        grup_col1, grup_col2 = st.columns(2, gap="small")
+        with grup_col1:
+            if st.button(f"Grup 1 · Avrupa Ana + Alt ({len(genel_grup_1)} lig)",
+                         use_container_width=True, key="preset_genel_grup_1"):
+                set_leagues(genel_grup_1)
+                clear_detail_on_filter_change()
+                st.rerun()
+        with grup_col2:
+            if st.button(f"Grup 2 · Diğer Avrupa + Dünya ({len(genel_grup_2)} lig)",
+                         use_container_width=True, key="preset_genel_grup_2"):
+                set_leagues(genel_grup_2)
+                clear_detail_on_filter_change()
                 st.rerun()
 
         lig_arama = st.text_input(
@@ -13082,7 +13108,7 @@ def gecmis_lig_grubu_filtrele(frame, secim):
 # değişmesi, ÖRNEKLERİ GETİR düğmesine gerek kalmadan yeniden arama yapar.
 # Diğer widget rerun'larında gereksiz API isteği oluşmaz.
 if st.session_state.get("sayfa_modu") == "Geçmiş Örnekleri":
-    _grup_simdi = st.session_state.get("gecmis_lig_grubu_ust", "Tüm ligler")
+    _grup_simdi = "Tüm ligler"
     if (st.session_state.get("gecmis_inceleme_list") is not None
             and st.session_state.get("gecmis_aranan_grup", "Tüm ligler") != _grup_simdi):
         gecmis_btn = True
@@ -13108,7 +13134,7 @@ if gecmis_btn:
         with st.spinner("🔎 Günün maçları ve geçmiş benzer örnekler hazırlanıyor..."):
             gi_gecmis = gecmis_lig_grubu_filtrele(
                 futbol_veri_motoru(tuple(yillar)),
-                st.session_state.get("gecmis_lig_grubu_ust", "Tüm ligler"),
+                "Tüm ligler",
             )
             gi_bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
             inceleme = []
@@ -13144,7 +13170,7 @@ if gecmis_btn:
             inceleme.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = inceleme
             st.session_state["gecmis_aranan_tolerans"] = float(TOLERANS)
-            st.session_state["gecmis_aranan_grup"] = st.session_state.get("gecmis_lig_grubu_ust", "Tüm ligler")
+            st.session_state["gecmis_aranan_grup"] = "Tüm ligler"
             # Liste hangi filtreyle üretildiyse onu kaydet; toggle kapalıyken
             # yanlışlıkla aynı-lig listesi "uygulanmış" sayılmasın.
             st.session_state["gecmis_ayni_lig_uygulandi"] = bool(gecmis_filtre_ayni_lig)
@@ -13207,7 +13233,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         if eksik_cift_havuz:
             gi_gecmis_yeniden = gecmis_lig_grubu_filtrele(
                 futbol_veri_motoru(tuple(yillar)),
-                st.session_state.get("gecmis_lig_grubu_ust", "Tüm ligler"),
+                "Tüm ligler",
             )
             yeniden = []
             for eski_item in inceleme:
@@ -13535,11 +13561,11 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     )
                     if abs(float(fix49_tol) - float(TOLERANS)) > 1e-8:
                         fix49_cache = st.session_state.setdefault('fix49_genis_havuzlar', {})
-                        fix49_havuz_key = f"{fix49_mac_kimlik}:{st.session_state.get("gecmis_lig_grubu_ust", "Tüm ligler")}"
+                        fix49_havuz_key = f"{fix49_mac_kimlik}:{"Tüm ligler"}"
                         if fix49_havuz_key not in fix49_cache:
                             fix49_kaynak = futbol_veri_motoru(tuple(yillar))
                             fix49_kaynak = gecmis_lig_grubu_filtrele(
-                                fix49_kaynak, st.session_state.get("gecmis_lig_grubu_ust", "Tüm ligler")
+                                fix49_kaynak, "Tüm ligler"
                             )
                             fix49_cache[fix49_havuz_key] = gecmis_ornekleri_bul(
                                 fix49_kaynak, pd.Series(dict(m)), 0.30,
@@ -13558,7 +13584,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             if gecmis_limit is not None and str(gecmis_limit).isdigit():
                                 ornekler = ornekler.head(int(gecmis_limit))
                     # Filtreyi tablo/başlık istatistiklerinden önce uygula.
-                    ornekler = gecmis_lig_grubu_filtrele(ornekler, st.session_state.get("gecmis_lig_grubu_ust", "Tüm ligler"))
+                    ornekler = gecmis_lig_grubu_filtrele(ornekler, "Tüm ligler")
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
                         f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f}"
