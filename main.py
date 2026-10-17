@@ -9948,15 +9948,6 @@ def genel_lig_gruplari():
               if ad not in GENEL_LIG_GRUP_1_ADLARI]
     return birinci, ikinci
 
-def genel_lig_grup_1_alt_gruplari():
-    """Grup 1'i 15/14 böler; aynı ülkenin lig ve kupalarını birlikte tutar."""
-    ulke_a = {"Süper Lig", "1. Lig", "Premier League", "Championship", "League 1", "League 2", "FA Cup", "EFL Cup", "La Liga", "La Liga 2", "Copa del Rey", "Bundesliga", "Bundesliga 2", "3. Liga", "DFB-Pokal"}
-    a = [kod for ligler in FUTBOL_LIGLERI.values() for ad, kod in ligler.items() if ad in ulke_a]
-    birinci, _ = genel_lig_gruplari()
-    b = [kod for kod in birinci if kod not in set(a)]
-    return a, b
-
-
 def tum_lig_kodlari():
     return [kod for ligler in FUTBOL_LIGLERI.values() for kod in ligler.values()]
 
@@ -10554,23 +10545,16 @@ with st.container(key="sticky_analysis_controls"):
                 toggle_leagues(KARLI_LIG_PRESETLERI["cekirdek_value"])
                 st.rerun()
 
-        # Genel lig seçimi: Grup 1 iki alt gruba bölünür (15 + 14); Grup 2 aynı kalır (30).
+        # Genel lig seçimi: 59 ligin tamamı iki gruba ayrılır.
         genel_grup_1, genel_grup_2 = genel_lig_gruplari()
-        genel_grup_1a, genel_grup_1b = genel_lig_grup_1_alt_gruplari()
-        grup_col1, grup_col2, grup_col3 = st.columns(3, gap="small")
+        grup_col1, grup_col2 = st.columns(2, gap="small")
         with grup_col1:
-            if st.button(f"Grup 1A · Avrupa Ana ({len(genel_grup_1a)} lig)",
-                         use_container_width=True, key="preset_genel_grup_1a"):
-                set_leagues(genel_grup_1a)
+            if st.button(f"Grup 1 · Avrupa Ana + Alt ({len(genel_grup_1)} lig)",
+                         use_container_width=True, key="preset_genel_grup_1"):
+                set_leagues(genel_grup_1)
                 clear_detail_on_filter_change()
                 st.rerun()
         with grup_col2:
-            if st.button(f"Grup 1B · Avrupa Alt + Kupalar ({len(genel_grup_1b)} lig)",
-                         use_container_width=True, key="preset_genel_grup_1b"):
-                set_leagues(genel_grup_1b)
-                clear_detail_on_filter_change()
-                st.rerun()
-        with grup_col3:
             if st.button(f"Grup 2 · Diğer Avrupa + Dünya ({len(genel_grup_2)} lig)",
                          use_container_width=True, key="preset_genel_grup_2"):
                 set_leagues(genel_grup_2)
