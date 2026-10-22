@@ -10498,19 +10498,21 @@ with st.container(key="sticky_analysis_controls"):
         with saat_col:
             # FIX69: Saat filtresi, Tarih ve Sezonlar arasında aynı satırda.
             # Yalnızca görünümü filtreler; API/analiz hesaplamasını tetiklemez.
-            if st.session_state.get("sayfa_modu") == "Maç Analizi":
+            if st.session_state.get("sayfa_modu") in ("Maç Analizi", "Geçmiş Örnekleri"):
+                _gecmis_saat_modu = st.session_state.get("sayfa_modu") == "Geçmiş Örnekleri"
+                _saat_prefix = "gecmis" if _gecmis_saat_modu else "mac"
                 st.markdown("**🕒 Maç saati filtresi**")
                 _saat_secimi = st.selectbox(
                     "Saat aralığı",
                     ["Tüm Saatler", "12:00–18:00", "18:00–23:00", "Özel Aralık"],
-                    key="mac_analizi_saat_secimi",
+                    key=f"{_saat_prefix}_analizi_saat_secimi",
                 )
                 if _saat_secimi == "Özel Aralık":
                     _saat_sol, _saat_sag = st.columns(2, gap="small")
                     with _saat_sol:
-                        st.time_input("Başlangıç", value=datetime.strptime("12:00", "%H:%M").time(), key="mac_saat_baslangic")
+                        st.time_input("Başlangıç", value=datetime.strptime("12:00", "%H:%M").time(), key=f"{_saat_prefix}_saat_baslangic")
                     with _saat_sag:
-                        st.time_input("Bitiş", value=datetime.strptime("23:00", "%H:%M").time(), key="mac_saat_bitis")
+                        st.time_input("Bitiş", value=datetime.strptime("23:00", "%H:%M").time(), key=f"{_saat_prefix}_saat_bitis")
 
 
         with sezon_col:
@@ -13181,6 +13183,25 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     inceleme = secili_liglere_gore_gorunum_listesi(
         st.session_state.get("gecmis_inceleme_list"), secili_kodlar
     )
+    # Saat filtresi yalnızca güncel maç listesinin görünümünü değiştirir.
+    # Hazır geçmiş havuzları korunur; yeni API isteği veya analiz yapılmaz.
+    if inceleme is not None:
+        _gs_secim = st.session_state.get("gecmis_analizi_saat_secimi", "Tüm Saatler")
+        if _gs_secim != "Tüm Saatler":
+            if _gs_secim == "Özel Aralık":
+                _gs_bas = st.session_state.get("gecmis_saat_baslangic", datetime.strptime("12:00", "%H:%M").time())
+                _gs_bit = st.session_state.get("gecmis_saat_bitis", datetime.strptime("23:00", "%H:%M").time())
+            elif _gs_secim == "12:00–18:00":
+                _gs_bas, _gs_bit = datetime.strptime("12:00", "%H:%M").time(), datetime.strptime("18:00", "%H:%M").time()
+            else:
+                _gs_bas, _gs_bit = datetime.strptime("18:00", "%H:%M").time(), datetime.strptime("23:00", "%H:%M").time()
+            def _gs_uygun(item):
+                _dt = parse_mac_datetime((item.get("m", {}) or {}).get("zaman"))
+                if _dt is None:
+                    return False
+                _t = _dt.time()
+                return (_gs_bas <= _t <= _gs_bit) if _gs_bas <= _gs_bit else (_t >= _gs_bas or _t <= _gs_bit)
+            inceleme = [item for item in inceleme if _gs_uygun(item)]
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
     elif not inceleme:
