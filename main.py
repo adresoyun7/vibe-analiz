@@ -13208,7 +13208,37 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         if "gecmis_oranlari_goster" not in st.session_state:
             st.session_state["gecmis_oranlari_goster"] = False
 
-        ust_bos, ust_ayni, ust_oran = st.columns([6.2, 1.45, 1.25], gap="small")
+        # Saat aralığı yalnızca Geçmiş Örnekleri maç başlıklarını filtreler.
+        # Saat bilgisi Türkiye yerel maç başlangıç saatidir.
+        ust_saat, ust_bas, ust_bit, ust_bos, ust_ayni, ust_oran = st.columns(
+            [1.45, 1.05, 1.05, 2.65, 1.45, 1.25], gap="small"
+        )
+        with ust_saat:
+            gecmis_saat_aktif = st.toggle(
+                "Saat aralığı", key="gecmis_baslik_saat_aktif",
+                help="Geçmiş Örnekleri maç başlıklarını başlangıç saatine göre filtreler.",
+            )
+        with ust_bas:
+            gecmis_saat_bas = st.time_input(
+                "Başlangıç", value=datetime.strptime("00:00", "%H:%M").time(),
+                step=900, key="gecmis_baslik_saat_bas", disabled=not gecmis_saat_aktif,
+            )
+        with ust_bit:
+            gecmis_saat_bit = st.time_input(
+                "Bitiş", value=datetime.strptime("23:45", "%H:%M").time(),
+                step=900, key="gecmis_baslik_saat_bit", disabled=not gecmis_saat_aktif,
+            )
+        if gecmis_saat_aktif:
+            def _gecmis_saat_uygun(item):
+                dt = parse_mac_datetime((item.get("m") or {}).get("zaman"))
+                if dt is None:
+                    return False
+                t = dt.time().replace(tzinfo=None)
+                if gecmis_saat_bas <= gecmis_saat_bit:
+                    return gecmis_saat_bas <= t <= gecmis_saat_bit
+                return t >= gecmis_saat_bas or t <= gecmis_saat_bit
+            inceleme = [item for item in inceleme if _gecmis_saat_uygun(item)]
+            st.caption(f"Saat aralığı: {gecmis_saat_bas:%H:%M}–{gecmis_saat_bit:%H:%M} · {len(inceleme)} maç")
         with ust_ayni:
             gecmis_ayni_lig = st.toggle(
                 "Sadece aynı ligler",
