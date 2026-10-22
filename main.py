@@ -13183,19 +13183,6 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     inceleme = secili_liglere_gore_gorunum_listesi(
         st.session_state.get("gecmis_inceleme_list"), secili_kodlar
     )
-    # Saat filtresi yalnızca güncel maç listesinin görünümünü değiştirir.
-    # Hazır geçmiş havuzları korunur; yeni API isteği veya analiz yapılmaz.
-    if inceleme is not None:
-        if st.session_state.get("gecmis_saat_aktif", False):
-            _gs_bas = st.session_state.get("gecmis_saat_baslangic", datetime.strptime("00:00", "%H:%M").time())
-            _gs_bit = st.session_state.get("gecmis_saat_bitis", datetime.strptime("23:59", "%H:%M").time())
-            def _gs_uygun(item):
-                _dt = parse_mac_datetime((item.get("m", {}) or {}).get("zaman"))
-                if _dt is None:
-                    return False
-                _t = _dt.time()
-                return (_gs_bas <= _t <= _gs_bit) if _gs_bas <= _gs_bit else (_t >= _gs_bas or _t <= _gs_bit)
-            inceleme = [item for item in inceleme if _gs_uygun(item)]
     if inceleme is None:
         st.info("Lig, tarih ve filtreleri seçip GEÇMİŞ ÖRNEKLERİ GETİR butonuna bas.")
     elif not inceleme:
@@ -13207,7 +13194,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             key=gecmis_ornek_siralama_anahtari,
             reverse=True,
         )
-        st.success(f"{len(inceleme)} güncel maç bulundu.")
+        st.success(f"{len(inceleme)} güncel maç bulundu. Saat filtresi aşağıdaki görünüm kontrollerinden ayarlanır.")
 
         # Geçmiş Örnekleri için hızlı görünüm/filtre anahtarları.
         # İki aynı-lig kontrolü çift yönlü callback ile tek ayar gibi çalışır.
@@ -13223,13 +13210,21 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         if "gecmis_oranlari_goster" not in st.session_state:
             st.session_state["gecmis_oranlari_goster"] = False
 
-        ust_saat, ust_bas, ust_bit, ust_bos, ust_ayni, ust_oran = st.columns([1.45, 1.1, 1.1, 2.55, 1.45, 1.25], gap="small")
+        # Geçmiş Örnekleri görünümünün kendi üst kontrol satırı.
+        ust_saat, ust_bas, ust_bit, ust_bos, ust_ayni, ust_oran = st.columns(
+            [1.25, 1.3, 1.3, 1.25, 1.45, 1.25], gap="small"
+        )
         with ust_saat:
-            st.toggle("Saat filtresi", key="gecmis_saat_aktif", help="Seçilen saat aralığındaki güncel maçları gösterir; geçmiş örnek hesaplarını değiştirmez.")
+            st.toggle("🕒 Saat filtresi", key="gecmis_saat_aktif")
         with ust_bas:
-            st.time_input("Başlangıç saati", value=datetime.strptime("00:00", "%H:%M").time(), step=900, key="gecmis_saat_baslangic", disabled=not st.session_state.get("gecmis_saat_aktif", False))
+            st.time_input("Başlangıç", value=datetime.strptime("00:00", "%H:%M").time(),
+                          step=900, key="gecmis_saat_baslangic",
+                          disabled=not st.session_state.get("gecmis_saat_aktif", False))
         with ust_bit:
-            st.time_input("Bitiş saati", value=datetime.strptime("23:59", "%H:%M").time(), step=900, key="gecmis_saat_bitis", disabled=not st.session_state.get("gecmis_saat_aktif", False))
+            st.time_input("Bitiş", value=datetime.strptime("23:45", "%H:%M").time(),
+                          step=900, key="gecmis_saat_bitis",
+                          disabled=not st.session_state.get("gecmis_saat_aktif", False))
+
         with ust_ayni:
             gecmis_ayni_lig = st.toggle(
                 "Sadece aynı ligler",
@@ -13243,6 +13238,19 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                 key="gecmis_oranlari_goster",
                 help="Kapatınca maç başlığındaki ve geçmiş tablo içindeki 1-X-2 oranları gizlenir.",
             )
+
+        # Saat seçimi yalnızca bu görünümdeki güncel maçları süzer.
+        if st.session_state.get("gecmis_saat_aktif", False):
+            _bas = st.session_state["gecmis_saat_baslangic"]
+            _bit = st.session_state["gecmis_saat_bitis"]
+            def _saat_uygun(item):
+                dt = parse_mac_datetime((item.get("m") or {}).get("zaman"))
+                if dt is None:
+                    return False
+                saat = dt.time()
+                return (_bas <= saat <= _bit) if _bas <= _bit else (saat >= _bas or saat <= _bit)
+            inceleme = [item for item in inceleme if _saat_uygun(item)]
+            st.caption(f"Saat filtresine uyan maç: {len(inceleme)}")
 
         # Bu toggle artık yeniden hesaplama state'i kullanmaz. Her maç için "tüm ligler"
         # ve "aynı lig" havuzları ayrı tutulur; burada yalnızca görünüm seçilir.
