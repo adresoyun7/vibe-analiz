@@ -10498,7 +10498,7 @@ with st.container(key="sticky_analysis_controls"):
         with saat_col:
             # FIX69: Saat filtresi, Tarih ve Sezonlar arasında aynı satırda.
             # Yalnızca görünümü filtreler; API/analiz hesaplamasını tetiklemez.
-            if st.session_state.get("sayfa_modu") in ("Maç Analizi", "Geçmiş Örnekleri"):
+            if st.session_state.get("sayfa_modu") == "Maç Analizi":
                 _gecmis_saat_modu = st.session_state.get("sayfa_modu") == "Geçmiş Örnekleri"
                 _saat_prefix = "gecmis" if _gecmis_saat_modu else "mac"
                 st.markdown("**🕒 Maç saati filtresi**")
@@ -13186,15 +13186,9 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     # Saat filtresi yalnızca güncel maç listesinin görünümünü değiştirir.
     # Hazır geçmiş havuzları korunur; yeni API isteği veya analiz yapılmaz.
     if inceleme is not None:
-        _gs_secim = st.session_state.get("gecmis_analizi_saat_secimi", "Tüm Saatler")
-        if _gs_secim != "Tüm Saatler":
-            if _gs_secim == "Özel Aralık":
-                _gs_bas = st.session_state.get("gecmis_saat_baslangic", datetime.strptime("12:00", "%H:%M").time())
-                _gs_bit = st.session_state.get("gecmis_saat_bitis", datetime.strptime("23:00", "%H:%M").time())
-            elif _gs_secim == "12:00–18:00":
-                _gs_bas, _gs_bit = datetime.strptime("12:00", "%H:%M").time(), datetime.strptime("18:00", "%H:%M").time()
-            else:
-                _gs_bas, _gs_bit = datetime.strptime("18:00", "%H:%M").time(), datetime.strptime("23:00", "%H:%M").time()
+        if st.session_state.get("gecmis_saat_aktif", False):
+            _gs_bas = st.session_state.get("gecmis_saat_baslangic", datetime.strptime("00:00", "%H:%M").time())
+            _gs_bit = st.session_state.get("gecmis_saat_bitis", datetime.strptime("23:59", "%H:%M").time())
             def _gs_uygun(item):
                 _dt = parse_mac_datetime((item.get("m", {}) or {}).get("zaman"))
                 if _dt is None:
@@ -13229,7 +13223,13 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
         if "gecmis_oranlari_goster" not in st.session_state:
             st.session_state["gecmis_oranlari_goster"] = False
 
-        ust_bos, ust_ayni, ust_oran = st.columns([6.2, 1.45, 1.25], gap="small")
+        ust_saat, ust_bas, ust_bit, ust_bos, ust_ayni, ust_oran = st.columns([1.45, 1.1, 1.1, 2.55, 1.45, 1.25], gap="small")
+        with ust_saat:
+            st.toggle("Saat filtresi", key="gecmis_saat_aktif", help="Seçilen saat aralığındaki güncel maçları gösterir; geçmiş örnek hesaplarını değiştirmez.")
+        with ust_bas:
+            st.time_input("Başlangıç saati", value=datetime.strptime("00:00", "%H:%M").time(), step=900, key="gecmis_saat_baslangic", disabled=not st.session_state.get("gecmis_saat_aktif", False))
+        with ust_bit:
+            st.time_input("Bitiş saati", value=datetime.strptime("23:59", "%H:%M").time(), step=900, key="gecmis_saat_bitis", disabled=not st.session_state.get("gecmis_saat_aktif", False))
         with ust_ayni:
             gecmis_ayni_lig = st.toggle(
                 "Sadece aynı ligler",
