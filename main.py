@@ -11342,6 +11342,21 @@ def _spor_toto_takim_benzerlik(a, b):
         "laziorome": "lazio",
         "acmilan": "milan",
         "milan": "milan",
+        "borussiadortmund": "borussiadortmund",
+        "dortmund": "borussiadortmund",
+        "eintrachtfrankfurt": "eintrachtfrankfurt",
+        "asmonaco": "monaco",
+        "monacofc": "monaco",
+        "losclille": "lille",
+        "lilleosc": "lille",
+        "parissaintgermain": "psg",
+        "parissaintgermainfc": "psg",
+        "psg": "psg",
+        "olympiquelyonnais": "lyon",
+        "olympiquelyon": "lyon",
+        "asroma": "roma",
+        "sscnapoli": "napoli",
+        "sscnapoli": "napoli",
         "barcelona": "fcbarcelona",
         "fcbarcelona": "fcbarcelona",
         "bleverkusen": "bayerleverkusen",
@@ -11910,24 +11925,34 @@ def _spor_toto_aralik_bulteni(api_key, kodlar, maclar, zorla=False):
 # Listede yer alan kulüplerin liglerini mutlaka sorgula; aktif olmayan API
 # sport key'leri için sonuç uydurma, gerçek API hata/kapsam bilgisini göster.
 def _spor_toto_zorunlu_ligler(spor_maclar):
-    turkiye = {"corum", "rizespor", "erzurumspor", "eyupspor", "amedspor", "konyaspor",
-               "genclerbirligi", "galatasaray", "fenerbahce", "alanyaspor", "kasimpasa",
-               "samsunspor", "kocaelispor", "goztepe", "basaksehir", "gaziantep",
-               "trabzonspor", "besiktas"}
-    ingiltere = {"everton", "chelsea", "brentford", "liverpool", "arsenal", "manchester"}
-    ispanya = {"betis", "barcelona", "realmadrid", "sevilla"}
-    italya = {"milan", "atalanta", "juventus", "lazio"}
-    groups = ((turkiye, "soccer_turkey_super_league"),
-              (ingiltere, "soccer_epl"),
-              (ispanya, "soccer_spain_la_liga"),
-              (italya, "soccer_italy_serie_a"))
+    """Kupondaki bilinen kulüp eşleşmelerinin liglerini seçili liglerden bağımsız sorgula.
+
+    İki takımın da aynı lig sözlüğünde bulunması gerekir; tek bir kulübün
+    adının başka bir takım adında geçmesi yanlış lig sorgusu başlatmaz.
+    """
+    lig_takimlari = {
+        "soccer_turkey_super_league": {
+            "alanyaspor", "kocaelispor", "eyupspor", "kasimpasa", "gaziantepfk",
+            "erzurumspor", "samsunspor", "amedspor", "konyaspor",
+            "genclerbirligi", "goztepe", "corumfk", "besiktas",
+            "istanbulbasaksehir", "rizespor", "trabzonspor", "galatasaray", "fenerbahce",
+        },
+        "soccer_epl": {"chelsea", "tottenham", "arsenal", "everton", "liverpool",
+                       "manchestercity", "manchesterunited", "brentford"},
+        "soccer_spain_la_liga": {"fcbarcelona", "realmadrid", "barcelona", "sevilla", "betis"},
+        "soccer_germany_bundesliga": {"borussiadortmund", "eintrachtfrankfurt"},
+        "soccer_france_ligue_one": {"monaco", "lille", "parissaintgermain", "lyon"},
+        "soccer_italy_serie_a": {"napoli", "roma", "asroma", "milan", "atalanta",
+                                 "juventus", "lazio"},
+    }
     required = []
     for mac in spor_maclar:
-        names = (takim_anahtari(mac.get("ev", "")), takim_anahtari(mac.get("dep", "")))
-        for words, key in groups:
-            if any(any(word in name for word in words) for name in names):
-                if key not in required:
-                    required.append(key)
+        ev, dep = str(mac.get("ev", "")), str(mac.get("dep", ""))
+        for code, names in lig_takimlari.items():
+            if (any(_spor_toto_takim_benzerlik(ev, name) >= 0.86 for name in names)
+                    and any(_spor_toto_takim_benzerlik(dep, name) >= 0.86 for name in names)):
+                if code not in required:
+                    required.append(code)
     return required
 
 
@@ -11976,7 +12001,7 @@ if spor_toto_btn:
                         else:
                             sonuclar.append({**sm, 'durum': 'Manuel oran · geçmiş örnek yok', 'manuel_oran': True})
                         continue
-                    _durum_es = "API bülteninde yok / lig kapsamı kontrol edilmeli" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi · API takım adlarını kontrol et"
+                    _durum_es = "API bülteninde eşleşen maç yok · lig/tarih kontrolü" if st_bulten.empty or es_skor < 0.45 else "Eşleşmedi · API takım adlarını kontrol et"
                     sonuclar.append({**sm, "durum": _durum_es, "es_skor": es_skor, "teshis_adaylari": _spor_toto_eslesme_teshisi(sm, st_bulten)})
                     continue
                 if es.get("h") is None or es.get("b") is None or es.get("a") is None:
