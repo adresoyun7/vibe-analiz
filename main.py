@@ -801,6 +801,65 @@ def basket_veri_hazirla(df):
     return out.sort_values("Date").drop_duplicates(["Date","HomeTeam","AwayTeam"], keep="last").reset_index(drop=True)
 
 
+# Basketbol oran benzerliği: geçmiş maçın gerçek maç öncesi oranları gerekir.
+# Otomatik skor sağlayıcılarında oran bulunmadığından CSV opsiyoneldir.
+def basket_oran_gecmisi_hazirla(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    required=("Date","HomeTeam","AwayTeam","HomeScore","AwayScore","HomeML","AwayML","TotalLine","OverOdds","UnderOdds")
+    if any(c not in df.columns for c in required):
+        return pd.DataFrame()
+    out=df.copy()
+    out["Date"]=pd.to_datetime(out["Date"],errors="coerce",dayfirst=True)
+    for c in ("HomeScore","AwayScore","HomeML","AwayML","TotalLine","OverOdds","UnderOdds","SpreadLine","HomeSpreadOdds","AwaySpreadOdds"):
+        if c in out:
+            out[c]=pd.to_numeric(out[c],errors="coerce")
+    out=out.dropna(subset=list(required[:1])+list(required[3:]))
+    out=out[(out[["HomeML","AwayML","OverOdds","UnderOdds"]]>1).all(axis=1) & (out.TotalLine>0)]
+    return out
+
+
+def basket_oran_benzerligi(history, market, kickoff, tolerance=.08, line_tolerance=3.0, min_examples=5):
+    """Geçmiş pre-match oranlar ile benzerlik; geçmiş maç sonucunu hedef baremde test eder."""
+    if history is None or history.empty:
+        return {}
+    try:
+        cutoff=pd.to_datetime(kickoff,utc=True,errors="coerce")
+        if pd.isna(cutoff): return {}
+        h=history.copy()
+        dates=pd.to_datetime(h.Date,utc=True,errors="coerce")
+        h=h.loc[dates<cutoff].copy()
+        if h.empty:return {}
+        def pair_prob(a,b):
+            x=1.0/a; y=1.0/b
+            return x/(x+y)
+        target_home=pair_prob(float(market["home_odds"]),float(market["away_odds"]))
+        target_over=pair_prob(float(market["over_odds"]),float(market["under_odds"]))
+        target_line=float(market["total_line"])
+        h["_homep"]=(1/h.HomeML)/(1/h.HomeML+1/h.AwayML)
+        h["_overp"]=(1/h.OverOdds)/(1/h.OverOdds+1/h.UnderOdds)
+        # Home/away probability distance + total line and price distance.
+        dh=(h._homep-target_home).abs()
+        do=(h._overp-target_over).abs()
+        dl=(h.TotalLine-target_line).abs()
+        valid=(dh<=tolerance)&(do<=tolerance)&(dl<=line_tolerance)
+        h=h.loc[valid].copy()
+        if h.empty:return {"count":0,"min_examples":min_examples}
+        distance=(dh.loc[h.index]/max(tolerance,.001))**2+(do.loc[h.index]/max(tolerance,.001))**2+(dl.loc[h.index]/max(line_tolerance,.1))**2
+        w=1/(1+distance)
+        total=h.HomeScore+h.AwayScore
+        over=(total>target_line).astype(float)
+        under=(total<target_line).astype(float)
+        push=(total==target_line).astype(float)
+        effective=float(w.sum()**2/(w**2).sum())
+        # Not a calibrated probability; weighted historical rate only.
+        return {"count":len(h),"effective":round(effective,1),"over_rate":round(float((over*w).sum()/w.sum()*100),1),
+                "under_rate":round(float((under*w).sum()/w.sum()*100),1),"push_rate":round(float((push*w).sum()/w.sum()*100),1),
+                "avg_total":round(float((total*w).sum()/w.sum()),1),"min_examples":min_examples}
+    except (KeyError,ValueError,TypeError,ZeroDivisionError,OverflowError):
+        return {}
+
+
 def basket_possession(row, side):
     """Box score varsa Dean Oliver yaklaşımı; yoksa None."""
     opp = "Away" if side == "Home" else "Home"
@@ -960,7 +1019,7 @@ def basket_backtest_hata_kalibrasyonu():
         "margin_mae":m_mae,
     }
 
-def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None,use_backtest_calibration=True):
+def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,total_line=None,spread_line=None,use_backtest_calibration=True, score_shrink=.72, pace_shrink=.65):
     """Lig ortalamasına kalibre edilmiş basketbol skor modeli.
 
     Temel fikir: ham son-10 sayı ortalamalarını doğrudan toplamak yerine takımın
@@ -997,7 +1056,7 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
         def_ratio=max(.72,min(1.28,float(opp_allowed)/league))
         raw=league*math.sqrt(off_ratio*def_ratio)
         # Küçük örnek ve kısa dönem formunu lig ortalamasına shrink et.
-        return league + .72*(raw-league)
+        return league + float(score_shrink)*(raw-league)
 
     empirical_home=expected_points(hpf,apa)
     empirical_away=expected_points(apf,hpa)
@@ -1012,7 +1071,7 @@ def basket_model_tahmini(df,ev,dep,cutoff=None,limit=10,inj_home=0.,inj_away=0.,
         # Pace de lig ortalamasına shrink edilir; iki takımın son dönem temposu tek
         # başına tahmini aşırı oynatmasın.
         raw_pace=.5*float(hp["pace"])+.5*float(ap["pace"])
-        pace=float(base["pace"])+.65*(raw_pace-float(base["pace"]))
+        pace=float(base["pace"])+float(pace_shrink)*(raw_pace-float(base["pace"]))
         league_eff=float(base["ortg"])
         h_eff=league_eff*math.sqrt(max(.75,min(1.25,float(hp["ortg"])/league_eff))*max(.75,min(1.25,float(ap["drtg"])/league_eff)))
         a_eff=league_eff*math.sqrt(max(.75,min(1.25,float(ap["ortg"])/league_eff))*max(.75,min(1.25,float(hp["drtg"])/league_eff)))
@@ -1879,6 +1938,27 @@ def basketbol_sayfasi():
         st.info("Önce Aday Listesi'nde 🚀 Analizi Başlat'a bas. Geçmiş veri otomatik hazırlanacak.")
         return
 
+    # Oran geçmişi mevcut otomatik sağlayıcılarda yoktur. Kullanıcıdan gerçek
+    # maç öncesi oran geçmişi alınır; CSV yoksa oran benzerliği sonuç üretilmez.
+    with st.expander("📊 Basketbol oran benzerliği · geçmiş oran CSV", expanded=False):
+        st.caption("CSV: Date, HomeTeam, AwayTeam, HomeScore, AwayScore, HomeML, AwayML, TotalLine, OverOdds, UnderOdds. Opsiyonel: SpreadLine, HomeSpreadOdds, AwaySpreadOdds. Yalnızca maç öncesi oranları kullan; sonuçlar geçmiş oran frekansıdır, kalibre edilmiş güven değildir.")
+        uploaded=st.file_uploader("Geçmiş basketbol oranları (CSV)",type=["csv"],key="basket_odds_history_upload")
+        if uploaded is not None:
+            try:
+                raw=pd.read_csv(uploaded)
+                parsed=basket_oran_gecmisi_hazirla(raw)
+                if parsed.empty:st.warning("CSV gerekli alanları içermiyor veya geçerli oran satırı yok.")
+                else:
+                    st.session_state["basket_odds_history_data"]=parsed
+                    st.success(f"{len(parsed)} geçmiş oranlı maç hazır.")
+            except (ValueError,UnicodeDecodeError,pd.errors.ParserError) as error:
+                st.error(f"CSV okunamadı: {type(error).__name__}")
+        st.caption(f"Kullanılabilir oran geçmişi: {len(st.session_state.get('basket_odds_history_data', pd.DataFrame()))} maç (oturum boyunca).")
+    oc1,oc2,oc3=st.columns(3)
+    odds_tolerance=oc1.slider("Oran olasılığı toleransı",0.01,0.20,0.08,0.01,key="basket_sim_odds_tol")
+    line_tolerance=oc2.slider("Toplam barem toleransı",0.5,10.0,3.0,0.5,key="basket_sim_line_tol")
+    calibration_preview=oc3.toggle("Alternatif skor kalibrasyonunu karşılaştır",value=False,key="basket_calibration_preview")
+
     if basket_view == "🎯 Maç Analizi":
         # Futbol Maç Analizi gibi: seçili ligdeki bütün oynanabilir maçları tek ekranda göster.
         playable=[]
@@ -1898,6 +1978,17 @@ def basketbol_sayfasi():
         for idx,(e,ev,dep) in enumerate(playable):
             mk=basket_odds_market_ozeti(e)
             r=basket_model_tahmini(df,ev,dep,df.Date.max()+pd.Timedelta(days=1),form_n,0,0,mk["total_line"],mk["spread_line"])
+            if calibration_preview:
+                alt_r=basket_model_tahmini(df,ev,dep,df.Date.max()+pd.Timedelta(days=1),form_n,0,0,mk["total_line"],mk["spread_line"],score_shrink=.90,pace_shrink=.80)
+                if alt_r:
+                    st.caption(f"Kalibrasyon karşılaştırması · mevcut toplam **{r['total']:.1f}** · alternatif (daha az ortalamaya çekme) **{alt_r['total']:.1f}** · piyasa baremi **{mk['total_line']}**. Alternatif test edilmemiştir; ana tahmin değişmedi.")
+            hist=st.session_state.get("basket_odds_history_data",pd.DataFrame())
+            if isinstance(hist,pd.DataFrame) and not hist.empty:
+                similar=basket_oran_benzerligi(hist,mk,e.get("commence_time"),odds_tolerance,line_tolerance)
+                if similar.get("count",0):
+                    st.caption(f"Oran benzerliği · **{similar['count']}** maç (etkin {similar['effective']}) · hedef bareme göre Üst **%{similar['over_rate']}**, Alt **%{similar['under_rate']}** · geçmiş ort. toplam **{similar['avg_total']}**" + (" · **Az örnek / PAS**" if similar['count']<5 or similar['effective']<5 else ""))
+                else:
+                    st.caption("Oran benzerliği: Bu oran/barem aralığında geçmiş örnek bulunamadı (PAS).")
             home_label=str(e.get("home_team",ev))
             away_label=str(e.get("away_team",dep))
             st.markdown(f"#### 🏀 {home_label} — {away_label}")
