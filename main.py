@@ -727,7 +727,7 @@ def backtest_kaydi(row, target, t):
         "Tarih": row["Date"].date(), "Lig": row.get("league_code", "-"),
         "Maç": f'{row.get("HomeTeam", "")} - {row.get("AwayTeam", "")}',
         "Tahmin": label, "Güven": int(t["ana_p"]),
-        "Ana Puan": float(t.get("score", 0)), "Ana Medyan Örnek": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0))),
+        "Ana Puan": float(t.get("score", 0)), "Etkin Kararlılık": float(t.get("stability_effective_count", 0) or 0), "Güven Dalgalanması": float(t.get("confidence_spread", 0) or 0), "Etkin Örnek": float(t.get("effective_combined_samples", 0) or 0), "Ana Medyan Örnek": int(t.get("birlesik_ornek_medyan", t.get("ornek", 0))),
         "Ana Kararlılık": int(t.get("stability_count", 0)), "Ana Hassasiyetler": " · ".join(t.get("stability_tols", [])),
         "Alternatif Tahmin": alt_label, "Alt. Güven": int(t.get("alt_p", 0)) if alt_label else None,
         "Alt. Örnek": t.get("alt_ornek") if alt_label else None, "Alt. Puan": t.get("alt_puan") if alt_label else None,
@@ -8829,6 +8829,38 @@ def backtest_11_hassasiyet_calistir(gecmis_df, test_sezonu, secili_tolerans, min
     selected.attrs.update(model_version=MODEL_VERSION, model="Top 50 Market" if top50_model else "Birleşik")
     return pd.DataFrame(summary), selected, consensus, individual, cross
 
+def backtest_puanlama_teshisi(bt):
+    """Sadece mevcut ana tahminleri yeniden sıralar; yeni tahmin üretmez."""
+    if bt is None or bt.empty:
+        return None
+    x=bt.copy()
+    for col in ("Güven", "Etkin Kararlılık", "Güven Dalgalanması", "Etkin Örnek", "Oran"):
+        x[col]=pd.to_numeric(x[col] if col in x else pd.Series(0,index=x.index),errors="coerce")
+    x=x.dropna(subset=["Güven", "Tuttu", "Tarih"])
+    if x.empty:return None
+    x["Tarih"]=pd.to_datetime(x["Tarih"],errors="coerce")
+    x=x.dropna(subset=["Tarih"]).sort_values(["Tarih","Lig","Maç"],kind="stable")
+    x=x.drop_duplicates(["Tarih","Lig","Maç"],keep="first").copy()
+    x["Etkin Kararlılık"]=x["Etkin Kararlılık"].fillna(0).clip(0,11)
+    x["Güven Dalgalanması"]=x["Güven Dalgalanması"].fillna(0).clip(lower=0)
+    x["Etkin Örnek"]=x["Etkin Örnek"].fillna(0).clip(lower=0)
+    penalty=8*( (5-x["Etkin Örnek"])/4 ).clip(0,1) + (x["Güven Dalgalanması"]*.3).clip(upper=6)
+    for confidence_weight in (80,90,100):
+        x[f"Puan {confidence_weight}/{100-confidence_weight}"]=(x["Güven"]*confidence_weight/100 + x["Etkin Kararlılık"]/11*(100-confidence_weight)-penalty).round(1)
+    return x
+
+
+def backtest_puanlama_ozeti(x, top_n=50):
+    rows=[]
+    for weight in (80,90,100):
+        col=f"Puan {weight}/{100-weight}"
+        ranked=x.sort_values([col,"Tarih","Maç"],ascending=[False,True,True],kind="stable").head(top_n)
+        odds=ranked[ranked["Oran"].gt(1) & ranked["Oran"].notna()]
+        roi=(((odds["Oran"]*odds["Tuttu"].astype(float)-1).mean()*100) if not odds.empty else None)
+        rows.append({"Model":f"%{weight} Güven + %{100-weight} Kararlılık", "Top N":len(ranked),"Başarı %":round(float(ranked["Tuttu"].mean()*100),1),"Oranlı seçim":len(odds),"Oranlı ROI %":round(float(roi),1) if roi is not None else None})
+    return pd.DataFrame(rows)
+
+
 def gecmis_ornek_teshisi(gecmis_df, m_row, tolerans, sadece_ayni_lig=False):
     """Geçmiş örnek filtresinin hangi aşamada sıfıra düştüğünü gösterir.
 
@@ -15123,6 +15155,58 @@ if st.session_state.get('sayfa_modu') == 'Backtest':
                     "Sistem sağlıklıysa yüksek puan grupları daha yüksek başarı üretmelidir."
                 )
                 st.dataframe(backtest_stili(puan_ozeti), use_container_width=True, hide_index=True)
+
+        st.markdown("### Puanlama ve güven tanı paneli")
+        st.caption("Tahmin motoru değişmez. Aynı mevcut tahminler üç farklı ağırlıkla yeniden sıralanır; sonuçlar yeni tahmin performansı değildir.")
+        _diag=backtest_puanlama_teshisi(bt)
+        if _diag is not None and not _diag.empty:
+            _dups=len(bt)-len(_diag)
+            if _dups:
+                st.warning(f"Aynı tarih/lig/maç anahtarına göre { _dups } tekrarlı veya tarihsiz kayıt tespit edildi; tanı panelinde dışlandı.")
+            else:
+                st.success("Seçili ana backtest kayıtlarında tarih/lig/maç tekrarı bulunmadı.")
+            st.caption("Uzlaşı tabloları 11 hassasiyetin ayrı tahminlerini sayar; toplamlarının ana backtest tahmin sayısına eşit olması beklenmez.")
+            _bands=pd.cut(_diag["Güven"],bins=[0,60,70,80,90,100],labels=["0–60","61–70","71–80","81–90","91–100"],include_lowest=True)
+            _cal=_diag.assign(**{"Güven Bandı":_bands}).groupby("Güven Bandı",observed=False).agg(
+                Tahmin=("Tuttu","size"),**{"Ortalama Güven %":("Güven","mean"),"Gerçek Başarı %":("Tuttu","mean")}).reset_index()
+            _cal=_cal[_cal["Tahmin"]>0].copy()
+            _cal["Ortalama Güven %"]=_cal["Ortalama Güven %"].round(1)
+            _cal["Gerçek Başarı %"]=(_cal["Gerçek Başarı %"]*100).round(1)
+            st.markdown("#### Güven kalibrasyonu")
+            st.dataframe(backtest_stili(_cal),use_container_width=True,hide_index=True)
+            if len(_cal):
+                st.line_chart(_cal.set_index("Güven Bandı")[["Ortalama Güven %","Gerçek Başarı %"]])
+            st.markdown("#### Puan ağırlıkları — aynı aday havuzu")
+            _n=st.slider("En yüksek puanlı kaç tahmin?",min_value=10,max_value=max(10,min(200,len(_diag))),value=min(50,max(10,min(200,len(_diag)))),step=1,key="bt_puan_top_n")
+            st.dataframe(backtest_stili(backtest_puanlama_ozeti(_diag,_n)),use_container_width=True,hide_index=True)
+            st.caption("Oranlı ROI yalnızca geçerli oranı olan seçimlerden hesaplanır; bütün marketlerin ROI'si olarak yorumlanmamalıdır.")
+            st.markdown("#### Zaman ayrımı — keşif ve doğrulama")
+            _dates=sorted(_diag["Tarih"].dt.normalize().unique())
+            if len(_dates)>=4:
+                _cut=_dates[max(0,int(len(_dates)*.7)-1)]
+                _train=_diag[_diag["Tarih"].dt.normalize()<=_cut]
+                _test=_diag[_diag["Tarih"].dt.normalize()>_cut]
+                st.caption(f"İlk dönem: {len(_train)} tahmin · Sonraki dönem: {len(_test)} tahmin. Kesim: {pd.Timestamp(_cut).date()}. Her iki dönemde de aynı önceden üretilmiş aday havuzu kullanılır.")
+                _train_results=backtest_puanlama_ozeti(_train,min(50,len(_train)))
+                _best=_train_results.sort_values(["Başarı %","Model"],ascending=[False,True]).iloc[0]["Model"]
+                st.write(f"İlk dönemde Top 50 başarısı en yüksek ağırlık: **{_best}** (yalnızca keşif).")
+                if not _test.empty:
+                    _test_results=backtest_puanlama_ozeti(_test,min(50,len(_test)))
+                    st.dataframe(backtest_stili(_test_results),use_container_width=True,hide_index=True)
+                    st.caption("Son dönem sonuçları, ilk dönem seçimini kontrol etmek içindir. Tam bağımsız model doğrulaması değildir; modelin kendisi aynı geçmişe göre geliştirilmiş olabilir.")
+            else:
+                st.info("Zaman ayrımı için en az dört farklı maç tarihi gerekli.")
+            st.markdown("#### Market bazında oranlı ROI")
+            _valid=_diag[_diag["Oran"].gt(1) & _diag["Oran"].notna()].copy()
+            if not _valid.empty:
+                _valid["Net (100 TL)"]=(_valid["Oran"]*_valid["Tuttu"].astype(float)-1)*100
+                _markets=_valid.groupby("Tahmin").agg(Tahmin=("Tuttu","size"),Kazanan=("Tuttu","sum"),**{"Net Kâr (TL)":("Net (100 TL)","sum"),"ROI %":("Net (100 TL)","mean")}).reset_index()
+                _markets[["Net Kâr (TL)","ROI %"]]=_markets[["Net Kâr (TL)","ROI %"]].round(1)
+                st.dataframe(backtest_stili(_markets),use_container_width=True,hide_index=True)
+            else:
+                st.info("Market bazlı ROI için geçmişte kaydedilmiş ilgili market oranları gerekli. Oran olmayan marketlere ROI uydurulmaz.")
+        else:
+            st.info("Tanı paneli için sonuçlanmış backtest kayıtları gerekli.")
 
         ozet_col, alt_ozet_col = st.columns(2)
         with ozet_col:
