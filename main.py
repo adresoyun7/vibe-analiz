@@ -13763,9 +13763,29 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                                 ornekler = ornekler.head(int(gecmis_limit))
                     # Filtreyi tablo/başlık istatistiklerinden önce uygula.
                     ornekler = gecmis_lig_grubu_filtrele(ornekler, "Tüm ligler")
+                    # Seçili hızlı hassasiyetin geçmiş örneklerinden en sık İY/MS tam skorları.
+                    # Sonuç bilinmiyorsa dışla; eşit sıklıkta birden fazla skor varsa göster.
+                    def _en_sik_tam_skor(frame, ev_kolonu, dep_kolonu, etiket):
+                        if frame.empty or ev_kolonu not in frame or dep_kolonu not in frame:
+                            return f"{etiket}: —"
+                        ev = pd.to_numeric(frame[ev_kolonu], errors="coerce")
+                        dep = pd.to_numeric(frame[dep_kolonu], errors="coerce")
+                        gecerli = ev.notna() & dep.notna() & ev.ge(0) & dep.ge(0)
+                        if not gecerli.any():
+                            return f"{etiket}: —"
+                        skorlar = ev[gecerli].astype(int).astype(str) + "-" + dep[gecerli].astype(int).astype(str)
+                        sayim = skorlar.value_counts()
+                        en_yuksek = int(sayim.iloc[0])
+                        esitler = sorted(str(x) for x in sayim[sayim == en_yuksek].index)
+                        skor_metni = "/".join(esitler[:3]) + ("…" if len(esitler) > 3 else "")
+                        return f"{etiket}: {skor_metni} ({en_yuksek}/{len(skorlar)})"
+
+                    iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
+                    ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
-                        f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f}"
+                        f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f} "
+                        f"· {iy_skor_ozeti} · {ms_skor_ozeti}"
                     )
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
