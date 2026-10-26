@@ -13780,12 +13780,29 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         skor_metni = "/".join(esitler[:3]) + ("…" if len(esitler) > 3 else "")
                         return f"{etiket}: {skor_metni} ({en_yuksek}/{len(skorlar)})"
 
+                    # Beklenen skor: seçili hassasiyetteki geçerli geçmiş maçların
+                    # ev/deplasman gol ortalamaları. En sık görülen skorla aynı şey değildir.
+                    def _beklenen_tam_skor(frame, ev_kolonu, dep_kolonu, etiket):
+                        if frame.empty or ev_kolonu not in frame or dep_kolonu not in frame:
+                            return f"{etiket}: —"
+                        ev = pd.to_numeric(frame[ev_kolonu], errors="coerce")
+                        dep = pd.to_numeric(frame[dep_kolonu], errors="coerce")
+                        gecerli = ev.notna() & dep.notna() & ev.ge(0) & dep.ge(0)
+                        if not gecerli.any():
+                            return f"{etiket}: —"
+                        ev_ort = float(ev[gecerli].mean())
+                        dep_ort = float(dep[gecerli].mean())
+                        return f"{etiket}: {int(ev_ort + 0.5)}-{int(dep_ort + 0.5)}"
+
                     iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
                     ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
+                    iy_beklenen_ozeti = _beklenen_tam_skor(ornekler, "HTHG", "HTAG", "Beklenen İY")
+                    ms_beklenen_ozeti = _beklenen_tam_skor(ornekler, "FTHG", "FTAG", "Beklenen MS")
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
                         f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f} "
-                        f"· {iy_skor_ozeti} · {ms_skor_ozeti}"
+                        f"· {iy_skor_ozeti} · {ms_skor_ozeti} "
+                        f"· {iy_beklenen_ozeti} · {ms_beklenen_ozeti}"
                     )
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
