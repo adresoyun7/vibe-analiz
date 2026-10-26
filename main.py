@@ -13780,19 +13780,44 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         skor_metni = "/".join(esitler[:3]) + ("…" if len(esitler) > 3 else "")
                         return f"{etiket}: {skor_metni} ({en_yuksek}/{len(skorlar)})"
 
-                    # Beklenen skor: seçili hassasiyetteki geçerli geçmiş maçların
-                    # ev/deplasman gol ortalamaları. En sık görülen skorla aynı şey değildir.
+                    # Beklenen skor: Poisson modelinin en olası tam skoru (mod).
+                    # Az örnek için yalnızca hedef tarihten önceki lig/genel gol
+                    # ortalamasına doğru yumuşatma yapılır; ileri tarih sızıntısı yoktur.
                     def _beklenen_tam_skor(frame, ev_kolonu, dep_kolonu, etiket):
                         if frame.empty or ev_kolonu not in frame or dep_kolonu not in frame:
                             return f"{etiket}: —"
                         ev = pd.to_numeric(frame[ev_kolonu], errors="coerce")
                         dep = pd.to_numeric(frame[dep_kolonu], errors="coerce")
                         gecerli = ev.notna() & dep.notna() & ev.ge(0) & dep.ge(0)
-                        if not gecerli.any():
+                        n = int(gecerli.sum())
+                        if not n:
                             return f"{etiket}: —"
                         ev_ort = float(ev[gecerli].mean())
                         dep_ort = float(dep[gecerli].mean())
-                        return f"{etiket}: {int(ev_ort + 0.5)}-{int(dep_ort + 0.5)}"
+                        try:
+                            taban = futbol_veri_motoru(tuple(yillar))
+                            taban = tarih_oncesi_gecmis(taban, m.get("zaman"))
+                            if "league_code" in taban.columns:
+                                lig_kodu = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")))
+                                lig_taban = taban.loc[taban["league_code"].eq(lig_kodu)] if lig_kodu else taban.iloc[0:0]
+                                if len(lig_taban) >= 30:
+                                    taban = lig_taban
+                            if ev_kolonu in taban and dep_kolonu in taban:
+                                tev = pd.to_numeric(taban[ev_kolonu], errors="coerce")
+                                tdep = pd.to_numeric(taban[dep_kolonu], errors="coerce")
+                                mask = tev.notna() & tdep.notna() & tev.ge(0) & tdep.ge(0)
+                                if mask.sum() >= 20:
+                                    # 8 öncül maç gücü: 5 örnekte güçlü, 50'de zayıf düzeltme.
+                                    guc = 8.0
+                                    ev_ort = (n * ev_ort + guc * float(tev[mask].mean())) / (n + guc)
+                                    dep_ort = (n * dep_ort + guc * float(tdep[mask].mean())) / (n + guc)
+                        except (KeyError, TypeError, ValueError, OSError):
+                            pass  # Taban yoksa seçili örnek ortalamalarını kullan.
+                        # Poisson(lambda) modu floor(lambda); tam sayı lambda'da
+                        # iki mod eşittir, daha düşük skoru seçiyoruz.
+                        ev_skor = max(0, int(math.floor(ev_ort)))
+                        dep_skor = max(0, int(math.floor(dep_ort)))
+                        return f"{etiket}: {ev_skor}-{dep_skor}"
 
                     iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
                     ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
