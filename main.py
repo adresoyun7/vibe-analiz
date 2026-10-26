@@ -13813,11 +13813,26 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                                     dep_ort = (n * dep_ort + guc * float(tdep[mask].mean())) / (n + guc)
                         except (KeyError, TypeError, ValueError, OSError):
                             pass  # Taban yoksa seçili örnek ortalamalarını kullan.
-                        # Poisson(lambda) modu floor(lambda); tam sayı lambda'da
-                        # iki mod eşittir, daha düşük skoru seçiyoruz.
-                        ev_skor = max(0, int(math.floor(ev_ort)))
-                        dep_skor = max(0, int(math.floor(dep_ort)))
-                        return f"{etiket}: {ev_skor}-{dep_skor}"
+                        # Bağımsız Poisson: her tam skorun birleşik olasılığı.
+                        # En olası üç skoru ve olasılıklarını göster; yüzdeler
+                        # tüm skor uzayına göre hesaplanır (ilk üçe normalize edilmez).
+                        def _poisson_pmf(k, lam):
+                            if lam <= 0:
+                                return 1.0 if k == 0 else 0.0
+                            return math.exp(-lam + k * math.log(lam) - math.lgamma(k + 1))
+                        ev_max = max(10, int(math.ceil(ev_ort + 7 * math.sqrt(max(ev_ort, 1)))))
+                        dep_max = max(10, int(math.ceil(dep_ort + 7 * math.sqrt(max(dep_ort, 1)))))
+                        ev_p = [_poisson_pmf(i, ev_ort) for i in range(ev_max + 1)]
+                        dep_p = [_poisson_pmf(i, dep_ort) for i in range(dep_max + 1)]
+                        skorlar = sorted(
+                            ((ev_p[i] * dep_p[j], i, j)
+                             for i in range(len(ev_p)) for j in range(len(dep_p))),
+                            key=lambda x: (-x[0], x[1] + x[2], x[1], x[2])
+                        )[:3]
+                        ilk = skorlar[0]
+                        diger = ", ".join(f"{i}-{j} (%{100*p:.1f})" for p, i, j in skorlar[1:])
+                        return (f"{etiket}: {ilk[1]}-{ilk[2]} (%{100*ilk[0]:.1f})"
+                                f" · Diğer olası {etiket.replace('Beklenen ', '')}: {diger}")
 
                     iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
                     ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
