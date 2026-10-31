@@ -13340,6 +13340,14 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             key=gecmis_ornek_siralama_anahtari,
             reverse=True,
         )
+        # Futbol Geçmiş Örnekleri: mevcut puan sıralaması veya maç başlangıç saati.
+        gecmis_siralama = st.radio(
+            "Maç sıralaması",
+            ["Mevcut sıralama", "Saate göre sıralama"],
+            horizontal=True,
+            key="gecmis_mac_siralama_secimi",
+            help="Mevcut sıralama güçlü geçmiş örnek sinyallerini öne alır. Saate göre sıralama maçları Türkiye saatiyle en erkenden en geçe dizer.",
+        )
         st.success(f"{len(inceleme)} güncel maç bulundu.")
 
         # Geçmiş Örnekleri için hızlı görünüm/filtre anahtarları.
@@ -13435,6 +13443,13 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
             yeniden.sort(key=gecmis_ornek_siralama_anahtari, reverse=True)
             st.session_state.gecmis_inceleme_list = yeniden
             inceleme = yeniden
+
+        # Yeniden oluşturulmuş havuzlar dahil, son görünüm sırasını burada uygula.
+        if gecmis_siralama == "Saate göre sıralama":
+            def _gecmis_mac_zaman_anahtari(item):
+                dt = parse_mac_datetime((item.get("m") or {}).get("zaman"))
+                return (dt is None, dt if dt is not None else datetime.max)
+            inceleme = sorted(inceleme, key=_gecmis_mac_zaman_anahtari)
 
         # Geçmiş maç başlıklarını eskisi gibi aralıksız/kompakt göster.
         # Key'li container'lar Streamlit'in varsayılan dikey boşluğunu taşıdığı için
