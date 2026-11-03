@@ -12776,8 +12776,72 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                 f"en iyi {gosterilecek_kolon} kolon gösteriliyor."
             )
 
+            # İki yöntem aynı maç olasılıklarını ve manuel kısıtları kullanır.
+            spor_toto_dagitim_yontemi = st.radio(
+                "Kolon dağıtım yöntemi",
+                ("Mevcut yöntem", "Optimize edilmiş yöntem"),
+                index=0, horizontal=True, key="spor_toto_dagitim_yontemi_v1",
+                help="Optimize yöntem, aynı 1/X/2 frekanslarını koruyarak kolonlar arası "
+                     "olasılık-ağırlıklı kapsama ve farklılığı iyileştirir."
+            )
+
+            def _st_optimize_kolonlar(imzalar):
+                """Frekansları ve ilk kolonu sabit tutan, deterministik takas optimizasyonu.
+
+                Kapsama hedefi: her iki kolonun ortak yanlış tahmin riskini azalt.
+                Olasılıklar kalibre edilmiş kabul edilmez; bu nedenle düşük olasılıklı
+                sürprizleri sırf çeşitlilik için çoğaltmaz. Her satırın 1/X/2 adetleri
+                eski algoritmadan aynen alınır. Manuel izinler de aynen korunur.
+                """
+                if len(imzalar) < 3:
+                    return imzalar
+                rows = [list(row) for row in imzalar]
+                n = len(rows)
+                # Daha belirsiz maçlarda farklılık daha değerli.
+                belirsizlik = [max(0.05, 1.0 - sum(v*v for v in pm.values()))
+                               for pm in _f25_probs]
+                def skor_ikili(a, b):
+                    # Her iki kolonda aynı yanlışın tekrarlanma ihtimalini azaltan
+                    # farklılık; alternatifin olasılığıyla ağırlıklandırılır.
+                    return math.sqrt(sum(belirsizlik[i] *
+                               (_f25_probs[i].get(a[i], 0.0) + _f25_probs[i].get(b[i], 0.0))
+                               for i in range(len(tamam)) if a[i] != b[i]) + 1e-12)
+                def ciddi(row):
+                    return sum(_f25_probs[i].get(t, 0.0) < CIDDI_SURPRIZ_ESIGI
+                               for i, t in enumerate(row))
+                # Frekansları değiştirmeyen takaslar; ilk kolon dokunulmaz.
+                # n büyükken maliyeti sınırlamak için geçiş sayısı sabit.
+                for _ in range(3):
+                    degisti = False
+                    for i in range(len(tamam)):
+                        for a in range(1, n):
+                            for b in range(a+1, n):
+                                if rows[a][i] == rows[b][i]:
+                                    continue
+                                once = sum(skor_ikili(rows[a], rows[j]) + skor_ikili(rows[b], rows[j])
+                                           for j in range(n) if j != a and j != b) + skor_ikili(rows[a], rows[b])
+                                rows[a][i], rows[b][i] = rows[b][i], rows[a][i]
+                                # Mevcut yöntemde ciddi sürprizler dağılmışsa
+                                # aynı güvenlik kuralını koru.
+                                uygun = ciddi(rows[a]) <= max(1, ciddi(imzalar[a])) and \
+                                         ciddi(rows[b]) <= max(1, ciddi(imzalar[b]))
+                                sonra = sum(skor_ikili(rows[a], rows[j]) + skor_ikili(rows[b], rows[j])
+                                            for j in range(n) if j != a and j != b) + skor_ikili(rows[a], rows[b])
+                                if uygun and sonra > once + 1e-9:
+                                    degisti = True
+                                else:
+                                    rows[a][i], rows[b][i] = rows[b][i], rows[a][i]
+                    if not degisti:
+                        break
+                return [tuple(row) for row in rows]
+
             # FIX25: Seçilen N için kolonları yeniden kur; frekans hedefleri N'e göre garanti edilir.
             _goster_prefix = _f25_prefix_uret(int(gosterilecek_kolon))
+            if spor_toto_dagitim_yontemi == "Optimize edilmiş yöntem":
+                _goster_prefix = _st_optimize_kolonlar(_goster_prefix)
+            st.caption("Dağıtım: " + spor_toto_dagitim_yontemi +
+                       " · Manuel seçimler ve maç başına 1/X/2 adetleri korunur. "
+                       "Bu yöntem için geçmiş hafta üstünlüğü henüz doğrulanmadı.")
             _goster_kolonlar = {
                 k: {no: secim for no, secim in zip(mac_nolari, imza)}
                 for k, imza in enumerate(_goster_prefix, start=1)
