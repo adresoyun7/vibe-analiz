@@ -11452,6 +11452,14 @@ def _spor_toto_takim_benzerlik(a, b):
 
     # Sık görülen manuel/API isim farklarını aynı kanonik ada indir.
     aliaslar = {
+        # UEFA ad varyantları: aynı kulübün Türkçe/İngilizce/yerel yazımları.
+        "sportingcp": "sportingcp",
+        "sportinglisbon": "sportingcp",
+        "sportingclubeportugal": "sportingcp",
+        "sportingportugal": "sportingcp",
+        "slaviaprague": "slaviapraha",
+        "slaviapraha": "slaviapraha",
+        "skSlaviapraha".lower(): "slaviapraha",
         "levante": "levanteud",
         "levanteud": "levanteud",
         "realbetis": "realbetis",
@@ -11646,6 +11654,8 @@ def _spor_toto_eslesme_teshisi(mac, bulten, limit=6):
             "En düşük benzerlik": round(min(home, away), 3),
             "Gün farkı": abs((dt.date() - kickoff.date()).days),
         })
+    # Çok düşük benzerlikli ilgisiz maçları tanı panelinde aday gibi gösterme.
+    candidates = [x for x in candidates if x["En düşük benzerlik"] >= 0.60]
     candidates.sort(key=lambda x: (x["En düşük benzerlik"],
                                     x["Ev benzerliği"] + x["Dep benzerliği"],
                                     -x["Gün farkı"]), reverse=True)
@@ -12188,7 +12198,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
             })
         st.dataframe(pd.DataFrame(tablo), use_container_width=True, hide_index=True)
 
-        eslesmeyen = [r for r in _st_sonuclar if not str(r.get("durum", "")).startswith(("Tamam", "Düşük güvenilirlik", "Yetersiz örnek"))]
+        eslesmeyen = [r for r in _st_sonuclar if "teshis_adaylari" in r]
         if eslesmeyen:
             with st.expander(f"🔎 Eşleşme teşhis paneli ({len(eslesmeyen)} maç)", expanded=True):
                 st.caption("Bu panel API'den gerçekten gelen maçları gösterir. Adaylar otomatik kabul edilmez; tarih, iki takım ve lig birlikte kontrol edilmelidir.")
@@ -12198,7 +12208,7 @@ if st.session_state.get('sayfa_modu') == 'Spor Toto':
                     if adaylar:
                         st.dataframe(pd.DataFrame(adaylar), use_container_width=True, hide_index=True)
                     else:
-                        st.warning("Bu maçın tarihine ±2 gün yakın API karşılaşması bulunamadı. Seçilen sport key'lerin ve API kapsamının kontrolü gerekli.")
+                        st.warning("Bu maç için iki takımın da yeterince benzediği API adayı bulunamadı. API lig/tarih kapsamını kontrol et; ilgisiz karşılaşmalar gizlendi.")
 
         # Spor Toto 15 macin hepsini kolonlara tasir: veri kalitesi dusukse
         # maci cikarmak yerine belirsizligi dagilimda korur.
