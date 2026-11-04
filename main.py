@@ -13919,9 +13919,7 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             key=lambda x: (-x[0], x[1] + x[2], x[1], x[2])
                         )[:3]
                         ilk = skorlar[0]
-                        diger = ", ".join(f"{i}-{j} (%{100*p:.1f})" for p, i, j in skorlar[1:])
-                        return (f"{etiket}: {ilk[1]}-{ilk[2]} (%{100*ilk[0]:.1f})"
-                                f" · Diğer olası {etiket.replace('Beklenen ', '')}: {diger}")
+                        return f"{etiket}: {ilk[1]}-{ilk[2]} (%{100*ilk[0]:.1f})"
 
                     # Yalnızca açılan maç kartında görünür; ana tahmin motoruna dokunmaz.
                     def _kart_en_iyi_tercihler(frame):
@@ -14145,15 +14143,12 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         + ''.join(_ozet_html) + '</div>',
                         unsafe_allow_html=True,
                     )
-                    iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
-                    ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
-                    iy_beklenen_ozeti = _beklenen_tam_skor(ornekler, "HTHG", "HTAG", "Beklenen İY")
-                    ms_beklenen_ozeti = _beklenen_tam_skor(ornekler, "FTHG", "FTAG", "Beklenen MS")
+                    iy_skor_ozeti = _beklenen_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
+                    ms_skor_ozeti = _beklenen_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
-                        f"{len(ornekler)} geçmiş örnek · Genel filtre: {float(TOLERANS):.2f} "
-                        f"· {iy_skor_ozeti} · {ms_skor_ozeti} "
-                        f"· {iy_beklenen_ozeti} · {ms_beklenen_ozeti}"
+                        f"{len(ornekler)} geçmiş örnek · "
+                        f"{iy_skor_ozeti} · {ms_skor_ozeti}"
                     )
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
