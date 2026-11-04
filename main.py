@@ -13919,7 +13919,10 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             key=lambda x: (-x[0], x[1] + x[2], x[1], x[2])
                         )[:3]
                         ilk = skorlar[0]
-                        return f"{etiket}: {ilk[1]}-{ilk[2]} (%{100*ilk[0]:.1f})"
+                        return (f"{etiket}: {ilk[1]}-{ilk[2]} (%{100*ilk[0]:.1f})"
+                                + " · " + " · ".join(
+                                    f"{i}-{j} (%{100*prob:.1f})" for prob, i, j in skorlar[1:]
+                                ))
 
                     # Yalnızca açılan maç kartında görünür; ana tahmin motoruna dokunmaz.
                     def _kart_en_iyi_tercihler(frame):
