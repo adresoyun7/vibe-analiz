@@ -13923,18 +13923,17 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         return (f"{etiket}: {ilk[1]}-{ilk[2]} (%{100*ilk[0]:.1f})"
                                 f" · Diğer olası {etiket.replace('Beklenen ', '')}: {diger}")
 
-                    # Yalnızca AÇILAN maç kartının içeriğinde görünür.
-                    # Hassasiyet kaydırıcısı değiştiğinde aynı örnek havuzuyla güncellenir.
-                    def _kart_en_iyi_tercih(frame):
+                    # Yalnızca açılan maç kartında görünür; ana tahmin motoruna dokunmaz.
+                    def _kart_en_iyi_tercihler(frame):
                         if frame.empty or not {"FTHG", "FTAG"}.issubset(frame.columns):
-                            return "En iyi tercih: — (geçerli örnek yok)"
+                            return ("En iyi tercih: — (geçerli örnek yok)", "En iyi kombo: —")
                         ev = pd.to_numeric(frame["FTHG"], errors="coerce")
                         dep = pd.to_numeric(frame["FTAG"], errors="coerce")
                         valid = ev.notna() & dep.notna() & ev.ge(0) & dep.ge(0)
                         ev, dep = ev[valid], dep[valid]
                         n = len(ev)
-                        if n == 0:
-                            return "En iyi tercih: — (geçerli örnek yok)"
+                        if not n:
+                            return ("En iyi tercih: — (geçerli örnek yok)", "En iyi kombo: —")
                         toplam = ev + dep
                         temel = {
                             "MS 1": ev > dep, "MS X": ev == dep, "MS 2": ev < dep,
@@ -13942,7 +13941,6 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             "KG Yok": (ev == 0) | (dep == 0),
                             "2.5 Üst": toplam > 2, "2.5 Alt": toplam < 3,
                         }
-                        # Yalnızca aynı maçta birlikte gerçekleşen sonuçlar kombo sayılır.
                         kombolar = {
                             f"{ms} + {gol}": temel[ms] & temel[gol]
                             for ms in ("MS 1", "MS X", "MS 2")
@@ -13953,26 +13951,69 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             for kg in ("KG Var", "KG Yok")
                             for ust in ("2.5 Üst", "2.5 Alt")
                         })
-                        # Wilson alt sınırı küçük örnekteki aşırı güveni azaltır.
-                        def _wilson(k, adet):
-                            p = k / adet
-                            z = 1.645
-                            return (p + z*z/(2*adet) - z*math.sqrt(p*(1-p)/adet + z*z/(4*adet*adet))) / (1 + z*z/adet)
-                        adaylar = []
-                        for ad, maske in {**temel, **kombolar}.items():
-                            k = int(maske.sum())
-                            adaylar.append((_wilson(k, n), k / n, k, ad))
-                        # Eşit skorlu bütün marketleri göster; MS'ye keyfi öncelik verme.
-                        en_yuksek = max(aday[0] for aday in adaylar)
-                        esitler = [aday for aday in adaylar if abs(aday[0] - en_yuksek) < 1e-10]
-                        # Temel marketler önce, kombolar sonra; hepsi aynı güven düzeyindedir.
-                        esitler.sort(key=lambda a: (" + " in a[3], a[3]))
-                        metin = " · ".join(f"{ad} (%{oran*100:.1f} · {k}/{n})"
-                                          for _, oran, k, ad in esitler)
-                        return f"En iyi tercihler: {metin}"
 
-                    st.markdown(f"**{_kart_en_iyi_tercih(ornekler)}**")
-                    st.caption("Seçilen hassasiyetteki geçmiş gerçekleşme oranıdır; kalibre edilmiş tahmin olasılığı değildir.")
+                        def _wilson(k):
+                            p = k / n
+                            z = 1.645
+                            return (p + z*z/(2*n) - z*math.sqrt(p*(1-p)/n + z*z/(4*n*n))) / (1 + z*z/n)
+
+                        # Yalnızca geçmiş başarıda eşitlik olduğunda maçın güncel
+                        # 1-X-2 / 2.5 oranlarını bağımsız risk ayracı olarak kullan.
+                        # Eksik market fiyatı olan adaylara uydurma olasılık atama.
+                        def _oran_olasiligi(ad):
+                            try:
+                                ms_odds = [float(m.get(key)) for key in ("h", "b", "a")]
+                                ms_valid = all(math.isfinite(x) and x > 1 for x in ms_odds)
+                                ms_probs = ([1/x / sum(1/y for y in ms_odds) for x in ms_odds]
+                                            if ms_valid else None)
+                            except (ValueError, TypeError, ZeroDivisionError):
+                                ms_probs = None
+                            try:
+                                over, under = float(m.get("o25_over")), float(m.get("o25_under"))
+                                goal_valid = all(math.isfinite(x) and x > 1 for x in (over, under))
+                                over_p = (1/over) / (1/over + 1/under) if goal_valid else None
+                            except (ValueError, TypeError, ZeroDivisionError):
+                                over_p = None
+                            parts = ad.split(" + ")
+                            probs = []
+                            for part in parts:
+                                if part in ("MS 1", "MS X", "MS 2"):
+                                    if ms_probs is None: return None
+                                    probs.append(ms_probs[{"MS 1": 0, "MS X": 1, "MS 2": 2}[part]])
+                                elif part in ("2.5 Üst", "2.5 Alt"):
+                                    if over_p is None: return None
+                                    probs.append(over_p if part == "2.5 Üst" else 1 - over_p)
+                                else:
+                                    return None  # KG veya komboya bağımsızlık varsayımı uygulama.
+                            return probs[0] if len(probs) == 1 else None
+
+                        def _sec(havuz, baslik):
+                            adaylar = [(_wilson(int(mask.sum())), int(mask.sum()), ad)
+                                       for ad, mask in havuz.items()]
+                            en_iyi = max(item[0] for item in adaylar)
+                            esitler = [item for item in adaylar if abs(item[0] - en_iyi) < 1e-10]
+                            # Eşitlikte karşılaştırılabilir oran desteği varsa kullan.
+                            destekler = [(_oran_olasiligi(ad), score, k, ad)
+                                         for score, k, ad in esitler]
+                            mevcut = [p for p, _, _, _ in destekler if p is not None]
+                            if len(mevcut) >= 2 and len(mevcut) == len(destekler):
+                                en_p = max(mevcut)
+                                esitler = [(score, k, ad) for p, score, k, ad in destekler
+                                           if abs(p - en_p) < 1e-9]
+                            # Karşılaştırma yapılamıyorsa eşit adayları gizleme.
+                            esitler.sort(key=lambda a: (" + " in a[2], a[2]))
+                            return baslik + ": " + " · ".join(
+                                f"{ad} (%{100*k/n:.1f} · {k}/{n})" for _, k, ad in esitler
+                            )
+
+                        return (_sec(temel, "En iyi tercih"), _sec(kombolar, "En iyi kombo"))
+
+                    _en_iyi_tekli, _en_iyi_kombo = _kart_en_iyi_tercihler(ornekler)
+                    st.markdown(f"**{_en_iyi_tekli}**")
+                    st.markdown(f"**{_en_iyi_kombo}**")
+                    st.caption("Yüzdeler seçilen hassasiyetteki geçmiş gerçekleşme oranlarıdır; "
+                               "kalibre edilmiş kazanma olasılığı değildir. Eşit tekli tercihler "
+                               "yalnızca karşılaştırılabilir maç öncesi oranlar varsa ayrıştırılır.")
 
                     iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
                     ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
