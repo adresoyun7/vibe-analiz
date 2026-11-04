@@ -14120,23 +14120,28 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         (f"Seçilen · {float(fix49_tol):.2f}", _en_iyi_tekli, _en_iyi_kombo),
                         ("Genel · 0.00–0.10", _ozetler[0], _ozetler[1]),
                     )
+                    # Okunabilir, göz yormayan dört sütun: büyük yazı, düşük doygunluklu zemin.
+                    # Dar ekranlarda otomatik alt satıra geçer; masaüstünde tek satırdır.
                     _ozet_html = []
                     for _baslik, _tekli, _kombo in _ozet_gruplari:
-                        _ozet_html.append(
-                            '<div style="flex:1 1 440px;min-width:0;padding:5px 12px">'
-                            f'<div style="font-size:11px;color:#8da4ba;margin-bottom:3px">{escape(_baslik)}</div>'
-                            '<div style="display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;'
-                            'font-size:12px;line-height:1.45">'
-                            '<span style="color:#dbe8f3"><span style="color:#7e98aa">Tekli</span> '
-                            f'<strong>{escape(_ozet_degeri(_tekli))}</strong></span>'
-                            '<span style="color:#b6bccc"><span style="color:#7e98aa">Kombo</span> '
-                            f'{escape(_ozet_degeri(_kombo))}</span>'
-                            '</div></div>'
-                        )
+                        for _tur, _metin, _renk in (
+                            ('Tekli', _tekli, '#9fd8c1'),
+                            ('Kombo', _kombo, '#c8b7e5'),
+                        ):
+                            _ozet_html.append(
+                                '<div style="min-width:210px;flex:1 1 210px;box-sizing:border-box;'
+                                'padding:10px 13px;border-right:1px solid rgba(170,185,205,.12)">'
+                                f'<div style="font-size:12px;font-weight:600;color:#aebfd0;'
+                                f'margin-bottom:7px">{escape(_baslik)} · {_tur}</div>'
+                                f'<div style="font-size:15px;line-height:1.55;font-weight:650;'
+                                f'color:{_renk};overflow-wrap:anywhere">'
+                                f'{escape(_ozet_degeri(_metin))}</div>'
+                                '</div>'
+                            )
                     st.markdown(
-                        '<div style="display:flex;flex-wrap:wrap;align-items:center;'
-                        'background:rgba(110,130,155,.07);border:1px solid rgba(140,160,185,.16);'
-                        'border-radius:8px;padding:4px 2px;margin:5px 0 8px">'
+                        '<div style="display:flex;flex-wrap:wrap;align-items:stretch;'
+                        'background:rgba(110,130,155,.095);border:1px solid rgba(140,160,185,.22);'
+                        'border-radius:9px;margin:8px 0 10px;overflow:hidden">'
                         + ''.join(_ozet_html) + '</div>',
                         unsafe_allow_html=True,
                     )
