@@ -14159,19 +14159,29 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             return f"{etiket}: —"
                         skorlar = ev[gecerli].astype(int).astype(str) + "-" + dep[gecerli].astype(int).astype(str)
                         sayim = skorlar.value_counts()
-                        toplam = len(skorlar)
                         ilk_uc = sayim.head(3)
-                        return f"{etiket}: " + " · ".join(
-                            f"{skor} ({int(adet)}/{toplam} · %{100 * int(adet) / toplam:.1f})"
-                            for skor, adet in ilk_uc.items()
+                        return " · ".join(
+                            f"{skor} ×{int(adet)}" for skor, adet in ilk_uc.items()
                         )
 
                     iy_skor_ozeti = _gecmis_ilk_uc_skor(ornekler, "HTHG", "HTAG", "İY skor")
                     ms_skor_ozeti = _gecmis_ilk_uc_skor(ornekler, "FTHG", "FTAG", "MS skor")
-                    st.caption(
-                        f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
-                        f"{len(ornekler)} geçmiş örnek · "
-                        f"{iy_skor_ozeti} · {ms_skor_ozeti}"
+                    # Skorları tek bakışta okunabilen, düşük kontrastlı iki sütunda göster.
+                    st.markdown(
+                        '<div style="margin:4px 0 9px;padding:8px 12px;'
+                        'background:rgba(110,130,155,.055);border:1px solid rgba(140,160,185,.14);'
+                        'border-radius:8px">'
+                        f'<div style="font-size:12px;color:#aebfd0;margin-bottom:6px">'
+                        f'{float(fix49_tol):.2f} hassasiyet · {len(ornekler)} geçmiş maç</div>'
+                        '<div style="display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center">'
+                        f'<div style="flex:1 1 280px;font-size:14px;line-height:1.5;color:#d9e4ef">'
+                        f'<span style="color:#9fb2c8;font-weight:600">İY skor:</span> '
+                        f'{escape(iy_skor_ozeti)}</div>'
+                        f'<div style="flex:1 1 280px;font-size:14px;line-height:1.5;color:#d9e4ef">'
+                        f'<span style="color:#9fb2c8;font-weight:600">MS skor:</span> '
+                        f'{escape(ms_skor_ozeti)}</div>'
+                        '</div></div>',
+                        unsafe_allow_html=True,
                     )
                     if ornekler.empty:
                         st.warning("Bu hassasiyet ve lig seçimiyle geçmiş örnek bulunamadı.")
