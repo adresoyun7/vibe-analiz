@@ -14020,21 +14020,14 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         vurgu, arkaplan = renkler[renk]
                         st.markdown(
                             f'<div style="border:1px solid {vurgu};border-radius:12px;'
-                            f'background:{arkaplan};padding:13px 16px;min-height:105px;'
+                            f'background:{arkaplan};padding:10px 12px;min-height:86px;'
                             f'box-sizing:border-box;height:100%;">'
-                            f'<div style="font-size:13px;font-weight:700;color:{vurgu};margin-bottom:9px">'
+                            f'<div style="font-size:13px;font-weight:700;color:{vurgu};margin-bottom:5px">'
                             f'{simge} {escape(baslik)}</div>'
-                            f'<div style="font-size:17px;font-weight:750;color:#f3f6ff;line-height:1.45;'
+                            f'<div style="font-size:14px;font-weight:750;color:#f3f6ff;line-height:1.45;'
                             f'overflow-wrap:anywhere">{escape(icerik or "—")}</div></div>',
                             unsafe_allow_html=True,
                         )
-
-                    st.markdown('**🎯 Seçilen hassasiyet**')
-                    _sol_tekli, _sag_kombo = st.columns(2, gap='medium')
-                    with _sol_tekli:
-                        _tercih_karti(_en_iyi_tekli, 'yesil', '🏆')
-                    with _sag_kombo:
-                        _tercih_karti(_en_iyi_kombo, 'mor', '🔗')
 
                     # 0.00–0.10 aralığındaki her hassasiyeti ayrı değerlendir.
                     # Aynı maçlar hassasiyet havuzları arasında örtüşebileceği için
@@ -14109,20 +14102,36 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             ))
                         return output, levels
 
+                    # Dört özet tek yatay sırada: seçilen tekli / kombo / genel tekli / kombo.
+                    _genel = None
                     try:
                         _genel = _hassasiyetler_genel_tercih()
-                        if _genel:
-                            _ozetler, _seviye = _genel
-                            st.markdown('**📊 Tüm hassasiyetlerin ortalaması (0.00–0.10)**')
-                            _genel_sol, _genel_sag = st.columns(2, gap='medium')
-                            with _genel_sol:
-                                _tercih_karti(_ozetler[0], 'yesil', '🏆')
-                            with _genel_sag:
-                                _tercih_karti(_ozetler[1], 'mor', '🔗')
-                            st.caption(f'{_seviye}/11 hassasiyette geçerli örnek var. '
-                                       'Ortalama, her hassasiyetteki gerçekleşme oranının eşit ağırlıklı ortalamasıdır; '
-                                       'örtüşen maçlar bağımsız kanıt sayılmaz.')
-                    except (KeyError, ValueError, TypeError, OSError) as _genel_error:
+                    except (KeyError, ValueError, TypeError, OSError):
+                        pass
+                    _ozetler, _seviye = _genel if _genel else (
+                        ['Genel en iyi tercih: —', 'Genel en iyi kombo: —'], 0
+                    )
+                    _dort_kart = st.columns(4, gap='small')
+                    for _sutun, _metin, _renk, _simge, _grup in zip(
+                        _dort_kart,
+                        (_en_iyi_tekli, _en_iyi_kombo, _ozetler[0], _ozetler[1]),
+                        ('yesil', 'mor', 'yesil', 'mor'),
+                        ('🏆', '🔗', '🏆', '🔗'),
+                        ('Seçilen hassasiyet', 'Seçilen hassasiyet',
+                         'Tüm hassasiyetler (0.00–0.10)', 'Tüm hassasiyetler (0.00–0.10)'),
+                    ):
+                        with _sutun:
+                            st.markdown(
+                                f'<div style="font-size:12px;font-weight:700;color:#9bb4d0;'
+                                f'margin-bottom:5px">{escape(_grup)}</div>',
+                                unsafe_allow_html=True,
+                            )
+                            _tercih_karti(_metin, _renk, _simge)
+                    if _genel:
+                        st.caption(f'{_seviye}/11 hassasiyette geçerli örnek var. '
+                                   'Ortalama, her hassasiyetteki gerçekleşme oranının eşit ağırlıklı ortalamasıdır; '
+                                   'örtüşen maçlar bağımsız kanıt sayılmaz.')
+                    else:
                         st.caption('Tüm hassasiyetlerin ortak özeti hesaplanamadı.')
 
                     st.caption("Yüzdeler seçilen hassasiyetteki geçmiş gerçekleşme oranlarıdır; "
