@@ -14146,8 +14146,28 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         + ''.join(_ozet_html) + '</div>',
                         unsafe_allow_html=True,
                     )
-                    iy_skor_ozeti = _beklenen_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
-                    ms_skor_ozeti = _beklenen_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
+                    # Bu kartın skor özeti Poisson değil, seçili hassasiyetteki
+                    # gerçekleşmiş geçmiş maç skorlarının en sık görülen ilk üçüdür.
+                    # Ana tahmin motoru ve diğer Poisson kullanımları değişmez.
+                    def _gecmis_ilk_uc_skor(frame, ev_kolonu, dep_kolonu, etiket):
+                        if frame.empty or ev_kolonu not in frame.columns or dep_kolonu not in frame.columns:
+                            return f"{etiket}: —"
+                        ev = pd.to_numeric(frame[ev_kolonu], errors="coerce")
+                        dep = pd.to_numeric(frame[dep_kolonu], errors="coerce")
+                        gecerli = ev.notna() & dep.notna() & ev.ge(0) & dep.ge(0)
+                        if not gecerli.any():
+                            return f"{etiket}: —"
+                        skorlar = ev[gecerli].astype(int).astype(str) + "-" + dep[gecerli].astype(int).astype(str)
+                        sayim = skorlar.value_counts()
+                        toplam = len(skorlar)
+                        ilk_uc = sayim.head(3)
+                        return f"{etiket}: " + " · ".join(
+                            f"{skor} ({int(adet)}/{toplam} · %{100 * int(adet) / toplam:.1f})"
+                            for skor, adet in ilk_uc.items()
+                        )
+
+                    iy_skor_ozeti = _gecmis_ilk_uc_skor(ornekler, "HTHG", "HTAG", "İY skor")
+                    ms_skor_ozeti = _gecmis_ilk_uc_skor(ornekler, "FTHG", "FTAG", "MS skor")
                     st.caption(
                         f"Bu maç: {float(fix49_tol):.2f} hassasiyet · "
                         f"{len(ornekler)} geçmiş örnek · "
