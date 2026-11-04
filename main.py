@@ -14111,22 +14111,35 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     _ozetler, _seviye = _genel if _genel else (
                         ['Genel en iyi tercih: —', 'Genel en iyi kombo: —'], 0
                     )
-                    _dort_kart = st.columns(4, gap='small')
-                    for _sutun, _metin, _renk, _simge, _grup in zip(
-                        _dort_kart,
-                        (_en_iyi_tekli, _en_iyi_kombo, _ozetler[0], _ozetler[1]),
-                        ('yesil', 'mor', 'yesil', 'mor'),
-                        ('🏆', '🔗', '🏆', '🔗'),
-                        ('Seçilen hassasiyet', 'Seçilen hassasiyet',
-                         'Tüm hassasiyetler (0.00–0.10)', 'Tüm hassasiyetler (0.00–0.10)'),
-                    ):
-                        with _sutun:
-                            st.markdown(
-                                f'<div style="font-size:12px;font-weight:700;color:#9bb4d0;'
-                                f'margin-bottom:5px">{escape(_grup)}</div>',
-                                unsafe_allow_html=True,
-                            )
-                            _tercih_karti(_metin, _renk, _simge)
+                    # Sade, tek satırlık özet: iki grup, kutu ve parlak kenarlık yok.
+                    # Mevcut tercih/kombo hesaplamalarına dokunulmaz.
+                    def _ozet_degeri(metin):
+                        return str(metin).partition(": ")[2] or "—"
+
+                    _ozet_gruplari = (
+                        (f"Seçilen · {float(fix49_tol):.2f}", _en_iyi_tekli, _en_iyi_kombo),
+                        ("Genel · 0.00–0.10", _ozetler[0], _ozetler[1]),
+                    )
+                    _ozet_html = []
+                    for _baslik, _tekli, _kombo in _ozet_gruplari:
+                        _ozet_html.append(
+                            '<div style="flex:1 1 440px;min-width:0;padding:5px 12px">'
+                            f'<div style="font-size:11px;color:#8da4ba;margin-bottom:3px">{escape(_baslik)}</div>'
+                            '<div style="display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;'
+                            'font-size:12px;line-height:1.45">'
+                            '<span style="color:#dbe8f3"><span style="color:#7e98aa">Tekli</span> '
+                            f'<strong>{escape(_ozet_degeri(_tekli))}</strong></span>'
+                            '<span style="color:#b6bccc"><span style="color:#7e98aa">Kombo</span> '
+                            f'{escape(_ozet_degeri(_kombo))}</span>'
+                            '</div></div>'
+                        )
+                    st.markdown(
+                        '<div style="display:flex;flex-wrap:wrap;align-items:center;'
+                        'background:rgba(110,130,155,.07);border:1px solid rgba(140,160,185,.16);'
+                        'border-radius:8px;padding:4px 2px;margin:5px 0 8px">'
+                        + ''.join(_ozet_html) + '</div>',
+                        unsafe_allow_html=True,
+                    )
                     if _genel:
                         st.caption(f'{_seviye}/11 hassasiyette geçerli örnek var. '
                                    'Ortalama, her hassasiyetteki gerçekleşme oranının eşit ağırlıklı ortalamasıdır; '
