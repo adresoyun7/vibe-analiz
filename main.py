@@ -14145,17 +14145,6 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         + ''.join(_ozet_html) + '</div>',
                         unsafe_allow_html=True,
                     )
-                    if _genel:
-                        st.caption(f'{_seviye}/11 hassasiyette geçerli örnek var. '
-                                   'Ortalama, her hassasiyetteki gerçekleşme oranının eşit ağırlıklı ortalamasıdır; '
-                                   'örtüşen maçlar bağımsız kanıt sayılmaz.')
-                    else:
-                        st.caption('Tüm hassasiyetlerin ortak özeti hesaplanamadı.')
-
-                    st.caption("Yüzdeler seçilen hassasiyetteki geçmiş gerçekleşme oranlarıdır; "
-                               "kalibre edilmiş kazanma olasılığı değildir. Eşit tekli tercihler "
-                               "yalnızca karşılaştırılabilir maç öncesi oranlar varsa ayrıştırılır.")
-
                     iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
                     ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
                     iy_beklenen_ozeti = _beklenen_tam_skor(ornekler, "HTHG", "HTAG", "Beklenen İY")
