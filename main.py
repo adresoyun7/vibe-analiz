@@ -13923,6 +13923,58 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         return (f"{etiket}: {ilk[1]}-{ilk[2]} (%{100*ilk[0]:.1f})"
                                 f" · Diğer olası {etiket.replace('Beklenen ', '')}: {diger}")
 
+                    # Yalnızca AÇILAN maç kartının içeriğinde görünür.
+                    # Hassasiyet kaydırıcısı değiştiğinde aynı örnek havuzuyla güncellenir.
+                    def _kart_en_iyi_tercih(frame):
+                        if frame.empty or not {"FTHG", "FTAG"}.issubset(frame.columns):
+                            return "En iyi tercih: — (geçerli örnek yok)"
+                        ev = pd.to_numeric(frame["FTHG"], errors="coerce")
+                        dep = pd.to_numeric(frame["FTAG"], errors="coerce")
+                        valid = ev.notna() & dep.notna() & ev.ge(0) & dep.ge(0)
+                        ev, dep = ev[valid], dep[valid]
+                        n = len(ev)
+                        if n < 5:
+                            return f"En iyi tercih: — (yalnızca {n} örnek; en az 5 gerekli)"
+                        toplam = ev + dep
+                        temel = {
+                            "MS 1": ev > dep, "MS X": ev == dep, "MS 2": ev < dep,
+                            "KG Var": (ev > 0) & (dep > 0),
+                            "KG Yok": (ev == 0) | (dep == 0),
+                            "2.5 Üst": toplam > 2, "2.5 Alt": toplam < 3,
+                        }
+                        # Yalnızca aynı maçta birlikte gerçekleşen sonuçlar kombo sayılır.
+                        kombolar = {
+                            f"{ms} + {gol}": temel[ms] & temel[gol]
+                            for ms in ("MS 1", "MS X", "MS 2")
+                            for gol in ("KG Var", "KG Yok", "2.5 Üst", "2.5 Alt")
+                        }
+                        kombolar.update({
+                            f"{kg} + {ust}": temel[kg] & temel[ust]
+                            for kg in ("KG Var", "KG Yok")
+                            for ust in ("2.5 Üst", "2.5 Alt")
+                        })
+                        # Wilson alt sınırı küçük örnekteki aşırı güveni azaltır.
+                        def _wilson(k, adet):
+                            p = k / adet
+                            z = 1.645
+                            return (p + z*z/(2*adet) - z*math.sqrt(p*(1-p)/adet + z*z/(4*adet*adet))) / (1 + z*z/adet)
+                        adaylar = []
+                        for ad, maske in temel.items():
+                            k = int(maske.sum())
+                            adaylar.append((_wilson(k, n), k/n, k, ad, False))
+                        if n >= 8:
+                            for ad, maske in kombolar.items():
+                                k = int(maske.sum())
+                                if k/n >= .55:
+                                    adaylar.append((_wilson(k, n), k/n, k, ad, True))
+                        # Kombo yalnızca en az temel market kadar sağlam görünüyorsa seçilir.
+                        en_iyi = max(adaylar, key=lambda a: (a[0], not a[4], a[1], a[3]))
+                        _, oran, k, ad, _ = en_iyi
+                        return f"En iyi tercih: {ad} (%{oran*100:.1f} · {k}/{n} örnek)"
+
+                    st.markdown(f"**{_kart_en_iyi_tercih(ornekler)}**")
+                    st.caption("Seçilen hassasiyetteki geçmiş gerçekleşme oranıdır; kalibre edilmiş tahmin olasılığı değildir.")
+
                     iy_skor_ozeti = _en_sik_tam_skor(ornekler, "HTHG", "HTAG", "İY skor")
                     ms_skor_ozeti = _en_sik_tam_skor(ornekler, "FTHG", "FTAG", "MS skor")
                     iy_beklenen_ozeti = _beklenen_tam_skor(ornekler, "HTHG", "HTAG", "Beklenen İY")
