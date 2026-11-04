@@ -13933,8 +13933,8 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                         valid = ev.notna() & dep.notna() & ev.ge(0) & dep.ge(0)
                         ev, dep = ev[valid], dep[valid]
                         n = len(ev)
-                        if n < 5:
-                            return f"En iyi tercih: — (yalnızca {n} örnek; en az 5 gerekli)"
+                        if n == 0:
+                            return "En iyi tercih: — (geçerli örnek yok)"
                         toplam = ev + dep
                         temel = {
                             "MS 1": ev > dep, "MS X": ev == dep, "MS 2": ev < dep,
@@ -13959,18 +13959,17 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                             z = 1.645
                             return (p + z*z/(2*adet) - z*math.sqrt(p*(1-p)/adet + z*z/(4*adet*adet))) / (1 + z*z/adet)
                         adaylar = []
-                        for ad, maske in temel.items():
+                        for ad, maske in {**temel, **kombolar}.items():
                             k = int(maske.sum())
-                            adaylar.append((_wilson(k, n), k/n, k, ad, False))
-                        if n >= 8:
-                            for ad, maske in kombolar.items():
-                                k = int(maske.sum())
-                                if k/n >= .55:
-                                    adaylar.append((_wilson(k, n), k/n, k, ad, True))
-                        # Kombo yalnızca en az temel market kadar sağlam görünüyorsa seçilir.
-                        en_iyi = max(adaylar, key=lambda a: (a[0], not a[4], a[1], a[3]))
-                        _, oran, k, ad, _ = en_iyi
-                        return f"En iyi tercih: {ad} (%{oran*100:.1f} · {k}/{n} örnek)"
+                            adaylar.append((_wilson(k, n), k / n, k, ad))
+                        # Eşit skorlu bütün marketleri göster; MS'ye keyfi öncelik verme.
+                        en_yuksek = max(aday[0] for aday in adaylar)
+                        esitler = [aday for aday in adaylar if abs(aday[0] - en_yuksek) < 1e-10]
+                        # Temel marketler önce, kombolar sonra; hepsi aynı güven düzeyindedir.
+                        esitler.sort(key=lambda a: (" + " in a[3], a[3]))
+                        metin = " · ".join(f"{ad} (%{oran*100:.1f} · {k}/{n})"
+                                          for _, oran, k, ad in esitler)
+                        return f"En iyi tercihler: {metin}"
 
                     st.markdown(f"**{_kart_en_iyi_tercih(ornekler)}**")
                     st.caption("Seçilen hassasiyetteki geçmiş gerçekleşme oranıdır; kalibre edilmiş tahmin olasılığı değildir.")
