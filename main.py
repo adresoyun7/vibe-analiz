@@ -14011,6 +14011,93 @@ if st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
                     _en_iyi_tekli, _en_iyi_kombo = _kart_en_iyi_tercihler(ornekler)
                     st.markdown(f"**{_en_iyi_tekli}**")
                     st.markdown(f"**{_en_iyi_kombo}**")
+
+                    # 0.00–0.10 aralığındaki her hassasiyeti ayrı değerlendir.
+                    # Aynı maçlar hassasiyet havuzları arasında örtüşebileceği için
+                    # bunlar bağımsız test olarak toplanmaz; oranların aritmetik
+                    # ortalaması ve kaç seviyede örnek bulunduğu gösterilir.
+                    def _hassasiyetler_genel_tercih():
+                        cache = st.session_state.setdefault('fix49_genis_havuzlar', {})
+                        pool_key = f'{fix49_mac_kimlik}:Tüm ligler'
+                        genis = cache.get(pool_key)
+                        if genis is None:
+                            kaynak = futbol_veri_motoru(tuple(yillar))
+                            kaynak = gecmis_lig_grubu_filtrele(kaynak, 'Tüm ligler')
+                            genis = gecmis_ornekleri_bul(
+                                kaynak, pd.Series(dict(m)), 0.10,
+                                sadece_ayni_lig=bool(gecmis_ayni_lig), limit=100000,
+                            )
+                            cache[pool_key] = genis
+                            while len(cache) > 30:
+                                cache.pop(next(iter(cache)))
+                        if genis is None or genis.empty or not {'FTHG', 'FTAG'}.issubset(genis.columns):
+                            return None
+                        results = {}
+                        levels = 0
+                        for i in range(11):
+                            tol = round(i / 100, 2)
+                            frame = genis.loc[oran_eslesme_maskesi(genis, m, tol)]
+                            if gecmis_limit is not None and str(gecmis_limit).isdigit():
+                                frame = frame.head(int(gecmis_limit))
+                            home = pd.to_numeric(frame['FTHG'], errors='coerce')
+                            away = pd.to_numeric(frame['FTAG'], errors='coerce')
+                            valid = home.notna() & away.notna() & home.ge(0) & away.ge(0)
+                            home, away = home[valid], away[valid]
+                            n = len(home)
+                            if not n:
+                                continue
+                            levels += 1
+                            goals = home + away
+                            singles = {
+                                'MS 1': home > away, 'MS X': home == away, 'MS 2': home < away,
+                                'KG Var': (home > 0) & (away > 0),
+                                'KG Yok': (home == 0) | (away == 0),
+                                '2.5 Üst': goals > 2, '2.5 Alt': goals < 3,
+                            }
+                            combos = {
+                                f'{ms} + {goal}': singles[ms] & singles[goal]
+                                for ms in ('MS 1', 'MS X', 'MS 2')
+                                for goal in ('KG Var', 'KG Yok', '2.5 Üst', '2.5 Alt')
+                            }
+                            combos.update({
+                                f'{kg} + {goal}': singles[kg] & singles[goal]
+                                for kg in ('KG Var', 'KG Yok')
+                                for goal in ('2.5 Üst', '2.5 Alt')
+                            })
+                            for category, candidates in (('tekli', singles), ('kombo', combos)):
+                                for name, mask in candidates.items():
+                                    results.setdefault((category, name), []).append(float(mask.sum()) / n)
+                        if not levels:
+                            return None
+                        output = []
+                        for category, title in (('tekli', 'Genel en iyi tercih'), ('kombo', 'Genel en iyi kombo')):
+                            scores = [(sum(values) / len(values), name, len(values))
+                                      for (kind, name), values in results.items() if kind == category]
+                            if not scores:
+                                output.append(f'{title}: —')
+                                continue
+                            best = max(score for score, _, _ in scores)
+                            tied = sorted((name, count) for score, name, count in scores
+                                          if abs(score - best) < 1e-10)
+                            output.append(f'{title}: ' + ' · '.join(
+                                f'{name} (%{best*100:.1f} ort. · {count} hassasiyet)'
+                                for name, count in tied
+                            ))
+                        return output, levels
+
+                    try:
+                        _genel = _hassasiyetler_genel_tercih()
+                        if _genel:
+                            _ozetler, _seviye = _genel
+                            st.markdown('**Tüm hassasiyetlerin ortalaması (0.00–0.10)**')
+                            for _ozet in _ozetler:
+                                st.markdown(_ozet)
+                            st.caption(f'{_seviye}/11 hassasiyette geçerli örnek var. '
+                                       'Ortalama, her hassasiyetteki gerçekleşme oranının eşit ağırlıklı ortalamasıdır; '
+                                       'örtüşen maçlar bağımsız kanıt sayılmaz.')
+                    except (KeyError, ValueError, TypeError, OSError) as _genel_error:
+                        st.caption('Tüm hassasiyetlerin ortak özeti hesaplanamadı.')
+
                     st.caption("Yüzdeler seçilen hassasiyetteki geçmiş gerçekleşme oranlarıdır; "
                                "kalibre edilmiş kazanma olasılığı değildir. Eşit tekli tercihler "
                                "yalnızca karşılaştırılabilir maç öncesi oranlar varsa ayrıştırılır.")
