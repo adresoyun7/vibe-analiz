@@ -464,13 +464,8 @@ class EgitimVerisi:
     referans: str
 
 
-def egitim_tablosu(gecmis: pd.DataFrame, ayar: Optional[GolModeliAyar] = None,
-                   referans: str = "kapanis") -> Tuple[pd.DataFrame, DinamikGolModeli]:
-    """Geçmişten walk-forward özellik tablosu üretir.
-
-    referans="kapanis": çapa = kapanış oranı, oran hareketi = kapanış - açılış.
-    referans="acilis":  çapa = açılış oranı, hareket kullanılmaz (CLV ölçülebilir).
-    """
+def gol_modelini_isle(gecmis: pd.DataFrame, ayar: Optional[GolModeliAyar] = None):
+    """Geçmişi temizleyip gol modelinden bir kez geçirir; (df, model) döndürür."""
     df = gecmis.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
@@ -483,7 +478,18 @@ def egitim_tablosu(gecmis: pd.DataFrame, ayar: Optional[GolModeliAyar] = None,
 
     model = DinamikGolModeli(ayar)
     oz = model.isle(df)
-    df = df.join(oz)
+    return df.join(oz), model
+
+
+def egitim_tablosu(gecmis: pd.DataFrame, ayar: Optional[GolModeliAyar] = None,
+                   referans: str = "kapanis", hazir=None) -> Tuple[pd.DataFrame, DinamikGolModeli]:
+    """Geçmişten walk-forward özellik tablosu üretir.
+
+    referans="kapanis": çapa = kapanış oranı, oran hareketi = kapanış - açılış.
+    referans="acilis":  çapa = açılış oranı, hareket kullanılmaz (CLV ölçülebilir).
+    hazir: gol_modelini_isle() çıktısı; verilirse gol modeli yeniden çalıştırılmaz.
+    """
+    df, model = hazir if hazir is not None else gol_modelini_isle(gecmis, ayar)
 
     p_kap, f_kap, k_kap = kaynak_sirali_olasilik(df, KAPANIS_1X2)
     p_ac, f_ac, k_ac = kaynak_sirali_olasilik(df, ACILIS_1X2)
@@ -663,26 +669,31 @@ def walk_forward(tablo: pd.DataFrame, min_egitim_sezon: int = 2, ceza: float = 5
         ev_alt = plo * fiyat - 1
         kap_tum = test[["kap_H", "kap_D", "kap_A"]].to_numpy(dtype=float)
         acilis = tablo.attrs.get("referans") == "acilis"
-        for j, (idx, r) in enumerate(test.iterrows()):
-            if not np.isfinite(ev_alt[j]).any():
-                continue
-            k = int(np.nanargmax(ev_alt[j]))
-            if ev_alt[j, k] < min_ev:
-                continue
-            tuttu = int(y[j] == k)
-            kayit = {"Sezon": sezon, "Tarih": r["Date"], "Lig": r["league_code"],
-                     "Maç": f'{r["HomeTeam"]} - {r["AwayTeam"]}', "Seçim": ("MS 1", "Beraberlik", "MS 2")[k],
-                     "Oran": float(fiyat[j, k]), "Model %": float(pf[j, k] * 100),
-                     "Alt sınır %": float(plo[j, k] * 100), "Piyasa %": float(pm[j, k] * 100),
-                     "EV alt %": float(ev_alt[j, k] * 100),
-                     "Güç": "Güçlü" if pdc[j, k] > pm[j, k] else "Normal",
-                     "Tuttu": bool(tuttu), "Kâr": float(fiyat[j, k] - 1) if tuttu else -1.0}
-            if acilis and np.isfinite(kap_tum[j, k]):
-                kayit["CLV %"] = float((fiyat[j, k] * kap_tum[j, k] - 1) * 100)
-            secimler.append(kayit)
+        ev_dolu = np.where(np.isfinite(ev_alt), ev_alt, -np.inf)
+        k = ev_dolu.argmax(axis=1)
+        sira = np.arange(len(test))
+        en_iyi_ev = ev_dolu[sira, k]
+        secili = en_iyi_ev >= min_ev
+        if secili.any():
+            i, ks = sira[secili], k[secili]
+            tuttu = y[i] == ks
+            oran = fiyat[i, ks]
+            parca = pd.DataFrame({
+                "Sezon": sezon, "Tarih": test["Date"].to_numpy()[i], "Lig": test["league_code"].to_numpy()[i],
+                "Maç": (test["HomeTeam"].astype(str) + " - " + test["AwayTeam"].astype(str)).to_numpy()[i],
+                "Seçim": np.array(["MS 1", "Beraberlik", "MS 2"])[ks],
+                "Oran": oran, "Model %": pf[i, ks] * 100, "Alt sınır %": plo[i, ks] * 100,
+                "Piyasa %": pm[i, ks] * 100, "EV alt %": en_iyi_ev[secili] * 100,
+                "Güç": np.where(pdc[i, ks] > pm[i, ks], "Güçlü", "Normal"),
+                "Tuttu": tuttu, "Kâr": np.where(tuttu, oran - 1, -1.0),
+            })
+            if acilis:
+                kap = kap_tum[i, ks]
+                parca["CLV %"] = np.where(np.isfinite(kap), (oran * kap - 1) * 100, np.nan)
+            secimler.append(parca)
 
     ozet = pd.DataFrame(satirlar)
-    sec = pd.DataFrame(secimler)
+    sec = pd.concat(secimler, ignore_index=True) if secimler else pd.DataFrame()
     genel = {}
     if not ozet.empty:
         w = ozet["Maç"]
@@ -694,9 +705,9 @@ def walk_forward(tablo: pd.DataFrame, min_egitim_sezon: int = 2, ceza: float = 5
         genel["İsabet %"] = float(sec["Tuttu"].mean() * 100)
         genel["ROI %"] = float(sec["Kâr"].mean() * 100)
         genel["Ort. oran"] = float(sec["Oran"].mean())
-        if "CLV %" in sec:
+        if "CLV %" in sec and sec["CLV %"].notna().any():
             genel["Ort. CLV %"] = float(sec["CLV %"].mean())
-            genel["Pozitif CLV oranı %"] = float((sec["CLV %"] > 0).mean() * 100)
+            genel["Pozitif CLV oranı %"] = float((sec["CLV %"].dropna() > 0).mean() * 100)
         guclu = sec[sec["Güç"] == "Güçlü"]
         if len(guclu):
             genel["Güçlü seçim"] = int(len(guclu))
@@ -715,7 +726,7 @@ def lig_karnesi(secimler: pd.DataFrame) -> pd.DataFrame:
         "ROI %": g["Kâr"].mean() * 100,
         "ROI SE %": g["Kâr"].std(ddof=1).fillna(0) / np.sqrt(g.size()) * 100,
     }).reset_index()
-    if "CLV %" in secimler:
+    if "CLV %" in secimler and secimler["CLV %"].notna().any():
         k = k.merge(secimler.groupby("Lig")["CLV %"].mean().rename("CLV %").reset_index(), on="Lig", how="left")
     return k.sort_values("Seçim", ascending=False).reset_index(drop=True)
 
@@ -756,6 +767,7 @@ class MotorDurumu:
     son_veri_tarihi: Optional[pd.Timestamp]
     takimlar_lige_gore: Dict[str, List[str]] = field(default_factory=dict)
     lig_karnesi: pd.DataFrame = field(default_factory=pd.DataFrame)
+    dogrulama: Dict = field(default_factory=dict)
     version: str = MOTOR_VERSION
 
 
@@ -763,22 +775,24 @@ def motoru_hazirla(gecmis: pd.DataFrame, ayar: Optional[GolModeliAyar] = None,
                    ceza: float = 50.0, karne: bool = True) -> Optional[MotorDurumu]:
     if gecmis is None or gecmis.empty:
         return None
-    tablo, gol = egitim_tablosu(gecmis, ayar, referans="kapanis")
+    hazir = gol_modelini_isle(gecmis, ayar)
+    tablo, gol = egitim_tablosu(gecmis, referans="kapanis", hazir=hazir)
     modeller = modelleri_egit(tablo, ceza)
-    karne_df = pd.DataFrame()
+    karne_df, dogrulama = pd.DataFrame(), {}
     if karne:
         try:
-            t_ac, _ = egitim_tablosu(gecmis, ayar, referans="acilis")
-            karne_df = walk_forward(t_ac, ceza=ceza)["lig_karnesi"]
+            t_ac, _ = egitim_tablosu(gecmis, referans="acilis", hazir=hazir)
+            dogrulama = {"kapanis": walk_forward(tablo, ceza=ceza), "acilis": walk_forward(t_ac, ceza=ceza)}
+            karne_df = dogrulama["acilis"]["lig_karnesi"]
         except Exception:  # karne isteğe bağlıdır; motoru durdurmaz
-            karne_df = pd.DataFrame()
+            karne_df, dogrulama = pd.DataFrame(), {}
     lig_takim: Dict[str, set] = {}
     for kod, ad in zip(tablo["league_code"], tablo["HomeTeam"]):
         lig_takim.setdefault(str(kod), set()).add(str(ad))
     for kod, ad in zip(tablo["league_code"], tablo["AwayTeam"]):
         lig_takim.setdefault(str(kod), set()).add(str(ad))
     return MotorDurumu(gol, modeller, int(len(tablo)), tablo["Date"].max() if len(tablo) else None,
-                       {k: sorted(v) for k, v in lig_takim.items()}, karne_df)
+                       {k: sorted(v) for k, v in lig_takim.items()}, karne_df, dogrulama)
 
 
 def _f(x):
