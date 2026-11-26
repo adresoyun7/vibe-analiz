@@ -3581,67 +3581,77 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
     ]
     liste, hatalar = [], []
 
-    for k in lig_map:
-        for sezon in sorted(indirilecek):
-            url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{k}.csv"
-            try:
-                r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 YapAiKupon/1.0"})
-                if r.status_code != 200 or not r.content:
-                    hatalar.append(f"{k}-{sezon}: HTTP {r.status_code}")
-                    continue
-                ct = str(r.headers.get("content-type", "")).lower()
-                ilk = r.content[:300].lower()
-                if b"<html" in ilk or b"temporarily unavailable" in ilk or "text/html" in ct:
-                    hatalar.append(f"{k}-{sezon}: geçici HTML/servis hatası")
-                    continue
+    def _indir(k, sezon):
+        """Tek lig+sezon dosyasını indirir. Thread içinde çalışır; st.* çağrısı yapmaz."""
+        liste, hatalar = [], []
+        url = f"https://www.football-data.co.uk/mmz4281/{sezon}/{k}.csv"
+        try:
+            r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 YapAiKupon/1.0"})
+            if r.status_code != 200 or not r.content:
+                hatalar.append(f"{k}-{sezon}: HTTP {r.status_code}")
+                return liste, hatalar
+            ct = str(r.headers.get("content-type", "")).lower()
+            ilk = r.content[:300].lower()
+            if b"<html" in ilk or b"temporarily unavailable" in ilk or "text/html" in ct:
+                hatalar.append(f"{k}-{sezon}: geçici HTML/servis hatası")
+                return liste, hatalar
 
-                df = pd.read_csv(io.BytesIO(r.content))
-                cols = [
-                    "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG", "FTR", "HTR",
-                    "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA", "B365>2.5", "B365<2.5", "B365C>2.5", "B365C<2.5",
-                    # FIX42: Football-Data maç istatistikleri. HS/AS toplam şut,
-                    # HST/AST isabetli şuttur. Şut marketi kapalıyken modele etkisi yoktur.
-                    "HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY"
-                ]
-                # Şirket kimliğini koru; eski B365 dosyaları da desteklenir.
-                cols += [f'{prefix}{closing}{side}' for prefix in ("WH", "PS", "BW", "VC")
-                         for closing in ("", "C") for side in "HDA"]
-                cols += [f'{prefix}{closing}{side}2.5' for prefix in ("P", "WH", "BW", "VC")
-                         for closing in ("", "C") for side in (">", "<")]
-                # Model 2.0: piyasa ortalaması / en yüksek fiyat (value en iyi fiyata karşı aranır).
-                cols += [f'{prefix}{closing}{side}' for prefix in ("Max", "Avg")
-                         for closing in ("", "C") for side in "HDA"]
-                cols += [f'{prefix}{closing}{side}2.5' for prefix in ("Max", "Avg")
-                         for closing in ("", "C") for side in (">", "<")]
-                cols += ["BbMxH", "BbMxD", "BbMxA", "BbAvH", "BbAvD", "BbAvA",
-                         "BbMx>2.5", "BbMx<2.5", "BbAv>2.5", "BbAv<2.5"]
-                df = df[df.columns.intersection(cols)].copy()
-                for c in ["B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"]:
-                    if c not in df.columns:
-                        df[c] = pd.NA
-                    df[c] = pd.to_numeric(df[c], errors="coerce")
-                df["REF_H"] = df["B365CH"].combine_first(df["B365H"])
-                df["REF_D"] = df["B365CD"].combine_first(df["B365D"])
-                df["REF_A"] = df["B365CA"].combine_first(df["B365A"])
+            df = pd.read_csv(io.BytesIO(r.content))
+            cols = [
+                "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "HTHG", "HTAG", "FTR", "HTR",
+                "B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA", "B365>2.5", "B365<2.5", "B365C>2.5", "B365C<2.5",
+                # FIX42: Football-Data maç istatistikleri. HS/AS toplam şut,
+                # HST/AST isabetli şuttur. Şut marketi kapalıyken modele etkisi yoktur.
+                "HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY"
+            ]
+            # Şirket kimliğini koru; eski B365 dosyaları da desteklenir.
+            cols += [f'{prefix}{closing}{side}' for prefix in ("WH", "PS", "BW", "VC")
+                     for closing in ("", "C") for side in "HDA"]
+            cols += [f'{prefix}{closing}{side}2.5' for prefix in ("P", "WH", "BW", "VC")
+                     for closing in ("", "C") for side in (">", "<")]
+            # Model 2.0: piyasa ortalaması / en yüksek fiyat (value en iyi fiyata karşı aranır).
+            cols += [f'{prefix}{closing}{side}' for prefix in ("Max", "Avg")
+                     for closing in ("", "C") for side in "HDA"]
+            cols += [f'{prefix}{closing}{side}2.5' for prefix in ("Max", "Avg")
+                     for closing in ("", "C") for side in (">", "<")]
+            cols += ["BbMxH", "BbMxD", "BbMxA", "BbAvH", "BbAvD", "BbAvA",
+                     "BbMx>2.5", "BbMx<2.5", "BbAv>2.5", "BbAv<2.5"]
+            df = df[df.columns.intersection(cols)].copy()
+            for c in ["B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"]:
+                if c not in df.columns:
+                    df[c] = pd.NA
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+            df["REF_H"] = df["B365CH"].combine_first(df["B365H"])
+            df["REF_D"] = df["B365CD"].combine_first(df["B365D"])
+            df["REF_A"] = df["B365CA"].combine_first(df["B365A"])
 
-                usable = pd.Series(False, index=df.index)
-                for prefix in ("B365", "WH", "PS", "BW", "VC"):
-                    for closing in ("", "C"):
-                        triple = [f"{prefix}{closing}{side}" for side in "HDA"]
-                        if all(column in df for column in triple):
-                            numbers = df[triple].apply(pd.to_numeric, errors="coerce")
-                            usable |= (numbers.gt(1) & numbers.lt(float("inf"))).all(axis=1)
-                temp = df.loc[usable].copy()
-                temp["Date"] = tarih_serisi_oku(temp["Date"])
-                temp = temp.dropna(subset=["Date"])
-                temp["league_code"] = k
-                temp["season_code"] = str(sezon)
-                if not temp.empty:
-                    liste.append(temp)
-                else:
-                    hatalar.append(f"{k}-{sezon}: kullanılabilir oran satırı yok")
-            except Exception as exc:
-                hatalar.append(f"{k}-{sezon}: {type(exc).__name__}: {exc}")
+            usable = pd.Series(False, index=df.index)
+            for prefix in ("B365", "WH", "PS", "BW", "VC"):
+                for closing in ("", "C"):
+                    triple = [f"{prefix}{closing}{side}" for side in "HDA"]
+                    if all(column in df for column in triple):
+                        numbers = df[triple].apply(pd.to_numeric, errors="coerce")
+                        usable |= (numbers.gt(1) & numbers.lt(float("inf"))).all(axis=1)
+            temp = df.loc[usable].copy()
+            temp["Date"] = tarih_serisi_oku(temp["Date"])
+            temp = temp.dropna(subset=["Date"])
+            temp["league_code"] = k
+            temp["season_code"] = str(sezon)
+            if not temp.empty:
+                liste.append(temp)
+            else:
+                hatalar.append(f"{k}-{sezon}: kullanılabilir oran satırı yok")
+        except Exception as exc:
+            hatalar.append(f"{k}-{sezon}: {type(exc).__name__}: {exc}")
+        return liste, hatalar
+
+    # Hız: dosyalar sırayla değil 8 paralel bağlantıyla indirilir (108 dosya ≈ 8 kat hızlı).
+    from concurrent.futures import ThreadPoolExecutor
+    isler = [(k, sezon) for k in lig_map for sezon in sorted(indirilecek)]
+    with ThreadPoolExecutor(max_workers=8) as havuz:
+        for _liste, _hatalar in havuz.map(lambda ks: _indir(*ks), isler):
+            liste.extend(_liste)
+            hatalar.extend(_hatalar)
 
     if liste:
         canli = pd.concat(liste, ignore_index=True)
@@ -15211,8 +15221,13 @@ def m2_motor(_gecmis, imza):
 @st.cache_resource(ttl=6 * 3600, max_entries=4, show_spinner=False)
 def m2_dogrulama(_gecmis, imza, min_ev, max_oran):
     """Walk-forward doğrulama: her sezon yalnızca önceki sezonlarla eğitilir."""
-    t_kap, _ = tm2.egitim_tablosu(_gecmis, referans="kapanis")
-    t_ac, _ = tm2.egitim_tablosu(_gecmis, referans="acilis")
+    if abs(min_ev - 0.02) < 1e-9 and abs(max_oran - 5.0) < 1e-9:
+        motor = m2_motor(_gecmis, imza)   # varsayılan eşikler: motor zaten hesapladı
+        if motor is not None and motor.dogrulama:
+            return motor.dogrulama
+    hazir = tm2.gol_modelini_isle(_gecmis)
+    t_kap, _ = tm2.egitim_tablosu(_gecmis, referans="kapanis", hazir=hazir)
+    t_ac, _ = tm2.egitim_tablosu(_gecmis, referans="acilis", hazir=hazir)
     return {"kapanis": tm2.walk_forward(t_kap, min_ev=min_ev, max_oran=max_oran),
             "acilis": tm2.walk_forward(t_ac, min_ev=min_ev, max_oran=max_oran)}
 
@@ -15240,10 +15255,21 @@ def _m2_pct(x, nd=1):
 
 
 def m2_analiz_et(gecmis, bulten, min_ev, max_oran, benzerlik_aktif, tolerans):
-    gecmis_hazir = sadece_tam_verili_gecmis(gecmis) if benzerlik_aktif else None
-    motor = m2_motor(gecmis, _m2_imza(gecmis))
+    imza = _m2_imza(gecmis)
+    motor = m2_motor(gecmis, imza)
     if motor is None:
         return None, []
+    gecmis_hazir = None
+    benzer_cache = st.session_state.setdefault("m2_benzerlik_cache", {})
+    if benzerlik_aktif:
+        gecmis_hazir = st.session_state.get("_m2_gecmis_hazir")
+        if st.session_state.get("_m2_gecmis_hazir_imza") != imza or gecmis_hazir is None:
+            gecmis_hazir = sadece_tam_verili_gecmis(gecmis)
+            st.session_state["_m2_gecmis_hazir"] = gecmis_hazir
+            st.session_state["_m2_gecmis_hazir_imza"] = imza
+            benzer_cache.clear()
+        # FIX70 ile aynı: aynı gün/lig/oran evresindeki havuz hazırlığı maçlar arasında paylaşılır.
+        hesapla._fix70_context = {"source_id": id(gecmis_hazir), "pools": {}}
     karne = motor.lig_karnesi.set_index("Lig") if not motor.lig_karnesi.empty else pd.DataFrame()
     sonuclar = []
     for _, r in bulten.iterrows():
@@ -15254,7 +15280,11 @@ def m2_analiz_et(gecmis, bulten, min_ev, max_oran, benzerlik_aktif, tolerans):
         dep_h = takim_adi_eslestir(m.get("dep", ""), adaylar) if adaylar else None
         benzer, benzer_n = (None, 0)
         if benzerlik_aktif and gecmis_hazir is not None and not gecmis_hazir.empty:
-            benzer, benzer_n = _m2_benzerlik(gecmis_hazir, m, tolerans)
+            anahtar = (str(m.get("match_key", "")), m.get("h"), m.get("b"), m.get("a"),
+                       m.get("o25_over"), m.get("btts_yes"), round(float(tolerans), 2))
+            if anahtar not in benzer_cache:
+                benzer_cache[anahtar] = _m2_benzerlik(gecmis_hazir, m, tolerans)
+            benzer, benzer_n = benzer_cache[anahtar]
         try:
             tahmin = tm2.mac_tahmini(motor, m, ev_h, dep_h, lig_kodu if (ev_h and dep_h) else None,
                                      min_ev=min_ev, benzerlik=benzer, max_oran=max_oran)
@@ -15264,6 +15294,7 @@ def m2_analiz_et(gecmis, bulten, min_ev, max_oran, benzerlik_aktif, tolerans):
         lig_k = karne.loc[lig_kodu].to_dict() if lig_kodu and lig_kodu in getattr(karne, "index", []) else {}
         sonuclar.append({"m": m, "t": tahmin, "lig_kodu": lig_kodu, "ev_hist": ev_h, "dep_hist": dep_h,
                          "benzer_n": benzer_n, "karne": lig_k})
+    hesapla._fix70_context = None
     return motor, sonuclar
 
 
@@ -15355,13 +15386,9 @@ def model2_sayfasi(baslat):
             st.error("⚠️ API Key ve en az bir lig seçin.")
         else:
             with st.spinner("Geçmiş veri ve bülten hazırlanıyor, Model 2.0 eğitiliyor..."):
+                # Hız: geçmiş veri zorla yeniden indirilmez; normal 6 saatlik cache kullanılır.
+                # En iyi fiyat sütunları eksikse yalnızca lig karnesi sınırlı olur (canlı value etkilenmez).
                 gecmis = futbol_veri_motoru(tuple(yillar))
-                if (not getattr(gecmis, "empty", True)
-                        and ("MaxH" not in gecmis.columns or gecmis["MaxH"].isna().all())
-                        and not st.session_state.get("_m2_cache_yenilendi")):
-                    # Eski cache en iyi fiyat sütunlarını tutmuyordu: bir kez yenile.
-                    st.session_state["_m2_cache_yenilendi"] = True
-                    gecmis = futbol_veri_motoru(tuple(yillar), zorla_yenile=True)
                 bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
                 bulten = m2_ilk_oranlari_isle(bulten)
                 if getattr(gecmis, "empty", True):
@@ -15420,7 +15447,20 @@ def model2_sayfasi(baslat):
         gecmis = st.session_state.get("m2_gecmis_ref")
         if gecmis is None:
             st.info("Önce Model 2.0 analizini çalıştırın.")
-        elif st.button("Doğrulamayı çalıştır", key="m2_dogrulama_btn"):
+        else:
+            if "MaxH" not in gecmis.columns or gecmis["MaxH"].isna().all():
+                st.warning("Geçmiş veride en iyi fiyat (MaxH) sütunları yok; lig karnesi sınırlı. "
+                           "Aşağıdaki düğmeyle veriyi bir kez yenileyebilirsiniz (birkaç dakika sürebilir).")
+            if st.button("🔄 Geçmiş veriyi yenile (en iyi oran sütunları)", key="m2_veri_yenile_btn"):
+                with st.spinner("Football-Data'dan seçili sezonlar indiriliyor..."):
+                    futbol_veri_motoru.clear()
+                    futbol_veri_motoru(tuple(yillar), zorla_yenile=True)
+                    futbol_veri_motoru.clear()
+                    m2_motor.clear()
+                    m2_dogrulama.clear()
+                    st.session_state.pop("m2_dogrulama", None)
+                st.success("Veri yenilendi. Model 2.0 analizini tekrar çalıştırın.")
+        if gecmis is not None and st.button("Doğrulamayı göster", key="m2_dogrulama_btn"):
             with st.spinner("Walk-forward doğrulama çalışıyor..."):
                 st.session_state["m2_dogrulama"] = m2_dogrulama(gecmis, st.session_state.get("m2_gecmis_imza"),
                                                                 min_ev, max_oran)
