@@ -1,4 +1,3 @@
-
 FIX35_TAKIM15_ANA_TAHMIN = "team15-main-prediction-v1"
 FIX42_TOPLAM_SUT = "optional-total-shots-main-v1"
 
@@ -20,12 +19,17 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+try:
+    import tahmin_motoru as tm2
+except ImportError:  # modül yoksa yalnızca Model 2.0 görünümü devre dışı kalır
+    tm2 = None
+
 import copy
 import hashlib
 import logging
 import sqlite3
 import tempfile
-from contextlib import contextmanager
+from contextlib import closing as _closing, contextmanager
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
@@ -3604,6 +3608,13 @@ def futbol_veri_motoru(sezonlar, zorla_yenile=False):
                          for closing in ("", "C") for side in "HDA"]
                 cols += [f'{prefix}{closing}{side}2.5' for prefix in ("P", "WH", "BW", "VC")
                          for closing in ("", "C") for side in (">", "<")]
+                # Model 2.0: piyasa ortalaması / en yüksek fiyat (value en iyi fiyata karşı aranır).
+                cols += [f'{prefix}{closing}{side}' for prefix in ("Max", "Avg")
+                         for closing in ("", "C") for side in "HDA"]
+                cols += [f'{prefix}{closing}{side}2.5' for prefix in ("Max", "Avg")
+                         for closing in ("", "C") for side in (">", "<")]
+                cols += ["BbMxH", "BbMxD", "BbMxA", "BbAvH", "BbAvD", "BbAvA",
+                         "BbMx>2.5", "BbMx<2.5", "BbAv>2.5", "BbAv<2.5"]
                 df = df[df.columns.intersection(cols)].copy()
                 for c in ["B365H", "B365D", "B365A", "B365CH", "B365CD", "B365CA"]:
                     if c not in df.columns:
@@ -3710,6 +3721,117 @@ def odds_lig_kodu_coz(key, kod):
     return None
 
 
+
+
+# Model 2.0: borsa (exchange) fiyatları komisyonsuz göründüğü için en iyi fiyat
+# hesabına alınmaz.
+_M2_HARIC_KITAPLAR = ("betfair_ex", "matchbook", "smarkets", "betdaq")
+
+
+def _coklu_kitap_ozeti(bookies, home, away):
+    """Bütün bookmaker'lardan Pinnacle, en iyi fiyat ve marjsız konsensüs çıkarır."""
+    ozet = {}
+    h2h, ou = [], []
+    for bk in bookies or []:
+        bk_key = str(bk.get("key", ""))
+        if any(bk_key.startswith(x) for x in _M2_HARIC_KITAPLAR):
+            continue
+        for mk in bk.get("markets", []) or []:
+            outs = mk.get("outcomes", []) or []
+            if mk.get("key") == "h2h":
+                fiyat = {str(o.get("name", "")): o.get("price") for o in outs}
+                ber = next((v for n, v in fiyat.items() if n.lower() in ("draw", "tie", "beraberlik")), None)
+                try:
+                    uclu = [float(fiyat.get(home)), float(ber), float(fiyat.get(away))]
+                except (TypeError, ValueError):
+                    continue
+                if all(math.isfinite(x) and x > 1 for x in uclu):
+                    h2h.append((bk_key, uclu))
+            elif mk.get("key") == "totals":
+                cift = {}
+                for o in outs:
+                    try:
+                        if abs(float(o.get("point")) - 2.5) <= 1e-9 and float(o.get("price")) > 1:
+                            cift[str(o.get("name", "")).lower()] = float(o.get("price"))
+                    except (TypeError, ValueError):
+                        continue
+                if "over" in cift and "under" in cift:
+                    ou.append((bk_key, [cift["over"], cift["under"]]))
+    if h2h:
+        for i, ad in enumerate(("h", "d", "a")):
+            kitap, uclu = max(h2h, key=lambda x: x[1][i])
+            ozet[f"max_{ad}"] = uclu[i]
+            ozet[f"max_{ad}_kitap"] = kitap
+        marjsiz = []
+        for _, uclu in h2h:
+            q = [1 / x for x in uclu]
+            marjsiz.append([v / sum(q) for v in q])
+        for i, ad in enumerate(("h", "d", "a")):
+            ozet[f"kons_{ad}"] = sum(p[i] for p in marjsiz) / len(marjsiz)
+        ozet["kitap_sayisi"] = len(h2h)
+        pin = next((u for k, u in h2h if k == "pinnacle"), None)
+        if pin:
+            ozet.update({"pin_h": pin[0], "pin_d": pin[1], "pin_a": pin[2]})
+    if ou:
+        ozet["max_o25_over"] = max(x[1][0] for x in ou)
+        ozet["max_o25_under"] = max(x[1][1] for x in ou)
+        pin = next((u for k, u in ou if k == "pinnacle"), None)
+        if pin:
+            ozet.update({"pin_o25_over": pin[0], "pin_o25_under": pin[1]})
+    return ozet
+
+
+def _m2_ilk_oran_baglantisi():
+    path = APP_DATA_DIR / "yapaikupon.sqlite3"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path, timeout=15)
+    con.execute("PRAGMA busy_timeout=15000")
+    con.execute("CREATE TABLE IF NOT EXISTS m2_ilk_oranlar (match_key TEXT PRIMARY KEY, "
+                "ph REAL, pd REAL, pa REAL, kaynak TEXT, ilk_gorulme TEXT NOT NULL)")
+    return con
+
+
+def m2_ilk_oranlari_isle(df):
+    """Her maçın İLK görülen marjsız 1X2 olasılığını saklar ve df'ye ekler.
+
+    Oran hareketi (şimdiki - ilk) Model 2.0'ın özelliğidir. Kayıt yalnızca
+    eklenir; mevcut ilk değer hiçbir zaman ezilmez.
+    """
+    if df is None or getattr(df, "empty", True) or "match_key" not in df.columns:
+        return df
+    df = df.copy()
+    try:
+        with _closing(_m2_ilk_oran_baglantisi()) as con:
+            for _, r in df.iterrows():
+                try:
+                    if pd.notna(r.get("pin_h")) and pd.notna(r.get("pin_d")) and pd.notna(r.get("pin_a")):
+                        uclu, kaynak = [float(r["pin_h"]), float(r["pin_d"]), float(r["pin_a"])], "pinnacle"
+                        q = [1 / x for x in uclu]
+                        p = [v / sum(q) for v in q]
+                    elif pd.notna(r.get("kons_h")):
+                        p, kaynak = [float(r["kons_h"]), float(r["kons_d"]), float(r["kons_a"])], "konsensus"
+                    else:
+                        uclu, kaynak = [float(r["h"]), float(r["b"]), float(r["a"])], "bulten"
+                        q = [1 / x for x in uclu]
+                        p = [v / sum(q) for v in q]
+                except (TypeError, ValueError, ZeroDivisionError):
+                    continue
+                con.execute("INSERT OR IGNORE INTO m2_ilk_oranlar(match_key,ph,pd,pa,kaynak,ilk_gorulme) "
+                            "VALUES(?,?,?,?,?,?)", (str(r["match_key"]), p[0], p[1], p[2], kaynak, kayit_zamani_iso()))
+            con.commit()
+            anahtarlar = [str(x) for x in df["match_key"]]
+            satirlar = {}
+            for i in range(0, len(anahtarlar), 500):
+                parca = anahtarlar[i:i + 500]
+                q = "SELECT match_key,ph,pd,pa,ilk_gorulme FROM m2_ilk_oranlar WHERE match_key IN (%s)" % ",".join("?" * len(parca))
+                satirlar.update({row[0]: row[1:] for row in con.execute(q, parca)})
+        df["ilk_ph"] = [satirlar.get(str(k), (None,) * 4)[0] for k in df["match_key"]]
+        df["ilk_pd"] = [satirlar.get(str(k), (None,) * 4)[1] for k in df["match_key"]]
+        df["ilk_pa"] = [satirlar.get(str(k), (None,) * 4)[2] for k in df["match_key"]]
+        df["ilk_gorulme"] = [satirlar.get(str(k), (None,) * 4)[3] for k in df["match_key"]]
+    except (OSError, sqlite3.Error) as exc:
+        LOGGER.warning("Model 2.0 ilk oran kaydı başarısız: %s", type(exc).__name__)
+    return df
 
 
 def bulten_cek(key, kodlar, t):
@@ -3998,6 +4120,8 @@ def bulten_cek(key, kodlar, t):
                     "btts_bookmaker_key": btts_bk_key,
                     "btts_yes": btts_yes,
                     "btts_no": btts_no,
+                    # Model 2.0: Pinnacle / en iyi fiyat / konsensüs (diğer görünümleri etkilemez)
+                    **_coklu_kitap_ozeti(bookies, home, away),
                 })
         except Exception as exc:
             st.session_state["odds_api_last_error"] = f"{k}: {type(exc).__name__}: {exc}"
@@ -4008,6 +4132,8 @@ def bulten_cek(key, kodlar, t):
 
     df = pd.DataFrame(res).drop_duplicates(subset=["ev", "dep", "zaman"])
     df = df.sort_values("zaman").reset_index(drop=True)
+    # Model 2.0 oran hareketi için her maçın ilk görülen oranını kaydet (yalnızca ekleme).
+    df = m2_ilk_oranlari_isle(df)
     return df
 
 
@@ -6217,6 +6343,12 @@ def takim_adi_eslestir(takim, adaylar):
         return en_iyi
     if en_skor >= 0.80 and (en_skor - ikinci_skor) >= 0.05:
         return en_iyi
+    # Önek yedeği: "Brighton and Hove Albion"→"Brighton", "West Ham United"→"West Ham".
+    # Yalnızca TEK aday önek olarak uyuyorsa kabul edilir; belirsizlikte None.
+    onekler = [orijinal for norm, orijinal in norm_map.items()
+               if len(norm) >= 5 and len(hedef) >= 5 and (hedef.startswith(norm) or norm.startswith(hedef))]
+    if len(onekler) == 1:
+        return onekler[0]
     return None
 
 
@@ -6557,6 +6689,9 @@ def hesapla(b_df, m_row, tolerans, sadece_ayni_lig=False, form_aktif=False, kali
             return None, pd.DataFrame()
     if b_df.empty:
         return None, b_df
+    # Form profili, oran filtresinden ÖNCEKİ (tarih öncesi) havuzdan hesaplanır.
+    # Önceden tanımsız `form_kaynagi` adı form_aktif=True olduğunda NameError veriyordu.
+    form_kaynagi = b_df
     priors = m_row.get("analysis_priors") or gecmis_tabanlari(b_df, m_row)
     rehber = tolerans_rehberi(float(tolerans))
     onerilen_min_mac = dinamik_min_mac(float(tolerans))
@@ -11196,7 +11331,7 @@ with st.sidebar:
     # Futbol görünümü yalnızca Futbol seçiliyken oluşturulur.
     sayfa_modu = st.radio(
         "Görünüm",
-        ["Maç Analizi", "Günün Tahminleri", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
+        ["Maç Analizi", "Günün Tahminleri", "Model 2.0", "Top 50 Market", "Geçmiş Örnekleri", "Oran Filtresi", "Yüksek Oran Filtresi", "Spor Toto", "Canlı Takip", "Sonuç Takibi", "Backtest"],
         index=0,
         key="sayfa_modu",
         on_change=clear_detail_on_filter_change,
@@ -11367,6 +11502,15 @@ if st.session_state.get('sayfa_modu') in ['Maç Analizi', 'Top 50 Market']:
             use_container_width=True,
             type='primary',
             key='analiz_baslat_btn',
+        )
+elif st.session_state.get('sayfa_modu') == 'Model 2.0':
+    with ust_analiz_buton_alani.container():
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        model2_btn = st.button(
+            '🧠 MODEL 2.0 ANALİZ',
+            use_container_width=True,
+            type='primary',
+            key='model2_baslat_btn',
         )
 elif st.session_state.get('sayfa_modu') == 'Geçmiş Örnekleri':
     with ust_analiz_buton_alani.container():
@@ -15041,6 +15185,275 @@ if st.session_state.get('sayfa_modu') == 'Canlı Takip':
             "<script>setTimeout(function(){window.parent.location.reload();},300000);</script>",
             height=0,
         )
+    legal_footer()
+    st.stop()
+
+
+# ==========================================================
+# MODEL 2.0 · Piyasa üzerine kurulu tahmin + value seçimi
+# ==========================================================
+
+def _m2_imza(gecmis):
+    if gecmis is None or getattr(gecmis, "empty", True):
+        return ("bos",)
+    son = pd.to_datetime(gecmis["Date"], errors="coerce").max()
+    max_dolu = int(gecmis["MaxH"].notna().sum()) if "MaxH" in gecmis.columns else 0
+    return (tm2.MOTOR_VERSION, len(gecmis), str(son), max_dolu,
+            tuple(sorted(map(str, gecmis.get("season_code", pd.Series(dtype=str)).astype(str).unique()))))
+
+
+@st.cache_resource(ttl=6 * 3600, max_entries=4, show_spinner=False)
+def m2_motor(_gecmis, imza):
+    """Model 2.0 motoru: dinamik gol modeli + artık modeller + lig karnesi (imza ile önbellekli)."""
+    return tm2.motoru_hazirla(_gecmis)
+
+
+@st.cache_resource(ttl=6 * 3600, max_entries=4, show_spinner=False)
+def m2_dogrulama(_gecmis, imza, min_ev, max_oran):
+    """Walk-forward doğrulama: her sezon yalnızca önceki sezonlarla eğitilir."""
+    t_kap, _ = tm2.egitim_tablosu(_gecmis, referans="kapanis")
+    t_ac, _ = tm2.egitim_tablosu(_gecmis, referans="acilis")
+    return {"kapanis": tm2.walk_forward(t_kap, min_ev=min_ev, max_oran=max_oran),
+            "acilis": tm2.walk_forward(t_ac, min_ev=min_ev, max_oran=max_oran)}
+
+
+def _m2_benzerlik(gecmis_hazir, m, tolerans):
+    """Mevcut oran-benzerlik modelinin olasılıkları (iki model uyum kontrolü için)."""
+    try:
+        t, b = hesapla(gecmis_hazir, m, tolerans, form_aktif=False, kalibrasyon_aktif=False)
+    except Exception as exc:  # benzerlik isteğe bağlı; Model 2.0'ı durdurmaz
+        LOGGER.debug("Model 2.0 benzerlik hesabı atlandı: %s", type(exc).__name__)
+        return None, 0
+    if not t:
+        return None, 0
+    return ({"MS 1": t.get("ms1_p", 0) / 100, "Beraberlik": t.get("msx_p", 0) / 100,
+             "MS 2": t.get("ms2_p", 0) / 100, "2.5 Üst": t.get("ms25_p", 0) / 100,
+             "2.5 Alt": t.get("ms25a_p", 0) / 100, "KG Var": t.get("kg_var_p", 0) / 100,
+             "KG Yok": t.get("kg_yok_p", 0) / 100}, int(t.get("ornek", 0) or 0))
+
+
+def _m2_pct(x, nd=1):
+    try:
+        return f"%{float(x) * 100:.{nd}f}" if x is not None and math.isfinite(float(x)) else "—"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def m2_analiz_et(gecmis, bulten, min_ev, max_oran, benzerlik_aktif, tolerans):
+    gecmis_hazir = sadece_tam_verili_gecmis(gecmis) if benzerlik_aktif else None
+    motor = m2_motor(gecmis, _m2_imza(gecmis))
+    if motor is None:
+        return None, []
+    karne = motor.lig_karnesi.set_index("Lig") if not motor.lig_karnesi.empty else pd.DataFrame()
+    sonuclar = []
+    for _, r in bulten.iterrows():
+        m = r.to_dict()
+        lig_kodu = ODDS_TO_HISTORY.get(str(m.get("sport_key", "")))
+        adaylar = motor.takimlar_lige_gore.get(lig_kodu, []) if lig_kodu else []
+        ev_h = takim_adi_eslestir(m.get("ev", ""), adaylar) if adaylar else None
+        dep_h = takim_adi_eslestir(m.get("dep", ""), adaylar) if adaylar else None
+        benzer, benzer_n = (None, 0)
+        if benzerlik_aktif and gecmis_hazir is not None and not gecmis_hazir.empty:
+            benzer, benzer_n = _m2_benzerlik(gecmis_hazir, m, tolerans)
+        try:
+            tahmin = tm2.mac_tahmini(motor, m, ev_h, dep_h, lig_kodu if (ev_h and dep_h) else None,
+                                     min_ev=min_ev, benzerlik=benzer, max_oran=max_oran)
+        except Exception as exc:
+            LOGGER.warning("Model 2.0 maç tahmini başarısız: %s", type(exc).__name__)
+            tahmin = {"durum": f"Hata: {type(exc).__name__}"}
+        lig_k = karne.loc[lig_kodu].to_dict() if lig_kodu and lig_kodu in getattr(karne, "index", []) else {}
+        sonuclar.append({"m": m, "t": tahmin, "lig_kodu": lig_kodu, "ev_hist": ev_h, "dep_hist": dep_h,
+                         "benzer_n": benzer_n, "karne": lig_k})
+    return motor, sonuclar
+
+
+def _m2_value_tablosu(sonuclar, sadece_guclu=False):
+    satirlar = []
+    for s in sonuclar:
+        t, m = s["t"], s["m"]
+        for a in t.get("value", []) if t.get("durum") == "OK" else []:
+            if sadece_guclu and a["guc"] != "Güçlü":
+                continue
+            k = s.get("karne") or {}
+            satirlar.append({
+                "Saat": m["zaman"].strftime("%d.%m %H:%M") if hasattr(m.get("zaman"), "strftime") else "",
+                "Lig": m.get("lig", ""), "Maç": f'{m.get("ev", "")} - {m.get("dep", "")}',
+                "Seçim": a["secim"], "Oran": round(a["fiyat"], 2), "Şirket": a.get("kitap") or "",
+                "Model %": round(a["p"] * 100, 1), "Alt sınır %": round(a["p_alt"] * 100, 1),
+                "Piyasa %": round(a["p_piyasa"] * 100, 1), "EV %": round(a["ev"] * 100, 1),
+                "EV alt %": round(a["ev_alt"] * 100, 1), "Güç": a["guc"],
+                "Lig karnesi": (f'{int(k.get("Seçim", 0))} seçim · ROI %{k.get("ROI %", 0):+.1f}'
+                                f' ±{k.get("ROI SE %", 0):.0f}' if k else "veri yok"),
+            })
+    df = pd.DataFrame(satirlar)
+    return df.sort_values("EV alt %", ascending=False).reset_index(drop=True) if not df.empty else df
+
+
+def _m2_mac_detayi(s):
+    t, m = s["t"], s["m"]
+    if t.get("durum") != "OK":
+        st.caption(f"Model 2.0 çalışmadı: {t.get('durum')}")
+        return
+    for u in t.get("uyarilar", []):
+        st.caption(f"⚠️ {u}")
+    marketler = ["MS 1", "Beraberlik", "MS 2", "2.5 Üst", "2.5 Alt", "KG Var", "KG Yok"]
+    gol = t.get("gol_modeli", {})
+    tablo = []
+    for mk in marketler:
+        if mk not in t.get("model", {}) and mk not in t.get("piyasa", {}):
+            continue
+        gm = gol.get(mk) if mk in gol else (1 - gol["2.5 Üst"] if mk == "2.5 Alt" and gol else
+                                             (1 - gol["KG Var"] if mk == "KG Yok" and gol else None))
+        tablo.append({"Market": mk, "Piyasa (marjsız)": _m2_pct(t["piyasa"].get(mk)),
+                      "Gol modeli": _m2_pct(gm), "Model 2.0": _m2_pct(t["model"].get(mk)),
+                      "Alt sınır": _m2_pct(t.get("alt", {}).get(mk))})
+    st.dataframe(pd.DataFrame(tablo), hide_index=True, use_container_width=True)
+    c1, c2, c3 = st.columns(3)
+    if gol:
+        c1.metric("Beklenen gol (ev - dep)", f'{gol["lam_ev"]:.2f} - {gol["lam_dep"]:.2f}')
+        c2.metric("En olası skor", gol["skor"])
+        c3.metric("Dinlenme (gün)", f'{gol["dinlenme_ev"]:.0f} / {gol["dinlenme_dep"]:.0f}')
+        st.caption("En olası skorlar: " + " · ".join(f"{sk} (%{p * 100:.1f})" for sk, p in gol.get("skorlar", [])))
+    hrk = t.get("hareket", {})
+    if any(v is not None and math.isfinite(v) for v in hrk.values()):
+        st.caption("İlk görülen orandan bu yana olasılık değişimi: " + " · ".join(
+            f"{k} {v * 100:+.1f} puan" for k, v in hrk.items() if v is not None and math.isfinite(v)))
+    else:
+        st.caption("Oran hareketi: bu maç için önceki bir oran kaydı yok (ilk görülme şimdi kaydedildi).")
+    st.caption(f"Çapa olasılığı kaynağı: {t.get('piyasa_kaynagi')}"
+               + (f" · Benzerlik modeli örneği: {s['benzer_n']}" if s.get("benzer_n") else ""))
+    for i, a in enumerate(t.get("value", [])):
+        if st.button(f"➕ {a['secim']} @ {a['fiyat']:.2f} Kendi Kuponuma ekle",
+                     key=f"m2_kupon_{m.get('match_key', '')}_{a['secim']}_{i}"):
+            if manuel_kupona_ekle(m, {"kullanilan_tolerans": None}, a["secim"],
+                                  int(round(a["p"] * 100)), oran=round(a["fiyat"], 2)):
+                st.success("Kupona eklendi.")
+            else:
+                st.info("Bu seçim zaten kuponda.")
+
+
+def model2_sayfasi(baslat):
+    st.markdown("## 🧠 Model 2.0 · Piyasa Tabanlı Value")
+    st.caption(
+        "Pinnacle (yoksa şirket konsensüsü) marjsız olasılığı çapa alınır; dinamik gol modeli "
+        "(gol + isabetli şut), oran hareketi ve dinlenme günü yalnızca küçük düzeltmeler yapar. "
+        "Value, olasılığın %10 alt sınırı × piyasadaki en iyi fiyatla aranır."
+    )
+    if tm2 is None:
+        st.error("tahmin_motoru.py bulunamadı. Dosyayı app.py ile aynı klasöre koyun.")
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    min_ev = c1.number_input("Min. EV alt sınırı (%)", 0.0, 20.0, 2.0, 0.5, key="m2_min_ev") / 100
+    max_oran = c2.number_input("Maks. oran", 1.5, 20.0, 5.0, 0.5, key="m2_max_oran",
+                               help="Testte yüksek oranlı sürprizler gürültülü çıktı; varsayılan 5.0.")
+    benzerlik_aktif = c3.toggle("Benzerlik modeliyle karşılaştır", value=True, key="m2_benzerlik",
+                                help="Mevcut oran-benzerlik modeli de aynı yönü gösteriyorsa seçim 'Güçlü' olur.")
+    sadece_guclu = c4.toggle("Yalnızca Güçlü", value=False, key="m2_sadece_guclu")
+
+    if baslat:
+        if not API_KEY or not secili_kodlar:
+            st.error("⚠️ API Key ve en az bir lig seçin.")
+        else:
+            with st.spinner("Geçmiş veri ve bülten hazırlanıyor, Model 2.0 eğitiliyor..."):
+                gecmis = futbol_veri_motoru(tuple(yillar))
+                if (not getattr(gecmis, "empty", True)
+                        and ("MaxH" not in gecmis.columns or gecmis["MaxH"].isna().all())
+                        and not st.session_state.get("_m2_cache_yenilendi")):
+                    # Eski cache en iyi fiyat sütunlarını tutmuyordu: bir kez yenile.
+                    st.session_state["_m2_cache_yenilendi"] = True
+                    gecmis = futbol_veri_motoru(tuple(yillar), zorla_yenile=True)
+                bulten = bulten_saglam_al(API_KEY, secili_kodlar, secili_tarih)
+                bulten = m2_ilk_oranlari_isle(bulten)
+                if getattr(gecmis, "empty", True):
+                    st.error("Geçmiş veri yüklenemedi.")
+                    return
+                if getattr(bulten, "empty", True):
+                    st.warning("Seçilen tarih ve liglerde maç bulunamadı.")
+                    return
+                if "max_h" not in bulten.columns:
+                    st.info("Bülten eski önbellekten geldi ve çoklu şirket oranlarını içermiyor. "
+                            "En iyi fiyat ve Pinnacle için 'Oranları Yenile' ile bülteni yenileyin.")
+                motor, sonuclar = m2_analiz_et(gecmis, bulten, min_ev, max_oran, benzerlik_aktif,
+                                               float(st.session_state.get("top_tol", TOLERANS)))
+                st.session_state["m2_sonuclar"] = sonuclar
+                st.session_state["m2_motor_ozet"] = {
+                    "egitim": motor.egitim_mac if motor else 0,
+                    "son": str(motor.son_veri_tarihi)[:10] if motor else "",
+                    "katsayi": motor.modeller.m1x2.ozet() if motor else {},
+                    "karne": motor.lig_karnesi if motor else pd.DataFrame(),
+                }
+                st.session_state["m2_gecmis_imza"] = _m2_imza(gecmis)
+                st.session_state["m2_gecmis_ref"] = gecmis
+
+    sonuclar = st.session_state.get("m2_sonuclar")
+    if not sonuclar:
+        st.info("Tarih ve ligleri seçip **🧠 MODEL 2.0 ANALİZ** düğmesine basın.")
+    else:
+        ozet = st.session_state.get("m2_motor_ozet", {})
+        tablo = _m2_value_tablosu(sonuclar, sadece_guclu)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Analiz edilen maç", len(sonuclar))
+        k2.metric("Value seçimi", 0 if tablo.empty else len(tablo))
+        k3.metric("Güçlü", 0 if tablo.empty else int((tablo["Güç"] == "Güçlü").sum()))
+        k4.metric("Eğitim maçı", f'{ozet.get("egitim", 0):,}'.replace(",", "."),
+                  help=f'Son geçmiş veri: {ozet.get("son", "")}')
+        st.markdown("### 💎 Value seçimleri")
+        if tablo.empty:
+            st.info("Bu bültende eşiği geçen value yok. Model piyasayla uyuşuyorsa seçim üretmemesi beklenen davranıştır.")
+        else:
+            st.dataframe(tablo, hide_index=True, use_container_width=True)
+            st.caption("EV alt %: olasılığın %10 alt sınırı ile hesaplanan beklenen getiri. "
+                       "Güçlü: gol modeli (ve açıksa benzerlik modeli) piyasadan aynı yönde ayrışıyor. "
+                       "Lig karnesi: bu ligde geçmiş value seçimlerinin walk-forward ROI'si ± standart hata.")
+        st.markdown("### 📋 Maç detayları")
+        for s in sonuclar:
+            m, t = s["m"], s["t"]
+            vsay = len(t.get("value", [])) if t.get("durum") == "OK" else 0
+            saat = m["zaman"].strftime("%H:%M") if hasattr(m.get("zaman"), "strftime") else ""
+            baslik = f'{saat} · {m.get("ev", "")} - {m.get("dep", "")} · {m.get("lig", "")}' + (f"  💎 {vsay}" if vsay else "")
+            with st.expander(baslik, expanded=False):
+                _m2_mac_detayi(s)
+
+    with st.expander("🧪 Walk-forward doğrulama (piyasaya karşı)", expanded=False):
+        st.caption("Her test sezonu yalnızca önceki sezonlarla eğitilir. "
+                   "Kapanış modu model kalitesini (log-loss), açılış modu value seçimlerinin ROI ve CLV'sini ölçer.")
+        gecmis = st.session_state.get("m2_gecmis_ref")
+        if gecmis is None:
+            st.info("Önce Model 2.0 analizini çalıştırın.")
+        elif st.button("Doğrulamayı çalıştır", key="m2_dogrulama_btn"):
+            with st.spinner("Walk-forward doğrulama çalışıyor..."):
+                st.session_state["m2_dogrulama"] = m2_dogrulama(gecmis, st.session_state.get("m2_gecmis_imza"),
+                                                                min_ev, max_oran)
+        sonuc = st.session_state.get("m2_dogrulama")
+        if sonuc:
+            gk, ga = sonuc["kapanis"]["genel"], sonuc["acilis"]["genel"]
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Log-loss · piyasa", f'{gk.get("Piyasa log-loss", float("nan")):.4f}')
+            d2.metric("Log-loss · Model 2.0", f'{gk.get("Model 2.0 log-loss", float("nan")):.4f}',
+                      delta=f'{gk.get("Log-loss iyileşme %", 0):+.2f}%')
+            d3.metric("Value ROI (açılış)", f'%{ga.get("ROI %", 0):+.1f}', help=f'{ga.get("Value seçimi", 0)} seçim')
+            d4.metric("Ortalama CLV", f'%{ga.get("Ort. CLV %", float("nan")):+.2f}',
+                      help="Seçilen fiyat ile Pinnacle kapanış olasılığına göre beklenen getiri. Pozitif CLV, ROI'den daha güvenilir başarı işaretidir.")
+            st.markdown("**Sezon bazında (kapanış modu)**")
+            st.dataframe(sonuc["kapanis"]["sezonlar"].round(4), hide_index=True, use_container_width=True)
+            st.markdown("**Lig karnesi (açılış modu value seçimleri)**")
+            st.dataframe(sonuc["acilis"]["lig_karnesi"].round(2), hide_index=True, use_container_width=True)
+            sec = sonuc["acilis"]["secimler"]
+            if not sec.empty:
+                st.markdown("**Son 200 value seçimi**")
+                st.dataframe(sec.sort_values("Tarih", ascending=False).head(200).round({c: 2 for c in sec.select_dtypes("number").columns}),
+                             hide_index=True, use_container_width=True)
+        ozet = st.session_state.get("m2_motor_ozet", {})
+        if ozet.get("katsayi"):
+            st.markdown("**Artık model katsayıları (1X2)**")
+            st.caption("β≈0 ve SE büyükse o özellik piyasaya bilgi eklemiyor demektir; model kendiliğinden piyasaya döner.")
+            st.dataframe(pd.DataFrame(ozet["katsayi"]).T, use_container_width=True)
+    st.caption("⚠️ Geçmiş performans geleceği garanti etmez. En iyi fiyatlar her zaman alınamayabilir; "
+               "bazı şirketler kazanan hesapları limitler. Value seçimleri istatistiksel bir avantaj tahminidir, kesin sonuç değildir.")
+
+
+if st.session_state.get('sayfa_modu') == 'Model 2.0':
+    model2_sayfasi(bool(globals().get("model2_btn", False)))
     legal_footer()
     st.stop()
 
